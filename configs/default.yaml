@@ -1,0 +1,66 @@
+sample_fps: 4.0
+segmenter:
+  thresh: 0.65
+  min_event_s: 3.0
+anchors:
+  stop_look_quantile: 0.2
+  stop_look_min_duration_s: 0.5
+  turn_head_top_k: 2
+  max_stop_look_per_event: 3
+  min_gap_s: 2.0
+  stop_look_min_conf: 0.6
+highlights:
+  enabled: true
+  pre_s: 2.0
+  post_s: 2.0
+  max_total_s: 60.0
+  merge_gap_s: 0.2
+  priority_map:
+    interaction: 3
+    turn_head: 2
+    stop_look: 1
+tokens:
+  enabled: true
+  attention_pre_s: 0.5
+  attention_post_s: 0.5
+  motion_min_run_s: 0.8
+  motion_max_runs_per_event: 4
+  scene_change_top_k: 3
+  merge_gap_s: 0.2
+decisions:
+  enabled: true
+  pre_s: 2.0
+  post_s: 2.0
+  merge_iou: 0.7
+  min_gap_s: 0.0
+  boundary_thresh: 0.65
+context_default:
+  mode: highlights
+  max_events: 8
+  max_highlights: 10
+  max_decisions: 12
+  max_tokens: 200
+index:
+  enabled: true
+  max_frames_per_segment: 24
+retrieval:
+  default_top_k: 8
+  prefer: highlight
+eval:
+  num_time_queries: 10
+  time_window_s: 8
+  default_top_k: 6
+  fixed_queries:
+    seed: 0
+    n_time: 10
+    n_anchor: 6
+    n_token: 10
+    n_decision: 10
+    n_hard_time: 10
+    hard_overlap_thresh: 0.05
+  budgets:
+    max_total_s: [20, 40, 60]
+    max_tokens: [50, 100, 200]
+    max_decisions: [4, 8, 12]
+features:
+  use_clip: false
