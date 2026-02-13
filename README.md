@@ -100,6 +100,7 @@ docs/
 | `scripts\make_paper_figures.py` | Generate paper figures/tables | `--cross_dir --nlq_csv --out_dir --macro_avg/--macro-avg --compare_dir` | `figures/*`, `tables/*`, `snapshot.json` |
 | `scripts\sweep_reranker.py` | Search reranker weights for strict objective | `--json_dir --index_dir --mode hard_pseudo_nlq --trials --metric` | `results_sweep.csv`, `best_config.yaml`, `best_report.md` |
 | `scripts\debug_rerank.py` | Score decomposition debug for reranker | `--json --index --out --rerank-cfg` | debug CSV + summary logs |
+| `scripts\export_bye_events.py` / `scripts\bye_regression_smoke.py` | BYE offline injection export and optional lint/report/regression loop | `--json/--pov_json --out_dir --bye_root --strict` | `events/events_v1.jsonl`, `run_package/`, `logs/`, `snapshot.json` |
 
 ## Output Directory Contract
 
@@ -205,3 +206,4 @@ D:\Ego4D_Dataset
 - `docs/OUTPUTS.md`
 - `docs/REPRO.md`
 - `docs/FAQ.md`
+- `docs/BYE_INJECTION.md`
