@@ -11,9 +11,12 @@ from pov_compiler.features.motion import compute_motion_energy, to_gray
 from pov_compiler.io.video_reader import VideoReader
 from pov_compiler.l1_events.anchor_miner import mine_event_anchors
 from pov_compiler.l1_events.event_segmenter import fuse_boundary_score, segment_events
+from pov_compiler.l1_events.event_segmentation_v0 import segment_events_v0
 from pov_compiler.l2_tokens.token_codec import TokenCodecCompiler
 from pov_compiler.l3_decisions.decision_compiler import DecisionCompiler
+from pov_compiler.ir.events_v1 import convert_output_to_events_v1
 from pov_compiler.memory.decision_sampling import build_highlights
+from pov_compiler.perception.runner import run_perception
 from pov_compiler.schemas import Output
 
 
@@ -65,6 +68,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "features": {
         "use_clip": False,
+    },
+    "perception": {
+        "enabled": False,
+        "backend": "stub",
+        "fallback_to_stub": True,
+        "strict": False,
+        "sample_fps": 10.0,
+        "max_frames": 300,
+        "cache_dir": "data/cache/perception",
+        "contact_min_score": 0.25,
+        "objects_topk": 10,
+        "model_candidates": ["yolo26n.pt", "yolov8n.pt"],
+        "hand_task_model_path": "assets/mediapipe/hand_landmarker.task",
+    },
+    "event_v0": {
+        "enabled": True,
+        "thresh": 0.45,
+        "min_event_s": 3.0,
+        "visual_weight": 0.7,
+        "contact_weight": 0.3,
+        "append_to_events": False,
+    },
+    "events_v1": {
+        "enabled": True,
     },
 }
 
@@ -180,6 +207,79 @@ class OfflinePipeline:
                 ),
             )
 
+        perception_cfg = dict(self.config.get("perception", {}))
+        perception_payload: dict[str, Any] = {}
+        visual_change_v0 = [float(x) for x in embed_dist]
+        contact_score_v0 = [0.0 for _ in range(len(visual_change_v0))]
+        event_v0_times = [float(x) for x in times]
+        if bool(perception_cfg.get("enabled", False)):
+            backend_name = str(perception_cfg.get("backend", "real")).strip().lower()
+            backend_kwargs = {
+                "model_candidates": list(perception_cfg.get("model_candidates", ["yolo26n.pt", "yolov8n.pt"])),
+                "hand_task_model_path": perception_cfg.get("hand_task_model_path"),
+            }
+            try:
+                perception_payload = run_perception(
+                    video_path=path,
+                    sample_fps=float(perception_cfg.get("sample_fps", 10.0)),
+                    max_frames=int(perception_cfg.get("max_frames", 300)),
+                    backend_name=backend_name,
+                    backend_kwargs=backend_kwargs,
+                    fallback_to_stub=bool(perception_cfg.get("fallback_to_stub", True)),
+                    strict=bool(perception_cfg.get("strict", False)),
+                    cache_dir=perception_cfg.get("cache_dir"),
+                    contact_min_score=float(perception_cfg.get("contact_min_score", 0.25)),
+                    objects_topk=int(perception_cfg.get("objects_topk", 10)),
+                )
+            except Exception:
+                if bool(perception_cfg.get("fallback_to_stub", True)):
+                    perception_payload = run_perception(
+                        video_path=path,
+                        sample_fps=float(perception_cfg.get("sample_fps", 10.0)),
+                        max_frames=int(perception_cfg.get("max_frames", 300)),
+                        backend_name="stub",
+                        backend_kwargs={},
+                        fallback_to_stub=False,
+                        strict=False,
+                        cache_dir=perception_cfg.get("cache_dir"),
+                        contact_min_score=float(perception_cfg.get("contact_min_score", 0.25)),
+                        objects_topk=int(perception_cfg.get("objects_topk", 10)),
+                    )
+                else:
+                    raise
+            signals = perception_payload.get("signals", {}) if isinstance(perception_payload, dict) else {}
+            if isinstance(signals, dict):
+                t_sig = signals.get("time", [])
+                v_sig = signals.get("visual_change", [])
+                c_sig = signals.get("contact_score", [])
+                if isinstance(t_sig, list) and isinstance(v_sig, list) and isinstance(c_sig, list):
+                    m = min(len(t_sig), len(v_sig), len(c_sig))
+                    if m > 0:
+                        event_v0_times = [float(x) for x in t_sig[:m]]
+                        visual_change_v0 = [float(x) for x in v_sig[:m]]
+                        contact_score_v0 = [float(x) for x in c_sig[:m]]
+
+        event_v0_cfg = dict(self.config.get("event_v0", {}))
+        events_v0: list = []
+        boundary_score_v0: list[float] = []
+        if bool(event_v0_cfg.get("enabled", True)):
+            events_v0, score_v0 = segment_events_v0(
+                times=event_v0_times,
+                visual_change=visual_change_v0,
+                contact_score=contact_score_v0,
+                duration_s=float(duration_s),
+                thresh=float(event_v0_cfg.get("thresh", 0.45)),
+                min_event_s=float(event_v0_cfg.get("min_event_s", 3.0)),
+                visual_weight=float(event_v0_cfg.get("visual_weight", 0.7)),
+                contact_weight=float(event_v0_cfg.get("contact_weight", 0.3)),
+            )
+            boundary_score_v0 = [float(x) for x in score_v0.tolist()]
+            if bool(event_v0_cfg.get("append_to_events", False)):
+                existing_ids = {str(e.id) for e in events}
+                for ev in events_v0:
+                    if str(ev.id) not in existing_ids:
+                        events.append(ev)
+
         output = Output(
             video_id=path.stem,
             meta={
@@ -189,8 +289,10 @@ class OfflinePipeline:
                 "embedding_backend": embedder.backend_name,
             },
             events=events,
+            events_v0=events_v0,
             highlights=highlights,
             stats=stats,
+            perception=perception_payload if isinstance(perception_payload, dict) else {},
             decision_points=[],
             debug={
                 "signals": {
@@ -198,6 +300,10 @@ class OfflinePipeline:
                     "motion_energy": [float(x) for x in motion_energy],
                     "embed_dist": [float(x) for x in embed_dist],
                     "boundary_score": [float(x) for x in boundary_score.tolist()],
+                    "event_v0_time": [float(x) for x in event_v0_times],
+                    "visual_change_v0": [float(x) for x in visual_change_v0],
+                    "contact_score_v0": [float(x) for x in contact_score_v0],
+                    "boundary_score_v0": [float(x) for x in boundary_score_v0],
                 }
             },
         )
@@ -211,6 +317,10 @@ class OfflinePipeline:
         if bool(decision_cfg.get("enabled", True)):
             decision_compiler = DecisionCompiler(config=dict(decision_cfg))
             output.decision_points = decision_compiler.compile(output)
+
+        events_v1_cfg = self.config.get("events_v1", {})
+        if bool(events_v1_cfg.get("enabled", True)):
+            output.events_v1 = convert_output_to_events_v1(output)
         return output
 
 

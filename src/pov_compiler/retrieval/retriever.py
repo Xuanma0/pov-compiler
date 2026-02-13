@@ -7,8 +7,10 @@ from typing import Any
 
 import numpy as np
 
+from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
 from pov_compiler.retrieval.query_parser import ParsedQuery, parse_query
+from pov_compiler.retrieval.reranker import Hit
 from pov_compiler.schemas import DecisionPoint, Output
 
 
@@ -79,7 +81,7 @@ class Retriever:
             default_top_k=int(cfg.get("default_top_k", 8)),
             prefer=str(cfg.get("prefer", "highlight")),
         )
-        self.output = _as_output(output_json)
+        self.output = ensure_events_v1(_as_output(output_json))
         if isinstance(index, VectorIndex):
             self.index = index
         elif index is None:
@@ -87,6 +89,36 @@ class Retriever:
         else:
             self.index = VectorIndex.load(index)
         self._text_encoder: _OpenCLIPTextEncoder | None = None
+
+    def _event_pool(self) -> list[Any]:
+        if self.output.events_v1:
+            return list(self.output.events_v1)
+        return list(self.output.events) + list(self.output.events_v0)
+
+    @staticmethod
+    def _event_label(event: Any) -> str:
+        if hasattr(event, "label"):
+            return str(getattr(event, "label", ""))
+        return str(getattr(event, "meta", {}).get("label", ""))
+
+    @staticmethod
+    def _event_boundary_conf(event: Any) -> float:
+        try:
+            return float(getattr(event, "scores", {}).get("boundary_conf", 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _event_anchor_types(event: Any) -> set[str]:
+        if hasattr(event, "anchors"):
+            return {str(anchor.type).lower() for anchor in getattr(event, "anchors", [])}
+        out: set[str] = set()
+        for evidence in getattr(event, "evidence", []):
+            if str(getattr(evidence, "type", "")) == "anchor":
+                anchor_type = str(getattr(evidence, "source", {}).get("anchor_type", "")).lower()
+                if anchor_type:
+                    out.add(anchor_type)
+        return out
 
     def _get_text_encoder(self) -> _OpenCLIPTextEncoder | None:
         if self._text_encoder is not None:
@@ -145,7 +177,8 @@ class Retriever:
         parsed: ParsedQuery = parse_query(query)
         top_k = max(1, int(parsed.top_k if parsed.top_k is not None else self.cfg.default_top_k))
 
-        event_obj_map = {event.id: event for event in self.output.events}
+        event_pool = self._event_pool()
+        event_obj_map = {event.id: event for event in event_pool}
         highlight_map = {hl.id: hl for hl in self.output.highlights}
         token_map = {token.id: token for token in self.output.token_codec.tokens}
         decision_map = {decision.id: decision for decision in self.output.decision_points}
@@ -160,7 +193,7 @@ class Retriever:
 
         if parsed.time_range is not None:
             t0, t1 = parsed.time_range
-            events_new = {event.id for event in self.output.events if _overlap(event.t0, event.t1, t0, t1)}
+            events_new = {event.id for event in event_pool if _overlap(event.t0, event.t1, t0, t1)}
             highlights_new = {hl.id for hl in self.output.highlights if _overlap(hl.t0, hl.t1, t0, t1)}
             tokens_new = {token.id for token in self.output.token_codec.tokens if _overlap(token.t0, token.t1, t0, t1)}
             decisions_new = {
@@ -226,11 +259,7 @@ class Retriever:
                 if hl_types.intersection(anchor_types):
                     highlights_new.add(hl.id)
 
-            events_new = {
-                event.id
-                for event in self.output.events
-                if {str(anchor.type).lower() for anchor in event.anchors}.intersection(anchor_types)
-            }
+            events_new = {event.id for event in event_pool if self._event_anchor_types(event).intersection(anchor_types)}
             tokens_new = {
                 token.id
                 for token in self.output.token_codec.tokens
@@ -350,7 +379,7 @@ class Retriever:
                                 for decision in self.output.decision_points
                                 if _overlap(decision.t0, decision.t1, t0, t1)
                             )
-                        elif kind == "event":
+                        elif kind in {"event", "event_v0", "event_v1"}:
                             events_new.add(hid)
                             t0 = float(hit.meta.get("t0", 0.0))
                             t1 = float(hit.meta.get("t1", 0.0))
@@ -510,3 +539,163 @@ class Retriever:
             if self.has_hits(result):
                 return q, result
         return None, last_result
+
+    def _result_to_hits(self, query: str, result: dict[str, Any]) -> list[Hit]:
+        query = str(query).strip()
+        event_map = {event.id: event for event in (list(self.output.events) + list(self.output.events_v0))}
+        if self.output.events_v1:
+            event_map = {event.id: event for event in self.output.events_v1}
+        highlight_map = {hl.id: hl for hl in self.output.highlights}
+        token_map = {token.id: token for token in self.output.token_codec.tokens}
+        decision_map = {decision.id: decision for decision in self.output.decision_points}
+
+        text_score_lookup: dict[tuple[str, str], float] = {}
+        for item in result.get("debug", {}).get("search_hits", []) or []:
+            kind = str(item.get("kind", ""))
+            hit_id = str(item.get("id", ""))
+            if not kind or not hit_id:
+                continue
+            try:
+                text_score_lookup[(kind, hit_id)] = float(item.get("score", 0.0))
+            except Exception:
+                text_score_lookup[(kind, hit_id)] = 0.0
+
+        def _rank_score(rank: int, total: int) -> float:
+            if total <= 0:
+                return 0.0
+            return float(1.0 - (rank / float(total + 1)))
+
+        hits: list[Hit] = []
+        selected_highlights = [str(x) for x in (result.get("selected_highlights", []) or [])]
+        for idx, hid in enumerate(selected_highlights):
+            hl = highlight_map.get(hid)
+            if hl is None:
+                continue
+            token_types = sorted(
+                {
+                    str(tok.type)
+                    for tok in self.output.token_codec.tokens
+                    if _overlap(float(hl.t0), float(hl.t1), float(tok.t0), float(tok.t1))
+                }
+            )
+            base = text_score_lookup.get(("highlight", hid), _rank_score(idx, len(selected_highlights)))
+            hits.append(
+                Hit(
+                    kind="highlight",
+                    id=hid,
+                    t0=float(hl.t0),
+                    t1=float(hl.t1),
+                    score=float(base),
+                    source_query=query,
+                    meta={
+                        "conf": float(getattr(hl, "conf", 0.0)),
+                        "anchor_type": str(getattr(hl, "anchor_type", "")),
+                        "anchor_types": hl.meta.get("anchor_types", []),
+                        "token_types": token_types,
+                        "source_event": str(getattr(hl, "source_event", "")),
+                    },
+                )
+            )
+
+        selected_tokens = [str(x) for x in (result.get("selected_tokens", []) or [])]
+        for idx, tid in enumerate(selected_tokens):
+            tok = token_map.get(tid)
+            if tok is None:
+                continue
+            base = text_score_lookup.get(("token", tid), _rank_score(idx, len(selected_tokens)))
+            hits.append(
+                Hit(
+                    kind="token",
+                    id=tid,
+                    t0=float(tok.t0),
+                    t1=float(tok.t1),
+                    score=float(base),
+                    source_query=query,
+                    meta={
+                        "conf": float(getattr(tok, "conf", 0.0)),
+                        "token_type": str(getattr(tok, "type", "")),
+                        "source_event": str(getattr(tok, "source_event", "")),
+                    },
+                )
+            )
+
+        selected_decisions = [str(x) for x in (result.get("selected_decisions", []) or [])]
+        for idx, did in enumerate(selected_decisions):
+            dp = decision_map.get(did)
+            if dp is None:
+                continue
+            base = text_score_lookup.get(("decision", did), _rank_score(idx, len(selected_decisions)))
+            hits.append(
+                Hit(
+                    kind="decision",
+                    id=did,
+                    t0=float(dp.t0),
+                    t1=float(dp.t1),
+                    score=float(base),
+                    source_query=query,
+                    meta={
+                        "conf": float(getattr(dp, "conf", 0.0)),
+                        "action_type": str(dp.action.get("type", "")),
+                        "source_event": str(getattr(dp, "source_event", "")),
+                        "source_highlight": getattr(dp, "source_highlight", None),
+                    },
+                )
+            )
+
+        selected_events = [str(x) for x in (result.get("selected_events", []) or [])]
+        for idx, eid in enumerate(selected_events):
+            event = event_map.get(eid)
+            if event is None:
+                continue
+            base = text_score_lookup.get(("event_v1", eid), text_score_lookup.get(("event", eid), _rank_score(idx, len(selected_events))))
+            hits.append(
+                Hit(
+                    kind="event",
+                    id=eid,
+                    t0=float(event.t0),
+                    t1=float(event.t1),
+                    score=float(base),
+                    source_query=query,
+                    meta={
+                        "boundary_conf": self._event_boundary_conf(event),
+                        "label": self._event_label(event),
+                        "layer": str(getattr(event, "meta", {}).get("layer", "events_v1" if hasattr(event, "label") else "")),
+                    },
+                )
+            )
+
+        return hits
+
+    def retrieve_multi(self, candidates: list[Any]) -> list[Hit]:
+        merged: dict[tuple[str, str], Hit] = {}
+        for query in candidates:
+            q = str(query.get("query", "")) if isinstance(query, dict) else str(query)
+            q = q.strip()
+            if not q:
+                continue
+            result = self.retrieve(q)
+            for hit in self._result_to_hits(q, result):
+                key = (str(hit["kind"]), str(hit["id"]))
+                existing = merged.get(key)
+                if existing is None or float(hit["score"]) > float(existing["score"]):
+                    merged[key] = hit
+                elif existing is not None:
+                    existing_meta = dict(existing.get("meta", {}))
+                    source_queries = existing_meta.get("source_queries", [])
+                    if not isinstance(source_queries, list):
+                        source_queries = []
+                    if str(hit["source_query"]) not in source_queries:
+                        source_queries.append(str(hit["source_query"]))
+                    existing_meta["source_queries"] = source_queries
+                    merged[key] = Hit(
+                        kind=str(existing["kind"]),
+                        id=str(existing["id"]),
+                        t0=float(existing["t0"]),
+                        t1=float(existing["t1"]),
+                        score=float(existing["score"]),
+                        source_query=str(existing["source_query"]),
+                        meta=existing_meta,
+                    )
+        out = list(merged.values())
+        out.sort(key=lambda x: (-float(x["score"]), float(x["t0"]), str(x["kind"]), str(x["id"])))
+        return out

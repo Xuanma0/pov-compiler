@@ -15,8 +15,11 @@ if str(SRC_DIR) not in sys.path:
 
 from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_nlq
 from pov_compiler.bench.nlq.evaluator import evaluate_nlq_samples
+from pov_compiler.bench.nlq.safety import SafetyGateConfig, build_safety_report
 from pov_compiler.eval.eval_cross_variant import evaluate_cross_variant
 from pov_compiler.eval.fixed_queries import FixedQuery, generate_fixed_queries
+from pov_compiler.retrieval.constraints import HardConstraintConfig
+from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
 from pov_compiler.schemas import Output
 from pov_compiler.utils.media import get_duration_bucket
 
@@ -183,7 +186,12 @@ def _make_report(
     mode: str,
     overall_rows: list[dict[str, Any]],
     by_type_rows: list[dict[str, Any]],
+    per_query_rows: list[dict[str, Any]],
     allow_gt_fallback: bool,
+    rerank_cfg_name: str = "default",
+    rerank_cfg_hash: str = "",
+    hard_constraints_enabled: bool = True,
+    hard_constraints_cfg: dict[str, Any] | None = None,
 ) -> None:
     variants = sorted({str(r.get("variant", "")) for r in overall_rows if str(r.get("variant", ""))})
     query_types = sorted({str(r.get("query_type", "")) for r in by_type_rows if str(r.get("query_type", ""))})
@@ -209,6 +217,11 @@ def _make_report(
     lines.append("")
     lines.append(f"- mode: {mode}")
     lines.append(f"- allow_gt_fallback: {str(bool(allow_gt_fallback)).lower()}")
+    lines.append(f"- rerank_cfg_name: {rerank_cfg_name}")
+    lines.append(f"- rerank_cfg_hash: {rerank_cfg_hash}")
+    lines.append(f"- hard_constraints_enabled: {str(bool(hard_constraints_enabled)).lower()}")
+    if isinstance(hard_constraints_cfg, dict):
+        lines.append(f"- hard_constraints_cfg: `{json.dumps(hard_constraints_cfg, ensure_ascii=False, sort_keys=True)}`")
     lines.append(f"- variants: {', '.join(variants)}")
     lines.append(f"- query_types: {', '.join(query_types)}")
     if duration_buckets:
@@ -325,6 +338,40 @@ def _make_report(
     )
     lines.append("")
 
+    lines.append("## Constraint Filtering Stats")
+    lines.append("")
+    if per_query_rows:
+        n = float(len(per_query_rows))
+
+        def _rate(pred) -> float:
+            c = 0.0
+            for row in per_query_rows:
+                if pred(row):
+                    c += 1.0
+            return float(c / n)
+
+        stats = {
+            "present_after_scene_change_rate": _rate(lambda r: bool(r.get("present_after_scene_change", False))),
+            "present_first_last_rate": _rate(lambda r: bool(r.get("present_first_last", False))),
+            "present_type_match_rate": _rate(lambda r: bool(r.get("present_type_match", False))),
+            "filtered_after_scene_change_rate": _rate(lambda r: bool(r.get("filtered_after_scene_change", False))),
+            "filtered_first_last_rate": _rate(lambda r: bool(r.get("filtered_first_last", False))),
+            "filtered_type_match_rate": _rate(lambda r: bool(r.get("filtered_type_match", False))),
+            "relaxed_after_scene_change_rate": _rate(lambda r: bool(r.get("relaxed_after_scene_change", False))),
+            "relaxed_first_last_rate": _rate(lambda r: bool(r.get("relaxed_first_last", False))),
+            "relaxed_type_match_rate": _rate(lambda r: bool(r.get("relaxed_type_match", False))),
+            "used_fallback_rate": _rate(lambda r: bool(r.get("used_fallback", False))),
+            "avg_filtered_before": float(sum(float(r.get("filtered_hits_before", 0.0)) for r in per_query_rows) / n),
+            "avg_filtered_after": float(sum(float(r.get("filtered_hits_after", 0.0)) for r in per_query_rows) / n),
+        }
+        lines.append("| stat | value |")
+        lines.append("|---|---:|")
+        for key in sorted(stats.keys()):
+            lines.append(f"| {key} | {float(stats[key]):.4f} |")
+    else:
+        lines.append("- no per-query rows")
+    lines.append("")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -353,6 +400,17 @@ def parse_args() -> argparse.Namespace:
     parser.set_defaults(allow_gt_fallback=None)
     parser.add_argument("--allow-gt-fallback", dest="allow_gt_fallback", action="store_true")
     parser.add_argument("--no-allow-gt-fallback", dest="allow_gt_fallback", action="store_false")
+    parser.add_argument("--rerank-cfg", default=None, help="Path to reranker WeightConfig YAML/JSON")
+    parser.add_argument("--hard-constraints", choices=["on", "off"], default="on")
+    parser.add_argument(
+        "--hard-constraints-cfg",
+        default=str(ROOT / "configs" / "hard_constraints_default.yaml"),
+        help="Path to hard constraint config YAML/JSON",
+    )
+    parser.set_defaults(safety_gate=None)
+    parser.add_argument("--safety-gate", dest="safety_gate", action="store_true", help="Enable safety gate")
+    parser.add_argument("--no-safety-gate", dest="safety_gate", action="store_false", help="Disable safety gate")
+    parser.add_argument("--max-critical-fn", type=int, default=None, help="Safety gate threshold")
     return parser.parse_args()
 
 
@@ -362,6 +420,31 @@ def main() -> int:
     eval_cfg = dict(cfg.get("eval", {}))
     budgets_cfg = dict(eval_cfg.get("budgets", {}))
     retrieval_cfg = dict(cfg.get("retrieval", {}))
+    safety_cfg = dict(cfg.get("safety", {}))
+    rerank_cfg_yaml = cfg.get("reranker", {})
+    resolved_cfg: WeightConfig
+    if args.rerank_cfg:
+        resolved_cfg = resolve_weight_config(Path(args.rerank_cfg))
+    elif isinstance(rerank_cfg_yaml, dict) and rerank_cfg_yaml:
+        resolved_cfg = resolve_weight_config(rerank_cfg_yaml)
+    else:
+        resolved_cfg = WeightConfig()
+    hard_cfg_yaml = cfg.get("hard_constraints", {})
+    if str(args.hard_constraints).lower() == "off":
+        resolved_hard_cfg = HardConstraintConfig(
+            enable_after_scene_change=False,
+            enable_first_last=False,
+            enable_type_match=False,
+            relax_on_empty=True,
+            relax_order=["after_scene_change", "first_last", "type_match"],
+        )
+    elif args.hard_constraints_cfg and Path(args.hard_constraints_cfg).exists():
+        resolved_hard_cfg = HardConstraintConfig.from_yaml(Path(args.hard_constraints_cfg))
+    elif isinstance(hard_cfg_yaml, dict) and hard_cfg_yaml:
+        resolved_hard_cfg = HardConstraintConfig.from_dict(hard_cfg_yaml)
+    else:
+        resolved_hard_cfg = HardConstraintConfig()
+
     output = _as_output(Path(args.json))
 
     budgets = budgets_cfg if bool(args.sweep) else {
@@ -396,6 +479,8 @@ def main() -> int:
             sweep=bool(args.sweep),
             retriever_config=retrieval_cfg,
             index_prefix=args.index,
+            rerank_cfg=resolved_cfg,
+            hard_constraints_cfg=resolved_hard_cfg,
             allow_gt_fallback=allow_gt_fallback,
         )
         overall_rows = result["overall_rows"]
@@ -437,12 +522,16 @@ def main() -> int:
         for row in rows:
             row.setdefault("video_uid", row.get("video_id", output.video_id))
             row.setdefault("duration_bucket", duration_bucket)
+            row.setdefault("rerank_cfg_name", resolved_cfg.name)
+            row.setdefault("rerank_cfg_hash", resolved_cfg.short_hash())
+            row.setdefault("hard_constraints_enabled", str(args.hard_constraints).lower() == "on")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     results_csv = out_dir / "nlq_results.csv"
     summary_csv = out_dir / "nlq_summary.csv"
     report_md = out_dir / "nlq_report.md"
+    safety_json = out_dir / "safety_report.json"
     _write_csv(results_csv, per_query_rows)
     _write_csv(summary_csv, by_type_rows)
     _make_report(
@@ -450,19 +539,44 @@ def main() -> int:
         mode=str(args.mode),
         overall_rows=overall_rows,
         by_type_rows=by_type_rows,
+        per_query_rows=per_query_rows,
         allow_gt_fallback=allow_gt_fallback,
+        rerank_cfg_name=str(resolved_cfg.name),
+        rerank_cfg_hash=str(resolved_cfg.short_hash()),
+        hard_constraints_enabled=str(args.hard_constraints).lower() == "on",
+        hard_constraints_cfg=resolved_hard_cfg.to_dict(),
     )
+
+    resolved_safety_cfg = SafetyGateConfig.from_dict(safety_cfg)
+    if args.safety_gate is not None:
+        resolved_safety_cfg.enabled = bool(args.safety_gate)
+    if args.max_critical_fn is not None:
+        resolved_safety_cfg.max_critical_fn = int(args.max_critical_fn)
+    safety_report = build_safety_report(
+        video_id=output.video_id,
+        per_query_rows=per_query_rows,
+        gate_cfg=resolved_safety_cfg,
+    )
+    safety_json.write_text(json.dumps(safety_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"video_id={output.video_id}")
     print(f"mode={args.mode}")
     print(f"allow_gt_fallback={str(bool(allow_gt_fallback)).lower()}")
+    print(f"rerank_cfg_name={resolved_cfg.name}")
+    print(f"rerank_cfg_hash={resolved_cfg.short_hash()}")
+    print(f"hard_constraints={args.hard_constraints}")
     print(f"duration_bucket={duration_bucket}")
     print(f"queries_total={queries_total}")
     print(f"rows_results={len(per_query_rows)}")
     print(f"rows_summary={len(by_type_rows)}")
+    print(f"safety_pass={str(bool(safety_report.get('pass_gate', True))).lower()}")
+    print(f"safety_critical_fn={int(safety_report.get('critical_fn_count', 0))}")
     print(f"saved_results={results_csv}")
     print(f"saved_summary={summary_csv}")
     print(f"saved_report={report_md}")
+    print(f"saved_safety={safety_json}")
+    if bool(safety_report.get("enabled", True)) and not bool(safety_report.get("pass_gate", True)):
+        return 2
     return 0
 
 

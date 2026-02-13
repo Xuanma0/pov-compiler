@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.schemas import ContextSchema, DecisionPoint, Event, KeyClip, Output, Token
 
 
@@ -95,7 +96,7 @@ def _token_priority(
 
 
 def _select_events(
-    events: list[Event],
+    events: list[Any],
     highlights: list[dict[str, Any]],
     max_events: int,
     preferred_event_ids: list[str] | None = None,
@@ -123,15 +124,30 @@ def _select_events(
         if event is None:
             continue
         anchor_summary: dict[str, int] = {}
-        for anchor in event.anchors:
-            anchor_summary[anchor.type] = anchor_summary.get(anchor.type, 0) + 1
+        evidence_summary: dict[str, int] = {}
+        if hasattr(event, "anchors"):
+            for anchor in event.anchors:
+                anchor_summary[anchor.type] = anchor_summary.get(anchor.type, 0) + 1
+        else:
+            for evidence in getattr(event, "evidence", []):
+                et = str(getattr(evidence, "type", ""))
+                evidence_summary[et] = evidence_summary.get(et, 0) + 1
+                if et == "anchor":
+                    anchor_type = str(getattr(evidence, "source", {}).get("anchor_type", ""))
+                    if anchor_type:
+                        anchor_summary[anchor_type] = anchor_summary.get(anchor_type, 0) + 1
+
+        label = str(getattr(event, "label", getattr(event, "meta", {}).get("label", "")))
+        boundary_conf = float(getattr(event, "scores", {}).get("boundary_conf", 0.0))
         summaries.append(
             {
                 "id": event.id,
                 "t0": float(event.t0),
                 "t1": float(event.t1),
-                "boundary_conf": float(event.scores.get("boundary_conf", 0.0)),
+                "boundary_conf": boundary_conf,
+                "label": label,
                 "anchor_summary": anchor_summary,
+                "evidence_summary": evidence_summary,
             }
         )
     summaries.sort(key=lambda e: (e["t0"], e["t1"]))
@@ -358,7 +374,7 @@ def build_context(
     if mode not in {"timeline", "highlights", "decisions", "full"}:
         raise ValueError("mode must be one of: timeline, highlights, decisions, full")
 
-    output = _as_output(output_json)
+    output = ensure_events_v1(_as_output(output_json))
 
     merged_budget = dict(DEFAULT_BUDGET)
     if budget:
@@ -372,7 +388,7 @@ def build_context(
     raw_max_seconds = merged_budget.get("max_seconds", None)
     max_seconds = None if raw_max_seconds in (None, "", "none") else float(raw_max_seconds)
 
-    events_pool = list(output.events)
+    events_pool = list(output.events_v1) if output.events_v1 else (list(output.events) + list(output.events_v0))
     highlights_pool = list(output.highlights)
     decisions_pool = list(output.decision_points)
     tokens_pool = list(output.token_codec.tokens)

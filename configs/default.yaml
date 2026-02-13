@@ -46,6 +46,35 @@ index:
 retrieval:
   default_top_k: 8
   prefer: highlight
+reranker:
+  name: default
+  bonus_intent_token_on_token: 1.0
+  bonus_intent_decision_on_decision: 1.0
+  bonus_intent_anchor_on_highlight: 1.0
+  bonus_first: 0.5
+  bonus_last: 0.5
+  penalty_before_scene_change: 0.6
+  penalty_distractor_near: 0.3
+  distractor_near_window_s: 5.0
+  bonus_conf_scale: 0.2
+  bonus_boundary_scale: 0.15
+hard_constraints:
+  enable_after_scene_change: true
+  enable_first_last: true
+  enable_type_match: false
+  relax_on_empty: true
+  relax_order: ["after_scene_change", "first_last", "type_match"]
+safety:
+  enabled: true
+  max_critical_fn: 0
+  strict_metric: hit_at_k_strict
+  critical_query_types:
+    - hard_pseudo_anchor
+    - hard_pseudo_decision
+    - hard_pseudo_token
+    - pseudo_anchor
+    - pseudo_decision
+    - pseudo_token
 eval:
   num_time_queries: 10
   time_window_s: 8
@@ -64,3 +93,29 @@ eval:
     max_decisions: [4, 8, 12]
 features:
   use_clip: false
+perception:
+  enabled: false
+  backend: stub
+  fallback_to_stub: true
+  strict: false
+  sample_fps: 10.0
+  max_frames: 300
+  cache_dir: data/cache/perception
+  contact_min_score: 0.25
+  objects_topk: 10
+  model_candidates: ["yolo26n.pt", "yolov8n.pt"]
+  hand_task_model_path: assets/mediapipe/hand_landmarker.task
+event_v0:
+  enabled: true
+  thresh: 0.45
+  min_event_s: 3.0
+  visual_weight: 0.7
+  contact_weight: 0.3
+  append_to_events: false
+events_v1:
+  enabled: true
+streaming:
+  step_s: 5.0
+  queries:
+    - anchor=turn_head top_k=6
+    - token=SCENE_CHANGE top_k=6

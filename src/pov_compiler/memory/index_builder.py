@@ -9,6 +9,7 @@ import numpy as np
 
 from pov_compiler.features.embeddings import Embedder
 from pov_compiler.io.video_reader import VideoReader
+from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
 from pov_compiler.schemas import Output, Token
 
@@ -51,6 +52,22 @@ def _token_types_for_range(tokens: list[Token], t0: float, t1: float) -> list[st
     return types
 
 
+def _anchor_types_for_event_v1(event: Any) -> list[str]:
+    out: set[str] = set()
+    for evidence in getattr(event, "evidence", []):
+        if str(getattr(evidence, "type", "")) == "anchor":
+            anchor_type = str(getattr(evidence, "source", {}).get("anchor_type", "")).strip()
+            if anchor_type:
+                out.add(anchor_type)
+        if str(getattr(evidence, "type", "")) == "highlight":
+            values = getattr(evidence, "source", {}).get("anchor_types", [])
+            if isinstance(values, list):
+                for value in values:
+                    if str(value).strip():
+                        out.add(str(value).strip())
+    return sorted(out)
+
+
 def _sample_segment_vector(
     times: np.ndarray,
     frame_embeds: np.ndarray,
@@ -85,7 +102,7 @@ class IndexBuilder:
         )
 
     def build(self, video_path: str | Path, output_json: str | Path | dict[str, Any] | Output) -> tuple[VectorIndex, dict[str, Any]]:
-        output = _as_output(output_json)
+        output = ensure_events_v1(_as_output(output_json))
         reader = VideoReader(video_path)
 
         sample_fps = float(output.meta.get("sample_fps", self.cfg.sample_fps))
@@ -113,8 +130,39 @@ class IndexBuilder:
         frame_matrix = np.vstack(frame_embeds).astype(np.float32, copy=False)
         tokens = list(output.token_codec.tokens)
 
+        event_v1_count = 0
         event_count = 0
+        event_v0_count = 0
         highlight_count = 0
+        for event in output.events_v1:
+            vec = _sample_segment_vector(
+                times=times_arr,
+                frame_embeds=frame_matrix,
+                t0=float(event.t0),
+                t1=float(event.t1),
+                max_frames_per_segment=self.cfg.max_frames_per_segment,
+            )
+            if vec is None:
+                continue
+            index.add(
+                item_id=event.id,
+                vec=vec,
+                meta={
+                    "kind": "event_v1",
+                    "id": event.id,
+                    "t0": float(event.t0),
+                    "t1": float(event.t1),
+                    "source_event": str(event.meta.get("source_event_id", event.id)),
+                    "source_event_ids": [str(x) for x in event.source_event_ids],
+                    "anchor_types": _anchor_types_for_event_v1(event),
+                    "token_types": _token_types_for_range(tokens, float(event.t0), float(event.t1)),
+                    "label": str(event.label),
+                    "layer": str(event.meta.get("layer", "events_v1")),
+                    "embedding_backend": embedder.backend_name,
+                },
+            )
+            event_v1_count += 1
+
         for event in output.events:
             vec = _sample_segment_vector(
                 times=times_arr,
@@ -140,6 +188,33 @@ class IndexBuilder:
                 },
             )
             event_count += 1
+
+        for event in output.events_v0:
+            vec = _sample_segment_vector(
+                times=times_arr,
+                frame_embeds=frame_matrix,
+                t0=float(event.t0),
+                t1=float(event.t1),
+                max_frames_per_segment=self.cfg.max_frames_per_segment,
+            )
+            if vec is None:
+                continue
+            index.add(
+                item_id=event.id,
+                vec=vec,
+                meta={
+                    "kind": "event_v0",
+                    "id": event.id,
+                    "t0": float(event.t0),
+                    "t1": float(event.t1),
+                    "source_event": event.id,
+                    "anchor_types": sorted({anchor.type for anchor in event.anchors}),
+                    "token_types": _token_types_for_range(tokens, float(event.t0), float(event.t1)),
+                    "label": str(event.meta.get("label", "")),
+                    "embedding_backend": embedder.backend_name,
+                },
+            )
+            event_v0_count += 1
 
         for hl in output.highlights:
             vec = _sample_segment_vector(
@@ -171,7 +246,9 @@ class IndexBuilder:
             highlight_count += 1
 
         stats = {
+            "num_event_v1_vecs": int(event_v1_count),
             "num_event_vecs": int(event_count),
+            "num_event_v0_vecs": int(event_v0_count),
             "num_highlight_vecs": int(highlight_count),
             "dim": int(index.dim),
             "backend": index.backend,

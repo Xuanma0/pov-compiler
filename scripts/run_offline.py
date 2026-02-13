@@ -48,6 +48,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--thresh", type=float, default=None, help="Boundary threshold")
     parser.add_argument("--min-event-s", type=float, default=None, help="Minimum event duration in seconds")
     parser.add_argument("--use-clip", action="store_true", help="Enable CLIP embedding if torch+open_clip exist")
+    parser.add_argument("--run-perception", action="store_true", help="Enable Perception v0 (YOLO/MediaPipe or fallback)")
+    parser.add_argument(
+        "--perception-backend",
+        choices=["real", "stub"],
+        default=None,
+        help="Perception backend (real|stub)",
+    )
+    parser.set_defaults(perception_fallback_stub=None)
+    parser.add_argument(
+        "--perception-fallback-stub",
+        dest="perception_fallback_stub",
+        action="store_true",
+        help="Allow fallback from real backend to stub backend",
+    )
+    parser.add_argument(
+        "--no-perception-fallback-stub",
+        dest="perception_fallback_stub",
+        action="store_false",
+        help="Disable fallback to stub backend",
+    )
+    parser.add_argument(
+        "--perception-strict",
+        action="store_true",
+        help="Strict perception mode: no fallback, fail on missing deps/frame errors",
+    )
+    parser.add_argument("--perception-fps", type=float, default=None, help="Perception sampling fps")
+    parser.add_argument("--perception-max-frames", type=int, default=None, help="Perception frame cap")
     return parser.parse_args()
 
 
@@ -66,6 +93,24 @@ def main() -> int:
         config.setdefault("segmenter", {})["min_event_s"] = float(args.min_event_s)
     if args.use_clip:
         config.setdefault("features", {})["use_clip"] = True
+    if args.run_perception:
+        config.setdefault("perception", {})["enabled"] = True
+    if args.perception_backend is not None:
+        config.setdefault("perception", {})["backend"] = str(args.perception_backend)
+    if args.perception_fallback_stub is not None:
+        config.setdefault("perception", {})["fallback_to_stub"] = bool(args.perception_fallback_stub)
+    if args.perception_strict:
+        config.setdefault("perception", {})["strict"] = True
+        config.setdefault("perception", {})["fallback_to_stub"] = False
+    if args.perception_fps is not None:
+        config.setdefault("perception", {})["sample_fps"] = float(args.perception_fps)
+    if args.perception_max_frames is not None:
+        config.setdefault("perception", {})["max_frames"] = int(args.perception_max_frames)
+    if config.get("perception", {}).get("enabled", False):
+        config.setdefault("perception", {})
+        if not config["perception"].get("cache_dir"):
+            out_path = Path(args.out)
+            config["perception"]["cache_dir"] = str(out_path.parent / "perception_cache")
 
     pipeline = OfflinePipeline(config=config)
     output = pipeline.run(args.video)
@@ -81,6 +126,15 @@ def main() -> int:
     for event in output.events:
         dur = event.t1 - event.t0
         print(f"{event.id}: duration={dur:.2f}s anchors={len(event.anchors)}")
+    print(f"events_v0={len(output.events_v0)}")
+    for event in output.events_v0[:5]:
+        dur = event.t1 - event.t0
+        label = str(event.meta.get("label", ""))
+        print(f"{event.id}: duration={dur:.2f}s label={label}")
+    print(f"events_v1={len(output.events_v1)}")
+    for event in output.events_v1[:5]:
+        dur = event.t1 - event.t0
+        print(f"{event.id}: duration={dur:.2f}s label={event.label} evidence={len(event.evidence)}")
     kept = float(output.stats.get("kept_duration_s", 0.0)) if isinstance(output.stats, dict) else 0.0
     ratio = float(output.stats.get("compression_ratio", 0.0)) if isinstance(output.stats, dict) else 0.0
     tokens_total = len(output.token_codec.tokens) if output.token_codec else 0
@@ -97,6 +151,15 @@ def main() -> int:
     print(f"tokens_context_default={tokens_context_default}")
     print(f"decision_points_total={decisions_total}")
     print(f"decisions_context_default={decisions_context_default}")
+    if isinstance(output.perception, dict) and output.perception:
+        p_meta = output.perception.get("meta", {}) if isinstance(output.perception.get("meta", {}), dict) else {}
+        p_sum = output.perception.get("summary", {}) if isinstance(output.perception.get("summary", {}), dict) else {}
+        print(f"perception_backend={p_meta.get('backend', '')}")
+        print(f"perception_frames={p_meta.get('processed_frames', 0)}")
+        print(f"contact_events_count={p_sum.get('contact_events_count', 0)}")
+        print(f"perception_fallback_used={str(bool(p_sum.get('fallback_used', False))).lower()}")
+        if p_sum.get("fallback_reason"):
+            print(f"perception_fallback_reason={p_sum.get('fallback_reason')}")
     print(f"saved={out_path}")
     return 0
 
