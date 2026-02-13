@@ -6,6 +6,7 @@ from typing import Any
 
 DEFAULT_CRITICAL_QUERY_TYPES = [
     "hard_pseudo_anchor",
+    "hard_pseudo_contact",
     "hard_pseudo_decision",
     "hard_pseudo_token",
     "pseudo_anchor",
@@ -60,21 +61,28 @@ def build_safety_report(
     video_id: str,
     per_query_rows: list[dict[str, Any]],
     gate_cfg: SafetyGateConfig | dict[str, Any] | None = None,
+    enforce_gate: bool = False,
 ) -> dict[str, Any]:
     cfg = gate_cfg if isinstance(gate_cfg, SafetyGateConfig) else SafetyGateConfig.from_dict(gate_cfg)
     metric = str(cfg.strict_metric)
     critical_types = set(str(x) for x in (cfg.critical_query_types or DEFAULT_CRITICAL_QUERY_TYPES))
+    count_granularity = "row=(variant,budget,query)"
 
     critical_failures: list[dict[str, Any]] = []
     evaluated = 0
+    variant_stats: dict[str, dict[str, float | int]] = {}
     for row in per_query_rows:
         query_type = str(row.get("query_type", ""))
         if query_type not in critical_types:
             continue
         evaluated += 1
+        variant = str(row.get("variant", "unknown"))
+        item = variant_stats.setdefault(variant, {"critical_fn_count": 0, "critical_fn_denominator": 0})
+        item["critical_fn_denominator"] = int(item["critical_fn_denominator"]) + 1
         metric_value = float(row.get(metric, 0.0) or 0.0)
         if metric_value > 0.0:
             continue
+        item["critical_fn_count"] = int(item["critical_fn_count"]) + 1
         critical_failures.append(
             {
                 "qid": str(row.get("qid", "")),
@@ -102,19 +110,32 @@ def build_safety_report(
 
     max_critical_fn = int(cfg.max_critical_fn)
     critical_fn_count = len(critical_failures)
-    pass_gate = (critical_fn_count <= max_critical_fn) if bool(cfg.enabled) else True
+    critical_fn_denominator = int(evaluated)
+    critical_fn_rate = float(critical_fn_count / max(1, critical_fn_denominator))
+    would_pass_gate = (critical_fn_count <= max_critical_fn) if bool(cfg.enabled) else True
+    pass_gate = bool(would_pass_gate) if bool(enforce_gate) else True
+
+    for variant, item in variant_stats.items():
+        den = int(item.get("critical_fn_denominator", 0))
+        num = int(item.get("critical_fn_count", 0))
+        item["critical_fn_rate"] = float(num / max(1, den))
+        item["variant"] = variant
 
     return {
         "video_id": str(video_id),
         "enabled": bool(cfg.enabled),
+        "gate_enforced": bool(enforce_gate),
         "strict_metric": metric,
         "critical_query_types": sorted(critical_types),
+        "count_granularity": count_granularity,
+        "critical_fn_denominator": int(critical_fn_denominator),
         "evaluated_critical_queries": int(evaluated),
         "critical_fn_count": int(critical_fn_count),
         "max_critical_fn": int(max_critical_fn),
-        "critical_fn_rate": float(critical_fn_count / max(1, evaluated)),
+        "critical_fn_rate": float(critical_fn_rate),
+        "would_pass_gate": bool(would_pass_gate),
         "pass_gate": bool(pass_gate),
+        "variant_stats": variant_stats,
         "reason_counts": reason_counts,
         "critical_failures": critical_failures,
     }
-

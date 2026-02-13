@@ -81,7 +81,9 @@ def _probe_one(path: Path) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build video catalog with duration/fps/resolution metadata")
     parser.add_argument("--root", default=r"D:\Ego4D_Dataset", help="Dataset root")
-    parser.add_argument("--out", required=True, help="Output CSV path")
+    parser.add_argument("--out", default=None, help="Output CSV path")
+    parser.add_argument("--out_csv", default=None, help="Alias for --out (CSV path)")
+    parser.add_argument("--out_jsonl", default=None, help="Optional explicit JSONL path")
     parser.add_argument("--limit", type=int, default=0, help="Probe only first N files (0 means all)")
     parser.add_argument("--jobs", type=int, default=2, help="Parallel probe jobs")
     parser.add_argument("--min-size-bytes", "--min_size_bytes", dest="min_size_bytes", type=int, default=0)
@@ -111,8 +113,12 @@ def main() -> int:
                 rows.append(fut.result())
 
     rows.sort(key=lambda r: str(r.get("path", "")).lower())
-    out_csv = Path(args.out)
-    out_jsonl = out_csv.with_suffix(".jsonl")
+    out_csv_raw = args.out_csv if args.out_csv else args.out
+    if not out_csv_raw:
+        print("error=missing_out provide --out or --out_csv")
+        return 1
+    out_csv = Path(out_csv_raw)
+    out_jsonl = Path(args.out_jsonl) if args.out_jsonl else out_csv.with_suffix(".jsonl")
     _write_csv(out_csv, rows)
     _write_jsonl(out_jsonl, rows)
 

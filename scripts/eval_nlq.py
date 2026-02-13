@@ -42,6 +42,23 @@ def _as_output(path: Path) -> Output:
     return Output.parse_obj(payload)
 
 
+def _attach_perception_sidecar(output: Output, json_path: Path) -> Output:
+    if isinstance(output.perception, dict) and output.perception:
+        return output
+    uid = str(output.video_id)
+    run_root = json_path.parent.parent
+    sidecar = run_root / "perception" / uid / "perception.json"
+    if not sidecar.exists():
+        return output
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except Exception:
+        return output
+    if isinstance(payload, dict):
+        output.perception = payload
+    return output
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     cols: list[str] = []
@@ -192,6 +209,7 @@ def _make_report(
     rerank_cfg_hash: str = "",
     hard_constraints_enabled: bool = True,
     hard_constraints_cfg: dict[str, Any] | None = None,
+    safety_report: dict[str, Any] | None = None,
 ) -> None:
     variants = sorted({str(r.get("variant", "")) for r in overall_rows if str(r.get("variant", ""))})
     query_types = sorted({str(r.get("query_type", "")) for r in by_type_rows if str(r.get("query_type", ""))})
@@ -228,6 +246,16 @@ def _make_report(
         lines.append(f"- duration_buckets: {', '.join(duration_buckets)}")
     lines.append(f"- rows_overall: {len(overall_rows)}")
     lines.append(f"- rows_by_query_type: {len(by_type_rows)}")
+    if isinstance(safety_report, dict):
+        lines.append(
+            f"- safety_count_granularity: {str(safety_report.get('count_granularity', 'row=(variant,budget,query)'))}"
+        )
+        lines.append(f"- safety_gate_enforced: {str(bool(safety_report.get('gate_enforced', False))).lower()}")
+        lines.append(f"- safety_max_critical_fn: {int(safety_report.get('max_critical_fn', 0))}")
+        lines.append(f"- safety_critical_fn_denominator: {int(safety_report.get('critical_fn_denominator', 0))}")
+        lines.append(f"- safety_critical_fn_count: {int(safety_report.get('critical_fn_count', 0))}")
+        lines.append(f"- safety_critical_fn_rate: {float(safety_report.get('critical_fn_rate', 0.0)):.4f}")
+        lines.append(f"- safety_pass_gate: {str(bool(safety_report.get('pass_gate', True))).lower()}")
     lines.append("")
 
     lines.append("## Overall Summary")
@@ -336,6 +364,17 @@ def _make_report(
         f"- {hard_q} (event hit@k): `full` {hard_full:.4f} vs `raw_events_only` {hard_raw:.4f} "
         f"(delta {hard_full - hard_raw:+.4f})."
     )
+    if "hard_pseudo_contact" in qset:
+        contact_full = q_hit.get(("hard_pseudo_contact", "full"), 0.0)
+        contact_hl = q_hit.get(("hard_pseudo_contact", "highlights_only"), 0.0)
+        contact_fp_full = q_fp.get(("hard_pseudo_contact", "full"), 0.0)
+        contact_fp_hl = q_fp.get(("hard_pseudo_contact", "highlights_only"), 0.0)
+        lines.append(
+            f"- hard_pseudo_contact: `full` hit@k {contact_full:.4f} vs `highlights_only` {contact_hl:.4f} "
+            f"(delta {contact_full - contact_hl:+.4f}); "
+            f"top1_in_distractor_rate delta {contact_fp_full - contact_fp_hl:+.4f}. "
+            "This query family depends on events_v1 contact/perception evidence."
+        )
     lines.append("")
 
     lines.append("## Constraint Filtering Stats")
@@ -372,6 +411,35 @@ def _make_report(
         lines.append("- no per-query rows")
     lines.append("")
 
+    if isinstance(safety_report, dict):
+        lines.append("## Safety Gate")
+        lines.append("")
+        lines.append("| field | value |")
+        lines.append("|---|---:|")
+        lines.append(f"| count_granularity | {safety_report.get('count_granularity', '')} |")
+        lines.append(f"| gate_enforced | {str(bool(safety_report.get('gate_enforced', False))).lower()} |")
+        lines.append(f"| max_critical_fn | {int(safety_report.get('max_critical_fn', 0))} |")
+        lines.append(f"| critical_fn_denominator | {int(safety_report.get('critical_fn_denominator', 0))} |")
+        lines.append(f"| critical_fn_count | {int(safety_report.get('critical_fn_count', 0))} |")
+        lines.append(f"| critical_fn_rate | {float(safety_report.get('critical_fn_rate', 0.0)):.4f} |")
+        lines.append(f"| would_pass_gate | {str(bool(safety_report.get('would_pass_gate', True))).lower()} |")
+        lines.append(f"| pass_gate | {str(bool(safety_report.get('pass_gate', True))).lower()} |")
+        lines.append("")
+        var_stats = safety_report.get("variant_stats", {})
+        if isinstance(var_stats, dict) and var_stats:
+            lines.append("### Safety By Variant")
+            lines.append("")
+            lines.append("| variant | critical_fn_count | critical_fn_denominator | critical_fn_rate |")
+            lines.append("|---|---:|---:|---:|")
+            for variant in sorted(var_stats.keys()):
+                item = var_stats[variant] if isinstance(var_stats[variant], dict) else {}
+                lines.append(
+                    f"| {variant} | {int(item.get('critical_fn_count', 0))} | "
+                    f"{int(item.get('critical_fn_denominator', 0))} | "
+                    f"{float(item.get('critical_fn_rate', 0.0)):.4f} |"
+                )
+            lines.append("")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -407,9 +475,21 @@ def parse_args() -> argparse.Namespace:
         default=str(ROOT / "configs" / "hard_constraints_default.yaml"),
         help="Path to hard constraint config YAML/JSON",
     )
-    parser.set_defaults(safety_gate=None)
-    parser.add_argument("--safety-gate", dest="safety_gate", action="store_true", help="Enable safety gate")
-    parser.add_argument("--no-safety-gate", dest="safety_gate", action="store_false", help="Disable safety gate")
+    parser.set_defaults(safety_gate_enforced=False)
+    parser.add_argument(
+        "--safety-gate",
+        "--enforce-safety-gate",
+        dest="safety_gate_enforced",
+        action="store_true",
+        help="Enforce safety gate and fail with non-zero exit when threshold is exceeded",
+    )
+    parser.add_argument(
+        "--no-safety-gate",
+        "--report-only",
+        dest="safety_gate_enforced",
+        action="store_false",
+        help="Report-only mode: always write safety report but do not fail process",
+    )
     parser.add_argument("--max-critical-fn", type=int, default=None, help="Safety gate threshold")
     return parser.parse_args()
 
@@ -445,7 +525,8 @@ def main() -> int:
     else:
         resolved_hard_cfg = HardConstraintConfig()
 
-    output = _as_output(Path(args.json))
+    json_path = Path(args.json)
+    output = _attach_perception_sidecar(_as_output(json_path), json_path)
 
     budgets = budgets_cfg if bool(args.sweep) else {
         "max_total_s": [max(budgets_cfg.get("max_total_s", [60]))],
@@ -534,6 +615,17 @@ def main() -> int:
     safety_json = out_dir / "safety_report.json"
     _write_csv(results_csv, per_query_rows)
     _write_csv(summary_csv, by_type_rows)
+    resolved_safety_cfg = SafetyGateConfig.from_dict(safety_cfg)
+    if args.max_critical_fn is not None:
+        resolved_safety_cfg.max_critical_fn = int(args.max_critical_fn)
+    safety_report = build_safety_report(
+        video_id=output.video_id,
+        per_query_rows=per_query_rows,
+        gate_cfg=resolved_safety_cfg,
+        enforce_gate=bool(args.safety_gate_enforced),
+    )
+    safety_json.write_text(json.dumps(safety_report, ensure_ascii=False, indent=2), encoding="utf-8")
+
     _make_report(
         report_md,
         mode=str(args.mode),
@@ -545,19 +637,8 @@ def main() -> int:
         rerank_cfg_hash=str(resolved_cfg.short_hash()),
         hard_constraints_enabled=str(args.hard_constraints).lower() == "on",
         hard_constraints_cfg=resolved_hard_cfg.to_dict(),
+        safety_report=safety_report,
     )
-
-    resolved_safety_cfg = SafetyGateConfig.from_dict(safety_cfg)
-    if args.safety_gate is not None:
-        resolved_safety_cfg.enabled = bool(args.safety_gate)
-    if args.max_critical_fn is not None:
-        resolved_safety_cfg.max_critical_fn = int(args.max_critical_fn)
-    safety_report = build_safety_report(
-        video_id=output.video_id,
-        per_query_rows=per_query_rows,
-        gate_cfg=resolved_safety_cfg,
-    )
-    safety_json.write_text(json.dumps(safety_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"video_id={output.video_id}")
     print(f"mode={args.mode}")
@@ -569,13 +650,18 @@ def main() -> int:
     print(f"queries_total={queries_total}")
     print(f"rows_results={len(per_query_rows)}")
     print(f"rows_summary={len(by_type_rows)}")
+    print(f"safety_count_granularity={safety_report.get('count_granularity', 'row=(variant,budget,query)')}")
+    print(f"safety_gate_enforced={str(bool(safety_report.get('gate_enforced', False))).lower()}")
+    print(f"safety_threshold={int(safety_report.get('max_critical_fn', 0))}")
+    print(f"safety_denominator={int(safety_report.get('critical_fn_denominator', 0))}")
+    print(f"safety_rate={float(safety_report.get('critical_fn_rate', 0.0)):.4f}")
     print(f"safety_pass={str(bool(safety_report.get('pass_gate', True))).lower()}")
     print(f"safety_critical_fn={int(safety_report.get('critical_fn_count', 0))}")
     print(f"saved_results={results_csv}")
     print(f"saved_summary={summary_csv}")
     print(f"saved_report={report_md}")
     print(f"saved_safety={safety_json}")
-    if bool(safety_report.get("enabled", True)) and not bool(safety_report.get("pass_gate", True)):
+    if bool(safety_report.get("gate_enforced", False)) and not bool(safety_report.get("pass_gate", True)):
         return 2
     return 0
 

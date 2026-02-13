@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.schemas import Output
 
 
@@ -58,6 +59,37 @@ def _span_iou(a: tuple[float, float], b: tuple[float, float]) -> float:
     return float(inter / union)
 
 
+def _sample_indices(total: int, n: int, rng: np.random.Generator) -> list[int]:
+    if total <= 0 or n <= 0:
+        return []
+    if n >= total:
+        return list(range(total))
+    picks = rng.choice(total, size=n, replace=False)
+    return sorted(int(x) for x in picks.tolist())
+
+
+def _highlight_span(hl: Any) -> tuple[float, float]:
+    return float(hl.t0), float(hl.t1)
+
+
+def _anchor_types_from_highlight(hl: Any) -> set[str]:
+    types = hl.meta.get("anchor_types")
+    if isinstance(types, list):
+        out = {str(x).lower() for x in types if str(x)}
+    else:
+        out = {str(hl.anchor_type).lower()}
+    return {x for x in out if x}
+
+
+def _scene_change_times(output: Output) -> list[float]:
+    times: list[float] = []
+    for token in output.token_codec.tokens:
+        if str(token.type).upper() != "SCENE_CHANGE":
+            continue
+        times.append(_center((float(token.t0), float(token.t1))))
+    return sorted(times)
+
+
 def _pick_distractors(
     *,
     gt_span: tuple[float, float],
@@ -79,43 +111,43 @@ def _pick_distractors(
         candidates.append((dist, span))
     if not candidates:
         return []
-
-    # Prefer near-miss negatives so the query needs real disambiguation.
     candidates.sort(key=lambda x: x[0])
     span_only = [span for _, span in candidates]
     want = int(rng.integers(1, int(max_count) + 1))
     return span_only[: min(want, len(span_only), int(max_count))]
 
 
-def _sample_indices(total: int, n: int, rng: np.random.Generator) -> list[int]:
-    if total <= 0 or n <= 0:
+def _pick_after_scene_distractors(
+    *,
+    gt_span: tuple[float, float],
+    pool: list[tuple[float, float]],
+    scene_t: float,
+    rng: np.random.Generator,
+    max_count: int,
+) -> list[tuple[float, float]]:
+    """Prefer near-miss negatives around the scene-change boundary."""
+
+    if int(max_count) <= 0:
         return []
-    if n >= total:
-        return list(range(total))
-    picks = rng.choice(total, size=n, replace=False)
-    return sorted(int(x) for x in picks.tolist())
-
-
-def _anchor_types_from_highlight(hl: Any) -> set[str]:
-    types = hl.meta.get("anchor_types")
-    if isinstance(types, list):
-        out = {str(x).lower() for x in types if str(x)}
-    else:
-        out = {str(hl.anchor_type).lower()}
-    return {x for x in out if x}
-
-
-def _highlight_span(hl: Any) -> tuple[float, float]:
-    return float(hl.t0), float(hl.t1)
-
-
-def _scene_change_times(output: Output) -> list[float]:
-    times: list[float] = []
-    for token in output.token_codec.tokens:
-        if str(token.type).upper() != "SCENE_CHANGE":
+    gt_c = _center(gt_span)
+    candidates: list[tuple[float, tuple[float, float]]] = []
+    for span in pool:
+        if _span_iou(gt_span, span) >= 0.1:
             continue
-        times.append(_center((float(token.t0), float(token.t1))))
-    return sorted(times)
+        c = _center(span)
+        if abs(c - gt_c) <= 1.0:
+            continue
+        # near misses around scene boundary and around GT, but not overlapping
+        around_scene = abs(c - float(scene_t)) <= 30.0
+        around_gt = abs(c - gt_c) <= 20.0
+        if not (around_scene or around_gt):
+            continue
+        candidates.append((abs(c - gt_c), span))
+    if not candidates:
+        return []
+    candidates.sort(key=lambda x: x[0])
+    want = int(rng.integers(1, int(max_count) + 1))
+    return [span for _, span in candidates[: min(want, len(candidates), int(max_count))]]
 
 
 def _append_anchor_sample(
@@ -131,16 +163,26 @@ def _append_anchor_sample(
     distractor_min_gap_s: float,
     max_distractors: int,
     extra_meta: dict[str, Any] | None = None,
+    scene_t_for_distractors: float | None = None,
 ) -> bool:
     gt = _highlight_span(gt_highlight)
     pool = [_highlight_span(x) for x in pool_highlights]
-    distractors = _pick_distractors(
-        gt_span=gt,
-        pool=pool,
-        rng=rng,
-        min_gap_s=float(distractor_min_gap_s),
-        max_count=int(max_distractors),
-    )
+    if scene_t_for_distractors is not None:
+        distractors = _pick_after_scene_distractors(
+            gt_span=gt,
+            pool=pool,
+            scene_t=float(scene_t_for_distractors),
+            rng=rng,
+            max_count=int(max_distractors),
+        )
+    else:
+        distractors = _pick_distractors(
+            gt_span=gt,
+            pool=pool,
+            rng=rng,
+            min_gap_s=float(distractor_min_gap_s),
+            max_count=int(max_distractors),
+        )
     if not distractors:
         return False
 
@@ -178,80 +220,74 @@ def load_hard_pseudo_nlq(
     max_distractors: int = 3,
     distractor_min_gap_s: float = 10.0,
 ) -> list[NLQSample]:
-    """Generate hard pseudo-NLQ samples without label leakage.
+    """Generate hard pseudo-NLQ samples without label leakage."""
 
-    Rules:
-    - Natural language templates only (query text does not expose token/decision label names).
-    - Add 1-3 same-type distractor spans (IoU < 0.1 and center-gap > min_gap_s).
-    - hard_pseudo_anchor v2:
-      if same-type anchors >= 3, generate disambiguation queries
-      (first/last/after-scene-change).
-    """
-
-    output = _as_output(output_json_path)
+    output = ensure_events_v1(_as_output(output_json_path))
     rng = np.random.default_rng(int(seed))
     samples: list[NLQSample] = []
 
-    # Anchor-trigger templates intentionally include planner keywords.
     turn_head_templates = [
-        "什么时候我开始左右张望？",
-        "我突然回头看一眼是在什么时候？",
-        "什么时候我在周围扫视了一下？",
         "When did I start looking around?",
+        "When did I start looking around to the side?",
+        "When did I begin looking around quickly?",
     ]
     stop_look_templates = [
-        "我停下来观察周围是在什么时候？",
-        "什么时候我停住看了一下？",
         "When did I pause to look around?",
+        "When did I pause briefly to observe?",
+        "When did I pause and look at something?",
     ]
     turn_head_first_templates = [
-        "我第一次左右张望是在什么时候？",
-        "When was the first time I looked around?",
+        "When was the first time I started looking around?",
     ]
     turn_head_last_templates = [
-        "我最后一次左右张望是在什么时候？",
-        "When was the last time I looked around?",
+        "When was the last time I was looking around?",
     ]
-    turn_head_after_scene_templates = [
-        "场景变化之后，我左右张望是在什么时候？",
-        "After the scene changed, when did I look around?",
+    turn_head_after_scene_first_templates = [
+        "After the scene changed, when was the first time I started looking around?",
+    ]
+    turn_head_after_scene_last_templates = [
+        "After the scene changed, when was the last time I was looking around?",
     ]
     stop_look_first_templates = [
-        "我第一次停下来观察是在什么时候？",
-        "When was the first time I paused to look?",
+        "When was the first time I paused to look around?",
     ]
     stop_look_last_templates = [
-        "我最后一次停下来观察是在什么时候？",
-        "When was the last time I paused to look?",
+        "When was the last time I paused to look around?",
     ]
-    stop_look_after_scene_templates = [
-        "场景变化之后，我停下来观察是在什么时候？",
-        "After the scene changed, when did I pause to look?",
+    stop_look_after_scene_first_templates = [
+        "After the scene changed, when was the first time I paused to look around?",
+    ]
+    stop_look_after_scene_last_templates = [
+        "After the scene changed, when was the last time I paused to look around?",
     ]
 
-    token_templates = {
+    token_templates: dict[str, list[str]] = {
         "SCENE_CHANGE": [
-            "什么时候场景发生了明显变化？",
-            "什么时候我进入了一个新环境或离开了一个区域？",
+            "When did the scene change noticeably?",
+            "When did I enter a new area or leave one?",
         ],
         "MOTION_MOVING": [
-            "什么时候我开始持续移动？",
+            "When did I start moving continuously?",
         ],
         "MOTION_STILL": [
-            "什么时候我基本保持不动？",
+            "When did I stay mostly still?",
         ],
     }
 
     decision_turn_templates = [
-        "什么时候我做了一个观察周围的动作？",
-        "什么时候我有一次明显的左右看动作？",
+        "When did I make a quick look-around action?",
+        "When did I do a side-check movement?",
     ]
     decision_stop_templates = [
-        "什么时候我做了一个短暂停下来的动作？",
-        "什么时候我停住并观察了一下？",
+        "When did I make a brief pause decision?",
+        "When did I stop shortly to inspect?",
+    ]
+    contact_templates = [
+        "When was I actively handling something with my hands?",
+        "When did I interact directly with an object nearby?",
+        "When was I manipulating an object up close?",
     ]
 
-    # 1) highlight-based queries (turn_head / stop_look), with v2 disambiguation.
     hl_turn: list[Any] = []
     hl_stop: list[Any] = []
     for hl in output.highlights:
@@ -260,7 +296,6 @@ def load_hard_pseudo_nlq(
             hl_turn.append(hl)
         if "stop_look" in types:
             hl_stop.append(hl)
-
     scene_times = _scene_change_times(output)
 
     def _emit_anchor_queries(
@@ -271,7 +306,8 @@ def load_hard_pseudo_nlq(
         normal_templates: list[str],
         first_templates: list[str],
         last_templates: list[str],
-        after_scene_templates: list[str],
+        after_scene_first_templates: list[str],
+        after_scene_last_templates: list[str],
     ) -> None:
         if budget <= 0 or not group:
             return
@@ -280,72 +316,85 @@ def load_hard_pseudo_nlq(
         emitted = 0
         used_ids: set[str] = set()
 
-        # If enough same-type occurrences, generate 1-2 disambiguation queries.
-        disambiguation_items: list[tuple[str, Any, str, dict[str, Any]]] = []
+        disambiguation_items: list[dict[str, Any]] = []
         if len(ordered) >= 3:
-            first_hl = ordered[0]
-            last_hl = ordered[-1]
             disambiguation_items.append(
-                (
-                    str(rng.choice(first_templates)),
-                    first_hl,
-                    "first_occurrence",
-                    {"ordinal": "first"},
-                )
+                {
+                    "query": str(rng.choice(first_templates)),
+                    "target": ordered[0],
+                    "disambiguation": "first_occurrence",
+                    "extra_meta": {"ordinal": "first"},
+                    "scene_t_for_distractors": None,
+                }
             )
-            if str(last_hl.id) != str(first_hl.id):
+            if str(ordered[-1].id) != str(ordered[0].id):
                 disambiguation_items.append(
-                    (
-                        str(rng.choice(last_templates)),
-                        last_hl,
-                        "last_occurrence",
-                        {"ordinal": "last"},
-                    )
+                    {
+                        "query": str(rng.choice(last_templates)),
+                        "target": ordered[-1],
+                        "disambiguation": "last_occurrence",
+                        "extra_meta": {"ordinal": "last"},
+                        "scene_t_for_distractors": None,
+                    }
                 )
 
-            # First same-type anchor after the first scene-change that has a following anchor.
-            if scene_times:
-                centers = [_center(_highlight_span(hl)) for hl in ordered]
-                for scene_t in scene_times:
-                    after_idx = next((idx for idx, c in enumerate(centers) if c > float(scene_t)), None)
-                    if after_idx is None:
-                        continue
-                    after_hl = ordered[after_idx]
-                    disambiguation_items.append(
-                        (
-                            str(rng.choice(after_scene_templates)),
-                            after_hl,
-                            "after_scene_change",
-                            {"scene_change_t": float(scene_t)},
-                        )
-                    )
-                    break
+            # Make after_scene_change queries satisfiable: pick GT from a bounded post-scene window.
+            for scene_t in scene_times:
+                window_after = [
+                    hl
+                    for hl in ordered
+                    if _center(_highlight_span(hl)) > float(scene_t)
+                    and _center(_highlight_span(hl)) <= float(scene_t) + 90.0
+                ]
+                if len(window_after) < 1:
+                    continue
+                use_first = bool(rng.integers(0, 2) == 0)
+                target = window_after[0] if use_first else window_after[-1]
+                query = (
+                    str(rng.choice(after_scene_first_templates))
+                    if use_first
+                    else str(rng.choice(after_scene_last_templates))
+                )
+                disambiguation_items.append(
+                    {
+                        "query": query,
+                        "target": target,
+                        "disambiguation": "after_scene_change",
+                        "extra_meta": {
+                            "scene_change_t": float(scene_t),
+                            "ordinal": "first" if use_first else "last",
+                        },
+                        "scene_t_for_distractors": float(scene_t),
+                    }
+                )
+                break
 
-            if disambiguation_items:
-                max_disamb = min(int(budget), len(disambiguation_items), 2)
-                want_disamb = int(rng.integers(1, max_disamb + 1))
-                for idx in _sample_indices(len(disambiguation_items), want_disamb, rng):
-                    query, target_hl, disambiguation, extra_meta = disambiguation_items[idx]
-                    ok = _append_anchor_sample(
-                        samples=samples,
-                        rng=rng,
-                        top_k=int(top_k),
-                        gt_highlight=target_hl,
-                        pool_highlights=ordered,
-                        query=query,
-                        anchor_type=anchor_type,
-                        disambiguation=disambiguation,
-                        distractor_min_gap_s=float(distractor_min_gap_s),
-                        max_distractors=int(max_distractors),
-                        extra_meta=extra_meta,
-                    )
-                    if ok:
-                        emitted += 1
-                        used_ids.add(str(target_hl.id))
-                    if emitted >= int(budget):
-                        return
+        if disambiguation_items:
+            # Encourage at least one disambiguation query.
+            max_disamb = min(int(budget), len(disambiguation_items), 2)
+            want_disamb = int(rng.integers(1, max_disamb + 1))
+            for idx in _sample_indices(len(disambiguation_items), want_disamb, rng):
+                item = disambiguation_items[idx]
+                ok = _append_anchor_sample(
+                    samples=samples,
+                    rng=rng,
+                    top_k=int(top_k),
+                    gt_highlight=item["target"],
+                    pool_highlights=ordered,
+                    query=item["query"],
+                    anchor_type=anchor_type,
+                    disambiguation=item["disambiguation"],
+                    distractor_min_gap_s=float(distractor_min_gap_s),
+                    max_distractors=int(max_distractors),
+                    extra_meta=item["extra_meta"],
+                    scene_t_for_distractors=item["scene_t_for_distractors"],
+                )
+                if ok:
+                    emitted += 1
+                    used_ids.add(str(item["target"].id))
+                if emitted >= int(budget):
+                    return
 
-        # Fill remaining budget with regular hard_pseudo_anchor queries.
         remaining = int(budget) - emitted
         if remaining <= 0:
             return
@@ -369,6 +418,7 @@ def load_hard_pseudo_nlq(
                 distractor_min_gap_s=float(distractor_min_gap_s),
                 max_distractors=int(max_distractors),
                 extra_meta=None,
+                scene_t_for_distractors=None,
             )
             if ok:
                 emitted += 1
@@ -384,7 +434,8 @@ def load_hard_pseudo_nlq(
         normal_templates=turn_head_templates,
         first_templates=turn_head_first_templates,
         last_templates=turn_head_last_templates,
-        after_scene_templates=turn_head_after_scene_templates,
+        after_scene_first_templates=turn_head_after_scene_first_templates,
+        after_scene_last_templates=turn_head_after_scene_last_templates,
     )
     _emit_anchor_queries(
         anchor_type="stop_look",
@@ -393,10 +444,10 @@ def load_hard_pseudo_nlq(
         normal_templates=stop_look_templates,
         first_templates=stop_look_first_templates,
         last_templates=stop_look_last_templates,
-        after_scene_templates=stop_look_after_scene_templates,
+        after_scene_first_templates=stop_look_after_scene_first_templates,
+        after_scene_last_templates=stop_look_after_scene_last_templates,
     )
 
-    # 2) token-based queries (no label names in query text).
     token_groups: dict[str, list[Any]] = {"SCENE_CHANGE": [], "MOTION_MOVING": [], "MOTION_STILL": []}
     for token in output.token_codec.tokens:
         token_type = str(token.type).upper()
@@ -414,16 +465,15 @@ def load_hard_pseudo_nlq(
                 gt_span=gt,
                 pool=pool,
                 rng=rng,
-                min_gap_s=float(distractor_min_gap_s),
+                min_gap_s=max(2.0, float(distractor_min_gap_s) * 0.5),
                 max_count=int(max_distractors),
             )
             if not distractors:
                 continue
-            q = str(rng.choice(token_templates[token_type]))
             samples.append(
                 NLQSample(
                     qid=f"hnlq_{len(samples) + 1:06d}",
-                    query=q,
+                    query=str(rng.choice(token_templates[token_type])),
                     query_type="hard_pseudo_token",
                     gt_span=gt,
                     top_k=int(top_k),
@@ -436,7 +486,6 @@ def load_hard_pseudo_nlq(
                 )
             )
 
-    # 3) decision-based queries.
     decision_turn: list[Any] = []
     decision_stop: list[Any] = []
     for dp in output.decision_points:
@@ -454,16 +503,15 @@ def load_hard_pseudo_nlq(
             gt_span=gt,
             pool=pool,
             rng=rng,
-            min_gap_s=float(distractor_min_gap_s),
+            min_gap_s=max(2.0, float(distractor_min_gap_s) * 0.5),
             max_count=int(max_distractors),
         )
         if not distractors:
             continue
-        q = str(rng.choice(decision_turn_templates))
         samples.append(
             NLQSample(
                 qid=f"hnlq_{len(samples) + 1:06d}",
-                query=q,
+                query=str(rng.choice(decision_turn_templates)),
                 query_type="hard_pseudo_decision",
                 gt_span=gt,
                 top_k=int(top_k),
@@ -484,16 +532,15 @@ def load_hard_pseudo_nlq(
             gt_span=gt,
             pool=pool,
             rng=rng,
-            min_gap_s=float(distractor_min_gap_s),
+            min_gap_s=max(2.0, float(distractor_min_gap_s) * 0.5),
             max_count=int(max_distractors),
         )
         if not distractors:
             continue
-        q = str(rng.choice(decision_stop_templates))
         samples.append(
             NLQSample(
                 qid=f"hnlq_{len(samples) + 1:06d}",
-                query=q,
+                query=str(rng.choice(decision_stop_templates)),
                 query_type="hard_pseudo_decision",
                 gt_span=gt,
                 top_k=int(top_k),
@@ -502,6 +549,49 @@ def load_hard_pseudo_nlq(
                     "source_kind": "decision",
                     "decision_type": "STOP_LOOK_LIKE",
                     "decision_id": dp.id,
+                },
+            )
+        )
+
+    contact_events: list[Any] = []
+    for ev in output.events_v1:
+        has_contact = any(str(e.type) == "contact" for e in ev.evidence)
+        if has_contact or str(getattr(ev, "label", "")).strip().lower() == "interaction-heavy":
+            contact_events.append(ev)
+    if not contact_events:
+        contact_events = list(sorted(output.events_v1, key=lambda x: (float(x.t0), float(x.t1), str(x.id))))[:3]
+    contact_budget = max(0, min(len(contact_events), max(1, int(n_highlight // 3))))
+    for idx in _sample_indices(len(contact_events), contact_budget, rng):
+        ev = contact_events[idx]
+        gt = (float(ev.t0), float(ev.t1))
+        pool = [(float(x.t0), float(x.t1)) for x in output.events_v1]
+        distractors = _pick_distractors(
+            gt_span=gt,
+            pool=pool,
+            rng=rng,
+            min_gap_s=max(4.0, float(distractor_min_gap_s) * 0.6),
+            max_count=int(max_distractors),
+        )
+        if not distractors:
+            fallback_pool = [span for span in pool if _span_iou(gt, span) < 0.1]
+            distractors = fallback_pool[: max(1, int(max_distractors))]
+        if not distractors:
+            fallback_pool = [span for span in pool if span != gt]
+            distractors = fallback_pool[: max(1, int(max_distractors))]
+        if not distractors:
+            continue
+        samples.append(
+            NLQSample(
+                qid=f"hnlq_{len(samples) + 1:06d}",
+                query=str(rng.choice(contact_templates)),
+                query_type="hard_pseudo_contact",
+                gt_span=gt,
+                top_k=int(top_k),
+                distractors=distractors,
+                meta={
+                    "source_kind": "event_v1",
+                    "event_v1_id": str(ev.id),
+                    "event_label": str(getattr(ev, "label", "")),
                 },
             )
         )

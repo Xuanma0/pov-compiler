@@ -3,3 +3,6 @@ opencv-python>=4.8
 pydantic>=2.0
 pandas>=2.0
 matplotlib>=3.8
+# Optional (Perception v0 real backend):
+# ultralytics>=8.2
+# mediapipe>=0.10

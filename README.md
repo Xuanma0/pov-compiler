@@ -173,6 +173,24 @@ D:\Ego4D_Dataset
 - Paper figures/tables + compare mode (`real vs stub`) + snapshot metadata
 - Reranker sweep and debugging tools
 
+## Milestone v0.2+ (R&D Progress)
+
+- `events_v1` IR convergence:
+  - unified schema for `EventV1 / Evidence / RetrievalHit / ConstraintTrace`
+  - backward-compatible converter from existing outputs
+  - index/retriever/context now prioritize `events_v1`
+- Safety kernel updates:
+  - explicit counting semantics: `count_granularity=row=(variant,budget,query)`
+  - safety report now includes `critical_fn_denominator`, `critical_fn_rate`, gate threshold, and gate-enforced flag
+  - `eval_nlq` defaults to report-only safety; `--safety-gate` enforces CI-style failure
+- Streaming skeleton upgrades:
+  - retrieval-only latency and end-to-end latency are both reported
+  - step-level telemetry includes `index_size`, `events_v1_added`, `e2e_ms`
+- Traceability tooling:
+  - `scripts/trace_one_query.py` outputs plan/constraints/filtered counts/score breakdown/top-k hits/evidence spans
+- Contact-driven hard pseudo NLQ extension:
+  - added interaction-like query family (`hard_pseudo_contact`) to better expose events_v1/perception differences
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

@@ -60,6 +60,8 @@ def scan_and_plan(
                 "index_prefix": None,
                 "cross_eval_dir": None,
                 "nlq_eval_dir": None,
+                "perception_dir": None,
+                "event_dir": None,
                 "status_stage": "scanned",
             }
         )
@@ -388,6 +390,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nlq-n", type=int, default=10, help="NLQ query count knob")
     parser.add_argument("--nlq-seed", type=int, default=0, help="NLQ query seed")
     parser.add_argument("--nlq-topk", type=int, default=6, help="NLQ query top_k")
+    _parse_bool_auto_args(parser, "run-perception", default=False, help_text="Run Perception v0 stage")
+    parser.add_argument("--perception-fps", type=float, default=10.0, help="Perception sample fps")
+    parser.add_argument("--perception-max-frames", type=int, default=300, help="Perception max frames per video")
+    parser.add_argument("--perception-backend", choices=["stub", "real"], default="stub", help="Perception backend")
+    _parse_bool_auto_args(
+        parser,
+        "perception-fallback-stub",
+        default=True,
+        help_text="Allow fallback from real backend to stub backend",
+    )
+    parser.add_argument(
+        "--perception-strict",
+        action="store_true",
+        help="Strict perception mode: no fallback, fail on missing deps/frame errors",
+    )
 
     parser.add_argument("--min-size-bytes", "--min_size_bytes", dest="min_size_bytes", type=int, default=MIN_SIZE_DEFAULT)
     parser.add_argument("--min-duration-s", type=float, default=None)
@@ -527,6 +544,14 @@ def _is_nlq_complete(nlq_dir: Path) -> bool:
     return (nlq_dir / "nlq_report.md").exists()
 
 
+def _is_perception_complete(perception_dir: Path) -> bool:
+    return (
+        (perception_dir / "perception.json").exists()
+        and (perception_dir / "events_v0.json").exists()
+        and (perception_dir / "report.md").exists()
+    )
+
+
 def plan_stage_actions(
     *,
     json_path: Path,
@@ -537,6 +562,8 @@ def plan_stage_actions(
     run_eval: bool,
     run_nlq: bool,
     resume: bool,
+    perception_dir: Path | None = None,
+    run_perception: bool = False,
 ) -> dict[str, bool]:
     actions = {
         "run_offline": True,
@@ -545,11 +572,15 @@ def plan_stage_actions(
         "eval_cross": bool(run_eval),
         "eval_nlq": bool(run_nlq),
     }
+    if bool(run_perception):
+        actions["run_perception"] = True
     if not resume:
         return actions
 
     if _is_pipeline_json_complete(json_path):
         actions["run_offline"] = False
+    if bool(run_perception) and perception_dir is not None and _is_perception_complete(perception_dir):
+        actions["run_perception"] = False
     if _is_index_complete(index_prefix):
         actions["build_index"] = False
     if run_eval:
@@ -564,12 +595,16 @@ def plan_stage_actions(
 
     # Dependency propagation.
     if actions["run_offline"]:
+        if bool(run_perception) and "run_perception" in actions:
+            actions["run_perception"] = True
         actions["build_index"] = True
         if run_eval:
             actions["gen_queries"] = True
             actions["eval_cross"] = True
         if run_nlq:
             actions["eval_nlq"] = True
+    if bool(run_perception) and actions.get("run_perception", False) and actions.get("run_offline", False):
+        actions["run_perception"] = True
     elif actions["build_index"]:
         if run_nlq:
             actions["eval_nlq"] = True
@@ -623,7 +658,16 @@ def _process_video(
     cache_dir: Path,
     eval_root_dir: Path,
     nlq_root_dir: Path,
+    perception_root_dir: Path,
+    event_root_dir: Path,
     seed: int,
+    run_perception: bool,
+    perception_fps: float,
+    perception_max_frames: int,
+    perception_backend: str,
+    perception_fallback_stub: bool,
+    perception_strict: bool,
+    perception_cache_root: Path,
     run_eval: bool,
     sweep: bool,
     run_nlq: bool,
@@ -641,6 +685,7 @@ def _process_video(
     gen_queries_script = scripts_dir / "gen_queries.py"
     eval_cross_script = scripts_dir / "eval_cross.py"
     eval_nlq_script = scripts_dir / "eval_nlq.py"
+    perception_smoke_script = scripts_dir / "perception_smoke.py"
 
     uid = str(entry["video_uid"])
     src_path = Path(str(entry["src_path"]))
@@ -650,8 +695,13 @@ def _process_video(
     index_prefix = cache_dir / uid
     eval_dir = eval_root_dir / uid
     nlq_dir = nlq_root_dir / uid
+    perception_dir = perception_root_dir / uid
+    event_dir = event_root_dir / uid
+    perception_cache_dir = perception_cache_root / uid
     eval_dir.mkdir(parents=True, exist_ok=True)
     nlq_dir.mkdir(parents=True, exist_ok=True)
+    perception_dir.mkdir(parents=True, exist_ok=True)
+    event_dir.mkdir(parents=True, exist_ok=True)
     queries_path = eval_dir / "queries.jsonl"
 
     actions = plan_stage_actions(
@@ -660,6 +710,8 @@ def _process_video(
         queries_path=queries_path,
         eval_dir=eval_dir,
         nlq_dir=nlq_dir,
+        perception_dir=perception_dir,
+        run_perception=run_perception,
         run_eval=run_eval,
         run_nlq=run_nlq,
         resume=resume,
@@ -703,6 +755,45 @@ def _process_video(
             status_stage = "build_index"
     elif status == "ok":
         stage_results["build_index"] = "skipped"
+
+    perception_json_path = perception_dir / "perception.json"
+    perception_report_path = perception_dir / "report.md"
+    event_json_path = perception_dir / "events_v0.json"
+    if status == "ok" and run_perception and actions.get("run_perception", False):
+        effective_fallback = bool(perception_fallback_stub) and not bool(perception_strict)
+        perception_args = [
+            "--video",
+            str(input_path),
+            "--out_dir",
+            str(perception_dir),
+            "--backend",
+            str(perception_backend),
+            "--fps",
+            str(float(perception_fps)),
+            "--max-frames",
+            str(int(perception_max_frames)),
+            "--cache-dir",
+            str(perception_cache_dir),
+            "--perception-fallback-stub" if effective_fallback else "--no-perception-fallback-stub",
+        ]
+        if bool(perception_strict):
+            perception_args.append("--perception-strict")
+        ok, log = _run_python_script(
+            perception_smoke_script,
+            perception_args,
+            cwd=ROOT,
+        )
+        if not ok:
+            _fail("run_perception", log)
+        else:
+            stage_results["run_perception"] = "done"
+            status_stage = "run_perception"
+            # Mirror events_v0 artifact to dedicated event directory for easier browsing.
+            if event_json_path.exists():
+                event_dir.mkdir(parents=True, exist_ok=True)
+                (event_dir / "events_v0.json").write_text(event_json_path.read_text(encoding="utf-8"), encoding="utf-8")
+    elif run_perception:
+        stage_results["run_perception"] = "skipped"
 
     if status == "ok" and run_eval and actions["gen_queries"]:
         ok, log = _run_python_script(
@@ -758,6 +849,7 @@ def _process_video(
     nlq_results_path = nlq_dir / "nlq_results.csv"
     nlq_summary_path = nlq_dir / "nlq_summary.csv"
     nlq_report_path = nlq_dir / "nlq_report.md"
+    nlq_safety_path = nlq_dir / "safety_report.json"
     if status == "ok" and run_nlq and actions["eval_nlq"]:
         nlq_args = [
             "--json",
@@ -795,6 +887,8 @@ def _process_video(
             "index_prefix": str(index_prefix),
             "cross_eval_dir": str(eval_dir),
             "nlq_eval_dir": str(nlq_dir),
+            "perception_dir": str(perception_dir),
+            "event_dir": str(event_dir),
             "status_stage": status_stage if status == "ok" else status,
         }
     )
@@ -814,6 +908,12 @@ def _process_video(
         "nlq_results_path": str(nlq_results_path),
         "nlq_summary_path": str(nlq_summary_path),
         "nlq_report_path": str(nlq_report_path),
+        "nlq_safety_path": str(nlq_safety_path),
+        "perception_dir": str(perception_dir),
+        "event_dir": str(event_dir),
+        "perception_json_path": str(perception_json_path),
+        "perception_report_path": str(perception_report_path),
+        "event_json_path": str(event_json_path),
         "status_stage": status_stage if status == "ok" else status,
         "stage_results": stage_results,
         "error_tail": last_error[-800:] if last_error else "",
@@ -860,6 +960,7 @@ def _write_summary(
     sweep: bool,
     run_nlq: bool,
     nlq_mode: str,
+    run_perception: bool,
     summary_budget: dict[str, Any],
     nlq_summary_all_path: Path,
 ) -> tuple[Path, Path]:
@@ -878,9 +979,15 @@ def _write_summary(
             "index_prefix": record.get("index_prefix"),
             "eval_dir": record.get("eval_dir"),
             "nlq_dir": record.get("nlq_dir"),
+            "perception_dir": record.get("perception_dir"),
+            "event_dir": record.get("event_dir"),
             "budget_max_total_s": summary_budget["max_total_s"],
             "budget_max_tokens": summary_budget["max_tokens"],
             "budget_max_decisions": summary_budget["max_decisions"],
+            "critical_fn_rate": "",
+            "critical_fn_count": "",
+            "critical_fn_denominator": "",
+            "safety_count_granularity": "",
         }
         results_overall_path = Path(str(record.get("results_overall_path", "")))
         if results_overall_path.exists():
@@ -906,6 +1013,28 @@ def _write_summary(
                     "highlights_total",
                 ):
                     row[key] = chosen_row.get(key, "")
+        nlq_safety_path = Path(str(record.get("nlq_safety_path", "")))
+        if nlq_safety_path.exists():
+            try:
+                safety_payload = json.loads(nlq_safety_path.read_text(encoding="utf-8"))
+            except Exception:
+                safety_payload = {}
+            if isinstance(safety_payload, dict):
+                variant_stats = safety_payload.get("variant_stats", {})
+                full_stats = variant_stats.get("full", {}) if isinstance(variant_stats, dict) else {}
+                row["critical_fn_rate"] = full_stats.get(
+                    "critical_fn_rate",
+                    safety_payload.get("critical_fn_rate", ""),
+                )
+                row["critical_fn_count"] = full_stats.get(
+                    "critical_fn_count",
+                    safety_payload.get("critical_fn_count", ""),
+                )
+                row["critical_fn_denominator"] = full_stats.get(
+                    "critical_fn_denominator",
+                    safety_payload.get("critical_fn_denominator", ""),
+                )
+                row["safety_count_granularity"] = safety_payload.get("count_granularity", "")
         csv_rows.append(row)
 
     summary_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -931,6 +1060,7 @@ def _write_summary(
     lines.append(f"- sweep: {str(sweep).lower()}")
     lines.append(f"- run_nlq: {str(run_nlq).lower()}")
     lines.append(f"- nlq_mode: {nlq_mode}")
+    lines.append(f"- run_perception: {str(run_perception).lower()}")
     lines.append(f"- summary_csv: `{summary_csv}`")
     lines.append(f"- nlq_summary_all_csv: `{nlq_summary_all_path}`")
     lines.append("")
@@ -953,6 +1083,8 @@ def _write_summary(
         lines.append(f"- index_prefix: `{record.get('index_prefix', '')}`")
         lines.append(f"- eval_dir: `{record.get('eval_dir', '')}`")
         lines.append(f"- nlq_dir: `{record.get('nlq_dir', '')}`")
+        lines.append(f"- perception_dir: `{record.get('perception_dir', '')}`")
+        lines.append(f"- event_dir: `{record.get('event_dir', '')}`")
         report_path = Path(str(record.get("report_path", "")))
         if report_path.exists():
             report_text = report_path.read_text(encoding="utf-8")
@@ -1050,6 +1182,13 @@ def main() -> int:
     if proxy_requested and not ffmpeg_available:
         print("warn=ffmpeg_not_found proxy_skipped=true")
     print(f"proxy_enabled={str(proxy_enabled).lower()}")
+    print(f"run_perception={str(bool(args.run_perception)).lower()}")
+    if bool(args.run_perception):
+        print(f"perception_fps={float(args.perception_fps):.2f}")
+        print(f"perception_max_frames={int(args.perception_max_frames)}")
+        print(f"perception_backend={str(args.perception_backend)}")
+        print(f"perception_fallback_stub={str(bool(args.perception_fallback_stub)).lower()}")
+        print(f"perception_strict={str(bool(args.perception_strict)).lower()}")
 
     # Proxy stage (parallel, capped for safety).
     if proxy_enabled and chosen_entries:
@@ -1096,10 +1235,14 @@ def main() -> int:
     cache_dir = out_dir / "cache"
     eval_root_dir = out_dir / "eval"
     nlq_root_dir = out_dir / "nlq"
+    perception_root_dir = out_dir / "perception"
+    event_root_dir = out_dir / "event"
     json_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     eval_root_dir.mkdir(parents=True, exist_ok=True)
     nlq_root_dir.mkdir(parents=True, exist_ok=True)
+    perception_root_dir.mkdir(parents=True, exist_ok=True)
+    event_root_dir.mkdir(parents=True, exist_ok=True)
 
     run_records: list[dict[str, Any]] = []
     kwargs = {
@@ -1107,7 +1250,16 @@ def main() -> int:
         "cache_dir": cache_dir,
         "eval_root_dir": eval_root_dir,
         "nlq_root_dir": nlq_root_dir,
+        "perception_root_dir": perception_root_dir,
+        "event_root_dir": event_root_dir,
         "seed": int(args.seed),
+        "run_perception": bool(args.run_perception),
+        "perception_fps": float(args.perception_fps),
+        "perception_max_frames": int(args.perception_max_frames),
+        "perception_backend": str(args.perception_backend),
+        "perception_fallback_stub": bool(args.perception_fallback_stub),
+        "perception_strict": bool(args.perception_strict),
+        "perception_cache_root": out_dir / "perception_cache",
         "run_eval": bool(args.run_eval),
         "sweep": bool(args.sweep),
         "run_nlq": bool(args.run_nlq),
@@ -1134,7 +1286,8 @@ def main() -> int:
             print(
                 f"per_video uid={uid} status={run_record['status']} stage={run_record['status_stage']} "
                 f"json={run_record['json_path']} index={run_record['index_prefix']} eval={run_record['eval_dir']} "
-                f"nlq={run_record['nlq_dir']} stages={stage_text}"
+                f"nlq={run_record['nlq_dir']} perception={run_record.get('perception_dir','')} "
+                f"event={run_record.get('event_dir','')} stages={stage_text}"
             )
     else:
         with ThreadPoolExecutor(max_workers=jobs) as executor:
@@ -1152,7 +1305,8 @@ def main() -> int:
                 print(
                     f"per_video uid={uid} status={run_record['status']} stage={run_record['status_stage']} "
                     f"json={run_record['json_path']} index={run_record['index_prefix']} eval={run_record['eval_dir']} "
-                    f"nlq={run_record['nlq_dir']} stages={stage_text}"
+                    f"nlq={run_record['nlq_dir']} perception={run_record.get('perception_dir','')} "
+                    f"event={run_record.get('event_dir','')} stages={stage_text}"
                 )
 
     # Manifest final update with stage outputs.
@@ -1175,6 +1329,7 @@ def main() -> int:
         sweep=bool(args.sweep),
         run_nlq=bool(args.run_nlq),
         nlq_mode=str(args.nlq_mode),
+        run_perception=bool(args.run_perception),
         summary_budget=summary_budget,
         nlq_summary_all_path=nlq_summary_all_path,
     )

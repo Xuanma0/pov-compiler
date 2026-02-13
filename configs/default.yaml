@@ -70,6 +70,7 @@ safety:
   strict_metric: hit_at_k_strict
   critical_query_types:
     - hard_pseudo_anchor
+    - hard_pseudo_contact
     - hard_pseudo_decision
     - hard_pseudo_token
     - pseudo_anchor

@@ -135,12 +135,14 @@ def run_streaming(
         step_points = [0.0]
 
     all_latencies_ms: list[float] = []
+    all_step_e2e_ms: list[float] = []
     step_rows: list[dict[str, Any]] = []
     query_rows: list[dict[str, Any]] = []
     progressive_rows: list[dict[str, Any]] = []
 
     for step_idx, end_t in enumerate(step_points, start=1):
         step_start = time.perf_counter()
+        added_this_step = 0
         for event in output.events_v1:
             if event.id in indexed_ids:
                 continue
@@ -158,6 +160,7 @@ def run_streaming(
                     },
                 )
                 indexed_ids.add(event.id)
+                added_this_step += 1
 
         window_output = _slice_output(output, end_t=end_t)
         retriever = Retriever(
@@ -200,16 +203,21 @@ def run_streaming(
             )
 
         step_elapsed = max(1e-9, float(time.perf_counter() - step_start))
+        step_e2e_ms = float(step_elapsed * 1000.0)
+        all_step_e2e_ms.append(step_e2e_ms)
         qps = float(len(step_query_latencies) / step_elapsed) if step_query_latencies else 0.0
         step_rows.append(
             {
                 "step_idx": int(step_idx),
                 "end_t": float(end_t),
+                "index_size": int(event_index.size),
+                "events_v1_added": int(added_this_step),
                 "events_v1_indexed": int(len(indexed_ids)),
                 "queries": int(len(step_query_latencies)),
                 "hits_total": int(step_hits),
-                "latency_p50_ms": _percentile(step_query_latencies, 50.0),
-                "latency_p95_ms": _percentile(step_query_latencies, 95.0),
+                "retrieval_latency_p50_ms": _percentile(step_query_latencies, 50.0),
+                "retrieval_latency_p95_ms": _percentile(step_query_latencies, 95.0),
+                "e2e_ms": step_e2e_ms,
                 "throughput_qps": float(qps),
             }
         )
@@ -231,8 +239,10 @@ def run_streaming(
         "queries_total": int(len(query_rows)),
         "events_v1_total": int(len(output.events_v1)),
         "events_v1_indexed": int(len(indexed_ids)),
-        "latency_p50_ms": _percentile(all_latencies_ms, 50.0),
-        "latency_p95_ms": _percentile(all_latencies_ms, 95.0),
+        "retrieval_latency_p50_ms": _percentile(all_latencies_ms, 50.0),
+        "retrieval_latency_p95_ms": _percentile(all_latencies_ms, 95.0),
+        "e2e_latency_p50_ms": _percentile(all_step_e2e_ms, 50.0),
+        "e2e_latency_p95_ms": _percentile(all_step_e2e_ms, 95.0),
         "throughput_qps_mean": float(statistics.mean([float(r["throughput_qps"]) for r in step_rows]))
         if step_rows
         else 0.0,
@@ -243,4 +253,3 @@ def run_streaming(
         "query_rows": query_rows,
         "progressive_rows": progressive_rows,
     }
-

@@ -60,8 +60,11 @@ def test_safety_gate_fails_on_critical_fn() -> None:
         video_id="demo",
         per_query_rows=_rows(),
         gate_cfg=SafetyGateConfig(enabled=True, max_critical_fn=0),
+        enforce_gate=True,
     )
     assert report["critical_fn_count"] == 1
+    assert report["critical_fn_denominator"] == 2
+    assert report["count_granularity"] == "row=(variant,budget,query)"
     assert report["pass_gate"] is False
     assert report["critical_failures"][0]["reason"] == "constraints_over_filtered"
 
@@ -80,7 +83,9 @@ def test_safety_report_has_required_fields() -> None:
         "pass_gate",
         "reason_counts",
         "critical_failures",
+        "critical_fn_denominator",
+        "count_granularity",
+        "variant_stats",
     ):
         assert key in report
     assert isinstance(report["critical_failures"], list)
-

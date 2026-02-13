@@ -109,6 +109,13 @@ class Retriever:
             return 0.0
 
     @staticmethod
+    def _event_contact_peak(event: Any) -> float:
+        try:
+            return float(getattr(event, "scores", {}).get("contact_peak", 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
     def _event_anchor_types(event: Any) -> set[str]:
         if hasattr(event, "anchors"):
             return {str(anchor.type).lower() for anchor in getattr(event, "anchors", [])}
@@ -333,6 +340,42 @@ class Retriever:
                 decisions_new,
             )
             reasons.append(f"event ids={','.join(sorted(events_new))}")
+
+        if parsed.event_labels:
+            labels = {str(x).lower() for x in parsed.event_labels}
+            events_new = {event.id for event in event_pool if self._event_label(event).strip().lower() in labels}
+            highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
+            tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
+            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
+                current_events,
+                current_highlights,
+                current_tokens,
+                current_decisions,
+                events_new,
+                highlights_new,
+                tokens_new,
+                decisions_new,
+            )
+            reasons.append(f"event labels={','.join(sorted(labels))}")
+
+        if parsed.contact_min is not None:
+            threshold = float(parsed.contact_min)
+            events_new = {event.id for event in event_pool if self._event_contact_peak(event) >= threshold}
+            highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
+            tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
+            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
+                current_events,
+                current_highlights,
+                current_tokens,
+                current_decisions,
+                events_new,
+                highlights_new,
+                tokens_new,
+                decisions_new,
+            )
+            reasons.append(f"contact_min={threshold:.3f}")
 
         if parsed.text:
             if self.index is None:
@@ -658,6 +701,7 @@ class Retriever:
                     source_query=query,
                     meta={
                         "boundary_conf": self._event_boundary_conf(event),
+                        "contact_peak": self._event_contact_peak(event),
                         "label": self._event_label(event),
                         "layer": str(getattr(event, "meta", {}).get("layer", "events_v1" if hasattr(event, "label") else "")),
                     },

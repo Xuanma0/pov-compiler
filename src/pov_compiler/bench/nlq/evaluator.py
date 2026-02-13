@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -10,13 +11,17 @@ from pov_compiler.eval.ablation import ALL_VARIANTS, apply_variant
 from pov_compiler.eval.budget_sweep import apply_budget
 from pov_compiler.eval.eval_cross_variant import build_budget_grid
 from pov_compiler.eval.metrics import compute_consistency, compute_coverage, compute_efficiency
-from pov_compiler.retrieval.query_planner import QueryCandidate, plan as plan_query
+from pov_compiler.retrieval.constraints import HardConstraintConfig, apply_constraints_detailed
+from pov_compiler.retrieval.query_planner import QueryCandidate, QueryPlan, plan as plan_query
+from pov_compiler.retrieval.reranker import Hit, rerank
+from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
 from pov_compiler.retrieval.retriever import Retriever
 from pov_compiler.schemas import Output
 from pov_compiler.utils.media import get_duration_bucket
 
 
 _TOPK_PATTERN = re.compile(r"(?:^|\s)top_k=\d+(?:\s|$)")
+_CONSTRAINT_KEYS = ("after_scene_change", "first_last", "type_match")
 
 
 def _span_iou(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -33,31 +38,93 @@ def _mean(values: list[float]) -> float:
     return float(sum(values) / len(values))
 
 
-def _extract_pred_spans(output: Output, retrieval_result: dict[str, Any]) -> list[tuple[str, str, float, float]]:
+def _mode(values: list[str], default: str = "none") -> str:
+    if not values:
+        return default
+    counts: dict[str, int] = {}
+    for value in values:
+        k = str(value)
+        counts[k] = counts.get(k, 0) + 1
+    ordered = sorted(counts.items(), key=lambda x: (-int(x[1]), str(x[0])))
+    return str(ordered[0][0]) if ordered else default
+
+
+def _kind_rate(rows: list[dict[str, Any]], kind: str) -> float:
+    if not rows:
+        return 0.0
+    k = str(kind)
+    return float(sum(1.0 for row in rows if str(row.get("top1_kind", "")) == k) / float(len(rows)))
+
+
+def _constraint_rate(rows: list[dict[str, Any]], field: str, name: str) -> float:
+    if not rows:
+        return 0.0
+    count = 0.0
+    key = str(name)
+    for row in rows:
+        payload = row.get(field, "[]")
+        if isinstance(payload, str):
+            try:
+                arr = json.loads(payload)
+            except Exception:
+                arr = []
+        elif isinstance(payload, list):
+            arr = payload
+        else:
+            arr = []
+        if key in [str(x) for x in arr]:
+            count += 1.0
+    return float(count / float(len(rows)))
+
+
+def _constraint_present_flags(plan_constraints: dict[str, Any]) -> dict[str, bool]:
+    constraints = dict(plan_constraints)
+    return {
+        "after_scene_change": bool(constraints.get("after_scene_change", False)),
+        "first_last": str(constraints.get("which", "")).lower() in {"first", "last"},
+        "type_match": any(
+            bool(str(constraints.get(key, "")).strip()) for key in ("anchor_type", "token_type", "decision_type")
+        ),
+    }
+
+
+def _constraint_stats_from_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
+    if not rows:
+        stats = {"used_fallback_rate": 0.0, "avg_filtered_before": 0.0, "avg_filtered_after": 0.0}
+        for key in _CONSTRAINT_KEYS:
+            stats[f"present_{key}_rate"] = 0.0
+            stats[f"filtered_{key}_rate"] = 0.0
+            stats[f"relaxed_{key}_rate"] = 0.0
+        return stats
+
+    n = float(len(rows))
+
+    def _mean_bool(field: str) -> float:
+        return float(sum(1.0 for row in rows if bool(row.get(field, False))) / n)
+
+    stats: dict[str, float] = {
+        "used_fallback_rate": _mean_bool("used_fallback"),
+        "avg_filtered_before": float(sum(float(row.get("filtered_hits_before", 0.0)) for row in rows) / n),
+        "avg_filtered_after": float(sum(float(row.get("filtered_hits_after", 0.0)) for row in rows) / n),
+    }
+    for key in _CONSTRAINT_KEYS:
+        stats[f"present_{key}_rate"] = _mean_bool(f"present_{key}")
+        stats[f"filtered_{key}_rate"] = _mean_bool(f"filtered_{key}")
+        stats[f"relaxed_{key}_rate"] = _mean_bool(f"relaxed_{key}")
+    return stats
+
+
+def _extract_pred_spans_from_hits(hits: list[Hit], top_k: int) -> list[tuple[str, str, float, float]]:
     out: list[tuple[str, str, float, float]] = []
     seen: set[tuple[str, str]] = set()
-    hl_map = {hl.id: hl for hl in output.highlights}
-    event_map = {event.id: event for event in output.events}
-    decision_map = {dp.id: dp for dp in output.decision_points}
-
-    for hid in retrieval_result.get("selected_highlights", []) or []:
-        hid = str(hid)
-        if hid in hl_map and ("highlight", hid) not in seen:
-            hl = hl_map[hid]
-            out.append(("highlight", hid, float(hl.t0), float(hl.t1)))
-            seen.add(("highlight", hid))
-    for did in retrieval_result.get("selected_decisions", []) or []:
-        did = str(did)
-        if did in decision_map and ("decision", did) not in seen:
-            dp = decision_map[did]
-            out.append(("decision", did, float(dp.t0), float(dp.t1)))
-            seen.add(("decision", did))
-    for eid in retrieval_result.get("selected_events", []) or []:
-        eid = str(eid)
-        if eid in event_map and ("event", eid) not in seen:
-            event = event_map[eid]
-            out.append(("event", eid, float(event.t0), float(event.t1)))
-            seen.add(("event", eid))
+    for hit in hits[: max(1, int(top_k))]:
+        kind = str(hit["kind"])
+        hit_id = str(hit["id"])
+        key = (kind, hit_id)
+        if key in seen:
+            continue
+        out.append((kind, hit_id, float(hit["t0"]), float(hit["t1"])))
+        seen.add(key)
     return out
 
 
@@ -118,12 +185,12 @@ def _force_top_k(query: str, top_k: int) -> str:
     return f"{text} top_k={int(max(1, top_k))}"
 
 
-def _build_candidates(sample: NLQSample, allow_gt_fallback: bool) -> list[QueryCandidate]:
+def _build_plan(sample: NLQSample, allow_gt_fallback: bool) -> QueryPlan:
     planned = plan_query(sample.query)
     candidates: list[QueryCandidate] = []
     seen: set[str] = set()
 
-    for cand in planned:
+    for cand in planned.candidates:
         q = _force_top_k(str(cand.get("query", "")), int(sample.top_k))
         if not q or q in seen:
             continue
@@ -152,17 +219,12 @@ def _build_candidates(sample: NLQSample, allow_gt_fallback: bool) -> list[QueryC
             )
 
     candidates.sort(key=lambda x: (int(x["priority"]), str(x["query"])))
-    return candidates
-
-
-def _empty_result(reason: str) -> dict[str, Any]:
-    return {
-        "selected_events": [],
-        "selected_highlights": [],
-        "selected_decisions": [],
-        "selected_tokens": [],
-        "debug": {"reason": str(reason)},
-    }
+    return QueryPlan(
+        intent=planned.intent,
+        candidates=candidates,
+        constraints=dict(planned.constraints),
+        debug=dict(planned.debug),
+    )
 
 
 def evaluate_nlq_samples(
@@ -173,11 +235,24 @@ def evaluate_nlq_samples(
     sweep: bool,
     retriever_config: dict[str, Any] | None = None,
     index_prefix: str | Path | None = None,
+    rerank_cfg: WeightConfig | dict[str, Any] | str | Path | None = None,
+    hard_constraints_cfg: HardConstraintConfig | dict[str, Any] | str | Path | None = None,
     allow_gt_fallback: bool = True,
     variants: list[str] | None = None,
     min_iou: float = 0.1,
 ) -> dict[str, list[dict[str, Any]]]:
     retriever_config = retriever_config or {}
+    weights = resolve_weight_config(rerank_cfg)
+    cfg_name = str(weights.name)
+    cfg_hash = str(weights.short_hash())
+    if hard_constraints_cfg is None:
+        hard_cfg = HardConstraintConfig()
+    elif isinstance(hard_constraints_cfg, HardConstraintConfig):
+        hard_cfg = hard_constraints_cfg
+    elif isinstance(hard_constraints_cfg, dict):
+        hard_cfg = HardConstraintConfig.from_dict(hard_constraints_cfg)
+    else:
+        hard_cfg = HardConstraintConfig.from_yaml(hard_constraints_cfg)
     used_variants = [str(v) for v in (variants or ALL_VARIANTS)]
     budget_grid = build_budget_grid(budgets, sweep=sweep)
 
@@ -196,31 +271,51 @@ def evaluate_nlq_samples(
 
             local_rows: list[dict[str, Any]] = []
             for sample in samples:
-                candidates = _build_candidates(sample, allow_gt_fallback=bool(allow_gt_fallback))
-                chosen_query = ""
+                query_plan = _build_plan(sample, allow_gt_fallback=bool(allow_gt_fallback))
+                candidates = list(query_plan.candidates)
+                candidate_queries = [str(cand["query"]) for cand in candidates]
+                merged_hits = retriever.retrieve_multi(candidate_queries)
+                cresult = apply_constraints_detailed(
+                    merged_hits,
+                    query_plan=query_plan,
+                    cfg=hard_cfg,
+                    output=budgeted,
+                )
+                reranked_hits = rerank(
+                    cresult.hits,
+                    plan=query_plan,
+                    context=budgeted,
+                    cfg=weights,
+                    distractors=sample.distractors,
+                )
+
+                top1_kind = str(reranked_hits[0]["kind"]) if reranked_hits else "none"
+                top1_source_query = str(reranked_hits[0]["source_query"]) if reranked_hits else ""
+                chosen_query = top1_source_query
                 chosen_reason = "no_candidate"
-                retrieval_result = _empty_result(chosen_reason)
+                present_flags = _constraint_present_flags(query_plan.constraints)
+                did_filter_any = int(cresult.filtered_after) < int(cresult.filtered_before)
+                relaxed_first = str(cresult.relaxed[0]) if cresult.relaxed else ""
+                filtered_flags = {
+                    key: bool(present_flags[key] and did_filter_any and key in [str(x) for x in cresult.applied])
+                    for key in _CONSTRAINT_KEYS
+                }
+                relaxed_flags = {
+                    key: bool(present_flags[key] and relaxed_first == key)
+                    for key in _CONSTRAINT_KEYS
+                }
+                if chosen_query:
+                    for cand in candidates:
+                        if str(cand["query"]) == chosen_query:
+                            chosen_reason = str(cand.get("reason", "planned"))
+                            break
+                    if chosen_reason == "no_candidate":
+                        chosen_reason = "planned"
+                elif candidates:
+                    fallback_reasons = [str(c.get("reason", "")) for c in candidates if str(c.get("reason", ""))]
+                    chosen_reason = fallback_reasons[-1] if fallback_reasons else "router_no_match"
 
-                if candidates:
-                    cascade_queries = [cand["query"] for cand in candidates]
-                    matched_query, cascade_result = retriever.retrieve_cascade(cascade_queries)
-                    if matched_query is not None:
-                        retrieval_result = cascade_result
-                        chosen_query = str(matched_query)
-                        for cand in candidates:
-                            if str(cand["query"]) == chosen_query:
-                                chosen_reason = str(cand["reason"])
-                                break
-                        if not chosen_reason:
-                            chosen_reason = "planned"
-                    else:
-                        retrieval_result = cascade_result
-                        chosen_query = str(cascade_queries[-1]) if cascade_queries else ""
-                        # if fallback_gt_time exists, surface that; else router_no_match.
-                        fallback_reasons = [str(c["reason"]) for c in candidates if str(c.get("reason", ""))]
-                        chosen_reason = fallback_reasons[-1] if fallback_reasons else "router_no_match"
-
-                pred_spans = _extract_pred_spans(budgeted, retrieval_result)
+                pred_spans = _extract_pred_spans_from_hits(reranked_hits, top_k=int(sample.top_k))
                 rank, best_iou = _rank_for_gt_span(pred_spans, sample.gt_span, min_iou=float(min_iou))
                 hit = 1.0 if rank is not None and rank <= int(sample.top_k) else 0.0
                 mrr = 1.0 / float(rank) if rank is not None else 0.0
@@ -244,6 +339,27 @@ def evaluate_nlq_samples(
                     "query": sample.query,
                     "chosen_query": chosen_query,
                     "chosen_reason": chosen_reason,
+                    "chosen_plan_intent": str(query_plan.intent),
+                    "applied_constraints": json.dumps(query_plan.constraints, ensure_ascii=False, sort_keys=True),
+                    "constraints_applied": json.dumps(cresult.applied, ensure_ascii=False),
+                    "constraints_relaxed": json.dumps(cresult.relaxed, ensure_ascii=False),
+                    "filtered_hits_before": int(cresult.filtered_before),
+                    "filtered_hits_after": int(cresult.filtered_after),
+                    "used_fallback": bool(cresult.used_fallback),
+                    "relaxed_first_constraint": relaxed_first,
+                    "present_after_scene_change": bool(present_flags["after_scene_change"]),
+                    "present_first_last": bool(present_flags["first_last"]),
+                    "present_type_match": bool(present_flags["type_match"]),
+                    "filtered_after_scene_change": bool(filtered_flags["after_scene_change"]),
+                    "filtered_first_last": bool(filtered_flags["first_last"]),
+                    "filtered_type_match": bool(filtered_flags["type_match"]),
+                    "relaxed_after_scene_change": bool(relaxed_flags["after_scene_change"]),
+                    "relaxed_first_last": bool(relaxed_flags["first_last"]),
+                    "relaxed_type_match": bool(relaxed_flags["type_match"]),
+                    "top1_kind": top1_kind,
+                    "top1_source_query": top1_source_query,
+                    "rerank_cfg_name": cfg_name,
+                    "rerank_cfg_hash": cfg_hash,
                     # backward-compatible aliases
                     "route_query": chosen_query,
                     "route_reason": chosen_reason,
@@ -268,12 +384,16 @@ def evaluate_nlq_samples(
                     "mrr_token": mrr,
                     "hit_at_k_highlight": hit,
                     "mrr_highlight": mrr,
-                    "reason": str(retrieval_result.get("debug", {}).get("reason", "")),
+                    "reason": (
+                        f"multi_hits={len(merged_hits)}; filtered={len(cresult.hits)}; "
+                        f"reranked={len(reranked_hits)}; fallback={str(bool(cresult.used_fallback)).lower()}"
+                    ),
                 }
                 row.update(base)
                 local_rows.append(row)
                 per_query_rows.append(dict(row))
 
+            local_constraint_stats = _constraint_stats_from_rows(local_rows)
             overall_rows.append(
                 {
                     "video_id": output.video_id,
@@ -283,14 +403,38 @@ def evaluate_nlq_samples(
                     "budget_max_tokens": int(budget["max_tokens"]),
                     "budget_max_decisions": int(budget["max_decisions"]),
                     "duration_bucket": duration_bucket,
+                    "rerank_cfg_name": cfg_name,
+                    "rerank_cfg_hash": cfg_hash,
                     "num_queries": float(len(local_rows)),
                     "hit_at_k": _mean([float(r["hit_at_k"]) for r in local_rows]),
                     "hit_at_1": _mean([float(r["hit_at_1"]) for r in local_rows]),
                     "hit_at_1_strict": _mean([float(r["hit_at_1_strict"]) for r in local_rows]),
                     "hit_at_k_strict": _mean([float(r["hit_at_k_strict"]) for r in local_rows]),
                     "top1_in_distractor_rate": _mean([float(r["top1_in_distractor"]) for r in local_rows]),
+                    "top1_kind_mode": _mode([str(r.get("top1_kind", "none")) for r in local_rows]),
+                    "top1_kind_highlight_rate": _kind_rate(local_rows, "highlight"),
+                    "top1_kind_token_rate": _kind_rate(local_rows, "token"),
+                    "top1_kind_decision_rate": _kind_rate(local_rows, "decision"),
+                    "top1_kind_event_rate": _kind_rate(local_rows, "event"),
                     "mrr": _mean([float(r["mrr"]) for r in local_rows]),
                     **base,
+                    **local_constraint_stats,
+                    # Backward-compatible aliases.
+                    "fallback_rate": float(local_constraint_stats.get("used_fallback_rate", 0.0)),
+                    "constraint_apply_rate_after_scene_change": float(
+                        local_constraint_stats.get("filtered_after_scene_change_rate", 0.0)
+                    ),
+                    "constraint_apply_rate_first_last": float(
+                        local_constraint_stats.get("filtered_first_last_rate", 0.0)
+                    ),
+                    "constraint_apply_rate_type_match": float(
+                        local_constraint_stats.get("filtered_type_match_rate", 0.0)
+                    ),
+                    "relax_rate_after_scene_change": float(
+                        local_constraint_stats.get("relaxed_after_scene_change_rate", 0.0)
+                    ),
+                    "relax_rate_first_last": float(local_constraint_stats.get("relaxed_first_last_rate", 0.0)),
+                    "relax_rate_type_match": float(local_constraint_stats.get("relaxed_type_match_rate", 0.0)),
                 }
             )
 
@@ -298,6 +442,7 @@ def evaluate_nlq_samples(
             for row in local_rows:
                 grouped[str(row["query_type"])].append(row)
             for query_type, rows in sorted(grouped.items(), key=lambda x: x[0]):
+                type_constraint_stats = _constraint_stats_from_rows(rows)
                 by_type_rows.append(
                     {
                         "video_id": output.video_id,
@@ -308,12 +453,19 @@ def evaluate_nlq_samples(
                         "budget_max_tokens": int(budget["max_tokens"]),
                         "budget_max_decisions": int(budget["max_decisions"]),
                         "duration_bucket": duration_bucket,
+                        "rerank_cfg_name": cfg_name,
+                        "rerank_cfg_hash": cfg_hash,
                         "num_queries": float(len(rows)),
                         "hit_at_k": _mean([float(r["hit_at_k"]) for r in rows]),
                         "hit_at_1": _mean([float(r["hit_at_1"]) for r in rows]),
                         "hit_at_1_strict": _mean([float(r["hit_at_1_strict"]) for r in rows]),
                         "hit_at_k_strict": _mean([float(r["hit_at_k_strict"]) for r in rows]),
                         "top1_in_distractor_rate": _mean([float(r["top1_in_distractor"]) for r in rows]),
+                        "top1_kind_mode": _mode([str(r.get("top1_kind", "none")) for r in rows]),
+                        "top1_kind_highlight_rate": _kind_rate(rows, "highlight"),
+                        "top1_kind_token_rate": _kind_rate(rows, "token"),
+                        "top1_kind_decision_rate": _kind_rate(rows, "decision"),
+                        "top1_kind_event_rate": _kind_rate(rows, "event"),
                         "mrr": _mean([float(r["mrr"]) for r in rows]),
                         "hit_at_k_event": _mean([float(r["hit_at_k_event"]) for r in rows]),
                         "mrr_event": _mean([float(r["mrr_event"]) for r in rows]),
@@ -324,6 +476,23 @@ def evaluate_nlq_samples(
                         "hit_at_k_highlight": _mean([float(r["hit_at_k_highlight"]) for r in rows]),
                         "mrr_highlight": _mean([float(r["mrr_highlight"]) for r in rows]),
                         **base,
+                        **type_constraint_stats,
+                        # Backward-compatible aliases.
+                        "fallback_rate": float(type_constraint_stats.get("used_fallback_rate", 0.0)),
+                        "constraint_apply_rate_after_scene_change": float(
+                            type_constraint_stats.get("filtered_after_scene_change_rate", 0.0)
+                        ),
+                        "constraint_apply_rate_first_last": float(
+                            type_constraint_stats.get("filtered_first_last_rate", 0.0)
+                        ),
+                        "constraint_apply_rate_type_match": float(
+                            type_constraint_stats.get("filtered_type_match_rate", 0.0)
+                        ),
+                        "relax_rate_after_scene_change": float(
+                            type_constraint_stats.get("relaxed_after_scene_change_rate", 0.0)
+                        ),
+                        "relax_rate_first_last": float(type_constraint_stats.get("relaxed_first_last_rate", 0.0)),
+                        "relax_rate_type_match": float(type_constraint_stats.get("relaxed_type_match_rate", 0.0)),
                     }
                 )
 

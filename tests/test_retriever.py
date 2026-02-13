@@ -8,6 +8,7 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.retrieval.retriever import Retriever
 from pov_compiler.schemas import Anchor, Event, KeyClip, Output, Token, TokenCodec
 
@@ -122,3 +123,24 @@ def test_retriever_text_query_without_clip_or_index() -> None:
     assert result["selected_highlights"] == []
     reason = str(result.get("debug", {}).get("reason", "")).lower()
     assert "text query" in reason
+
+
+def test_retriever_event_label_query() -> None:
+    output = _make_output()
+    output.events[0].meta["label"] = "interaction-heavy"
+    output.events[1].meta["label"] = "navigation"
+    retriever = Retriever(output_json=output)
+    result = retriever.retrieve("event_label=interaction-heavy top_k=3")
+    assert "event_0001" in result["selected_events"]
+    assert "event_0002" not in result["selected_events"]
+
+
+def test_retriever_contact_min_query() -> None:
+    output = _make_output()
+    output = ensure_events_v1(output)
+    output.events_v1[0].scores["contact_peak"] = 0.8
+    output.events_v1[1].scores["contact_peak"] = 0.5
+    retriever = Retriever(output_json=output)
+    result = retriever.retrieve("contact_min=0.7 top_k=3")
+    assert output.events_v1[0].id in result["selected_events"]
+    assert output.events_v1[1].id not in result["selected_events"]

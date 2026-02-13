@@ -99,6 +99,11 @@ def test_events_v1_converter_collects_evidence() -> None:
     assert {"anchor", "highlight", "token", "decision", "contact"}.issubset(evidence_types)
     assert event.meta.get("constraint_trace")
     assert event.meta.get("retrieval_hit")
+    for evd in event.evidence:
+        assert evd.retrieval_hit is not None
+        assert float(evd.t1) >= float(evd.t0)
+        assert float(evd.retrieval_hit.t1) >= float(evd.retrieval_hit.t0)
+        assert str(evd.retrieval_hit.id) == str(evd.id)
 
 
 def test_ensure_events_v1_is_idempotent() -> None:
@@ -107,4 +112,3 @@ def test_ensure_events_v1_is_idempotent() -> None:
     out2 = ensure_events_v1(out1)
     assert len(out1.events_v1) == len(out2.events_v1)
     assert out2.events_v1[0].id == out1.events_v1[0].id
-

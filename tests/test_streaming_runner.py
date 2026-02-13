@@ -77,11 +77,16 @@ def test_streaming_runner_produces_latency_and_progressive_rows() -> None:
     summary = payload["summary"]
     assert summary["steps"] >= 1
     assert summary["queries_total"] >= 2
-    assert summary["latency_p50_ms"] >= 0.0
-    assert summary["latency_p95_ms"] >= 0.0
+    assert summary["retrieval_latency_p50_ms"] >= 0.0
+    assert summary["retrieval_latency_p95_ms"] >= 0.0
+    assert summary["e2e_latency_p50_ms"] >= 0.0
+    assert summary["e2e_latency_p95_ms"] >= 0.0
+
+    steps = payload["step_rows"]
+    assert steps
+    assert all("index_size" in row and "events_v1_added" in row and "e2e_ms" in row for row in steps)
 
     progressive = payload["progressive_rows"]
     assert progressive
     counts = [int(row["events_v1_count"]) for row in progressive]
     assert counts == sorted(counts)
-

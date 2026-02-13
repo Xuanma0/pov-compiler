@@ -14,6 +14,8 @@ class ParsedQuery:
     anchor_types: list[str] = field(default_factory=list)
     decision_types: list[str] = field(default_factory=list)
     event_ids: list[str] = field(default_factory=list)
+    event_labels: list[str] = field(default_factory=list)
+    contact_min: float | None = None
     text: str | None = None
     top_k: int | None = None
     mode: str | None = None
@@ -77,6 +79,13 @@ def parse_query(query: str) -> ParsedQuery:
             parsed.event_ids = _parse_csv(value)
             if parsed.event_ids:
                 parsed.filters_applied.append("event")
+        elif key in {"event_label", "label"}:
+            parsed.event_labels = [x.strip().lower() for x in _parse_csv(value)]
+            if parsed.event_labels:
+                parsed.filters_applied.append("event_label")
+        elif key == "contact_min":
+            parsed.contact_min = float(value)
+            parsed.filters_applied.append("contact_min")
         elif key == "text":
             parsed.text = value
             parsed.filters_applied.append("text")

@@ -169,6 +169,37 @@ def _with_retrieval_stub(event: EventV1, rerank_cfg_hash: str) -> EventV1:
     )
     event.meta.setdefault("constraint_trace", trace.model_dump() if hasattr(trace, "model_dump") else trace.dict())
     event.meta.setdefault("retrieval_hit", hit.model_dump() if hasattr(hit, "model_dump") else hit.dict())
+    for rank, evd in enumerate(event.evidence, start=1):
+        evd_score = float(max(0.0, min(1.0, evd.conf)))
+        evd_breakdown = ScoreBreakdown(base_score=evd_score, total=evd_score)
+        evd.constraint_trace = ConstraintTrace(
+            source_query="",
+            chosen_plan_intent="mixed",
+            applied_constraints=[],
+            constraints_relaxed=[],
+            filtered_hits_before=0,
+            filtered_hits_after=0,
+            used_fallback=False,
+            rerank_cfg_hash=str(rerank_cfg_hash),
+            top1_kind=str(evd.type if rank == 1 else top1_kind),
+            top1_in_distractor=False,
+            score_breakdown=evd_breakdown,
+        )
+        evd.retrieval_hit = RetrievalHit(
+            kind=str(evd.type),
+            id=str(evd.id),
+            t0=float(evd.t0),
+            t1=float(evd.t1),
+            score=evd_score,
+            rank=rank,
+            source_query="",
+            chosen_plan_intent="mixed",
+            applied_constraints=[],
+            score_breakdown=evd_breakdown,
+            rerank_cfg_hash=str(rerank_cfg_hash),
+            top1_kind=str(evd.type if rank == 1 else top1_kind),
+            top1_in_distractor=False,
+        )
     return event
 
 
@@ -297,4 +328,3 @@ def ensure_events_v1(
         return output
     output.events_v1 = convert_output_to_events_v1(output, rerank_cfg_hash=rerank_cfg_hash)
     return output
-

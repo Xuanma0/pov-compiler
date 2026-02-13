@@ -1,0 +1,51 @@
+name: default
+
+bonus_intent_token_on_token: 1.0
+bonus_intent_token_on_highlight: 0.2
+bonus_intent_token_on_decision: 0.1
+bonus_intent_token_on_event: 0.0
+
+bonus_intent_decision_on_decision: 1.0
+bonus_intent_decision_on_highlight: 0.2
+bonus_intent_decision_on_token: 0.1
+bonus_intent_decision_on_event: 0.0
+
+bonus_intent_anchor_on_highlight: 1.0
+bonus_intent_anchor_on_decision: 0.3
+bonus_intent_anchor_on_token: 0.0
+bonus_intent_anchor_on_event: 0.0
+
+bonus_intent_time_on_event: 0.8
+bonus_intent_time_on_highlight: 0.4
+bonus_intent_time_on_decision: 0.2
+bonus_intent_time_on_token: 0.2
+
+bonus_intent_mixed_on_event: 0.2
+bonus_intent_mixed_on_highlight: 0.2
+bonus_intent_mixed_on_decision: 0.2
+bonus_intent_mixed_on_token: 0.2
+
+bonus_anchor_highlight_match: 0.6
+bonus_anchor_decision_match: 0.4
+penalty_anchor_highlight_mismatch: -0.2
+penalty_anchor_decision_mismatch: -0.1
+
+bonus_token_match: 0.6
+bonus_token_highlight_overlap: 0.2
+penalty_token_mismatch: -0.2
+
+bonus_decision_match: 0.6
+penalty_decision_mismatch: -0.2
+
+bonus_first: 0.5
+bonus_last: 0.5
+
+penalty_before_scene_change: 0.6
+
+penalty_distractor_near: 0.3
+distractor_near_window_s: 5.0
+
+bonus_conf_scale: 0.2
+bonus_boundary_scale: 0.15
+bonus_priority_scale: 0.05
+bonus_priority_cap: 3.0
