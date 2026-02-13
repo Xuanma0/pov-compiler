@@ -105,6 +105,7 @@ docs/
 | `scripts\compare_bye_budget_sweeps.py` | Compare two BYE budget sweeps (A/B curve + delta) | `--a_dir/--a_csv --b_dir/--b_csv --out_dir --primary-metric` | `tables/table_budget_compare.*`, `figures/fig_bye_primary_*`, `compare_summary.json` |
 | `scripts\sweep_nlq_budgets.py` | NLQ hard/pseudo evaluation over explicit budget points (strict UID matching by default) | `--json_dir --index_dir --uids-file --budgets --out_dir` | `aggregate/metrics_by_budget.*`, `figures/fig_nlq_*`, `snapshot.json` |
 | `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
+| `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive`) with strict query metrics | `--json --out_dir --budgets --budget-policy [--fixed-budget|--recommend-dir]` | `steps.csv`, `queries.csv`, `report.md`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ budget sweeps and budget recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-budget-recommend` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/budget_recommend/*` |
 
@@ -233,3 +234,23 @@ Main artifacts:
 - `data/outputs/ab_v12/compare/budget_recommend/stub/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/budget_recommend/real/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/paper_figs_compare/`
+
+## Streaming Budget Policy (v1.6)
+
+Fixed budget:
+
+```text
+python scripts\streaming_budget_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_budget_fixed --step-s 8 --budgets "20/50/4,40/100/8,60/200/12" --budget-policy fixed --fixed-budget 40/100/8
+```
+
+Recommended budget (from v1.5 recommender output):
+
+```text
+python scripts\streaming_budget_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_budget_recommend --step-s 8 --budgets "20/50/4,40/100/8,60/200/12" --budget-policy recommend --recommend-dir data\outputs\ab_v15_demo\compare\budget_recommend\real
+```
+
+Adaptive minimum budget:
+
+```text
+python scripts\streaming_budget_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_budget_adaptive --step-s 8 --budgets "20/50/4,40/100/8,60/200/12" --budget-policy adaptive
+```
