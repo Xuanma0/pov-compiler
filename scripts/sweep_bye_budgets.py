@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -52,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bye-root", default=None, help="Optional BYE root (fallback to BYE_ROOT env if omitted)")
     parser.add_argument("--budgets", required=True, help='Budget list, e.g. "20/50/4,40/100/8,60/200/12"')
     parser.add_argument("--primary-metric", default="qualityScore", help="Primary metric used in quality figure")
+    _parse_bool_with_neg(parser, "strict-uids", default=True)
+    parser.add_argument(
+        "--allow-fallback-all-uids",
+        action="store_true",
+        help="Only valid with --no-strict-uids. Allow fallback to all json UIDs when no uid is matched.",
+    )
     _parse_bool_with_neg(parser, "skip-lint", default=True)
     _parse_bool_with_neg(parser, "skip-report", default=False)
     _parse_bool_with_neg(parser, "skip-regression", default=True)
@@ -60,7 +67,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _normalize_uid(text: str) -> str:
-    token = str(text).strip()
+    token = str(text).replace("\ufeff", "").strip()
     if not token:
         return ""
     if token.lower().endswith(".mp4"):
@@ -68,25 +75,32 @@ def _normalize_uid(text: str) -> str:
     return token.lower().strip()
 
 
-def _infer_uid_from_json(path: Path) -> str:
-    stem = path.stem
-    for suffix in ("_v03_decisions", "_v02_token", "_v01_decision", "_v01", "_v0"):
-        if stem.endswith(suffix):
-            return stem[: -len(suffix)]
-    return stem
+def uid_from_pov_json_path(p: Path) -> str:
+    stem = p.stem
+    cleaned = re.sub(r"(?i)_v\d+_decisions$", "", stem)
+    cleaned = re.sub(r"(?i)_decisions$", "", cleaned)
+    cleaned = re.sub(r"(?i)_v\d+_token$", "", cleaned)
+    cleaned = re.sub(r"(?i)_token$", "", cleaned)
+    uuid_re = re.compile(r"(?i)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+    match = uuid_re.search(cleaned) or uuid_re.search(stem)
+    if match:
+        return str(match.group(1)).lower()
+    return cleaned
 
 
 def _read_uids_file(path: Path) -> list[str]:
     out: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
+        text = str(line).replace("\ufeff", "")
         if "#" in text:
-            text = text.split("#", 1)[0].strip()
-        norm = _normalize_uid(text)
-        if norm:
-            out.append(norm)
+            text = text.split("#", 1)[0]
+        text = text.strip()
+        if not text:
+            continue
+        for token in re.split(r"[,\s]+", text):
+            norm = _normalize_uid(token)
+            if norm:
+                out.append(norm)
     return out
 
 
@@ -96,7 +110,7 @@ def _discover_json_by_uid(pov_json_dir: Path) -> dict[str, Path]:
     if not files:
         files = sorted(pov_json_dir.glob("*.json"), key=lambda p: p.name.lower())
     for path in files:
-        uid = _normalize_uid(_infer_uid_from_json(path))
+        uid = _normalize_uid(uid_from_pov_json_path(path))
         if uid and uid not in out:
             out[uid] = path
     return out
@@ -151,13 +165,43 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow(row)
 
 
-def _write_md(path: Path, rows: list[dict[str, Any]]) -> None:
+def _write_md(path: Path, rows: list[dict[str, Any]], selection: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
-        path.write_text("# BYE Budget Sweep\n\nNo rows.\n", encoding="utf-8")
+        lines = [
+            "# BYE Budget Sweep",
+            "",
+            "## Selection",
+            "",
+            f"- selection_mode: {selection.get('selection_mode', '')}",
+            f"- uids_file_path: {selection.get('uids_file_path', '')}",
+            f"- uids_requested: {selection.get('uids_requested', 0)}",
+            f"- uids_found: {selection.get('uids_found', 0)}",
+            f"- uids_missing_count: {selection.get('uids_missing_count', 0)}",
+            f"- uids_missing_sample: {selection.get('uids_missing_sample', [])}",
+            f"- dir_uids_sample: {selection.get('dir_uids_sample', [])}",
+            "",
+            "No rows.",
+        ]
+        path.write_text("\n".join(lines), encoding="utf-8")
         return
     cols = list(rows[0].keys())
-    lines = ["# BYE Budget Sweep", "", "| " + " | ".join(cols) + " |", "|" + "|".join(["---"] * len(cols)) + "|"]
+    lines = [
+        "# BYE Budget Sweep",
+        "",
+        "## Selection",
+        "",
+        f"- selection_mode: {selection.get('selection_mode', '')}",
+        f"- uids_file_path: {selection.get('uids_file_path', '')}",
+        f"- uids_requested: {selection.get('uids_requested', 0)}",
+        f"- uids_found: {selection.get('uids_found', 0)}",
+        f"- uids_missing_count: {selection.get('uids_missing_count', 0)}",
+        f"- uids_missing_sample: {selection.get('uids_missing_sample', [])}",
+        f"- dir_uids_sample: {selection.get('dir_uids_sample', [])}",
+        "",
+        "| " + " | ".join(cols) + " |",
+        "|" + "|".join(["---"] * len(cols)) + "|",
+    ]
     for row in rows:
         lines.append("| " + " | ".join(str(row.get(c, "")) for c in cols) + " |")
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -244,26 +288,81 @@ def main() -> int:
     if not discovered:
         raise FileNotFoundError(f"no json files found under {pov_json_dir}")
 
-    uids_selection: dict[str, Any] = {"mode": "all_jsons"}
+    dir_uids = sorted(discovered.keys())
+    selection: dict[str, Any] = {
+        "selection_mode": "all_json",
+        "uids_file_path": None,
+        "uids_requested": 0,
+        "uids_found": 0,
+        "uids_missing_count": 0,
+        "uids_missing_sample": [],
+        "dir_uids_sample": dir_uids[:5],
+    }
     if args.uids_file:
-        requested = _read_uids_file(Path(args.uids_file))
-        selected_uids = [uid for uid in requested if _normalize_uid(uid) in discovered]
-        missing = [uid for uid in requested if _normalize_uid(uid) not in discovered]
-        uids_selection = {
-            "mode": "uids_file",
-            "uids_requested": requested,
-            "uids_found": selected_uids,
-            "uids_missing_count": len(missing),
-            "uids_missing_sample": missing[:10],
-        }
-        if not selected_uids:
-            selected_uids = sorted(discovered.keys())
-            uids_selection["fallback_to_all_jsons"] = True
-            print("WARN: no uid in --uids-file matched pov-json-dir, fallback to all json files")
+        uids_file_path = Path(args.uids_file)
+        requested = _read_uids_file(uids_file_path)
+        selected_uids: list[str] = []
+        missing: list[str] = []
+        seen: set[str] = set()
+        for uid in requested:
+            norm = _normalize_uid(uid)
+            if norm in discovered:
+                if norm not in seen:
+                    selected_uids.append(norm)
+                    seen.add(norm)
+            else:
+                missing.append(uid)
+        selection.update(
+            {
+                "selection_mode": "uids_file",
+                "uids_file_path": str(uids_file_path),
+                "uids_requested": len(requested),
+                "uids_found": len(selected_uids),
+                "uids_missing_count": len(missing),
+                "uids_missing_sample": missing[:10],
+            }
+        )
+        if bool(args.strict_uids):
+            if not selected_uids or missing:
+                print("error=uid selection failed under strict mode")
+                print(f"uids_file_path={uids_file_path}")
+                print(f"uids_requested={len(requested)}")
+                print(f"uids_found={len(selected_uids)}")
+                print(f"uids_missing_count={len(missing)}")
+                print(f"uids_requested_sample={requested[:10]}")
+                print(f"uids_missing_sample={missing[:10]}")
+                print(f"dir_uid_sample={dir_uids[:5]}")
+                return 2
+        else:
+            if not selected_uids:
+                if bool(args.allow_fallback_all_uids):
+                    selected_uids = list(dir_uids)
+                    selection["selection_mode"] = "fallback_all_json"
+                else:
+                    print("error=no uid matched and fallback is disabled")
+                    print(f"uids_file_path={uids_file_path}")
+                    print(f"uids_requested_sample={requested[:10]}")
+                    print(f"dir_uid_sample={dir_uids[:5]}")
+                    return 2
+            elif missing:
+                selection["selection_mode"] = "uids_file_partial"
     else:
-        selected_uids = sorted(discovered.keys())
+        selected_uids = list(dir_uids)
+        selection["uids_found"] = len(selected_uids)
     if not selected_uids:
-        raise ValueError("no selected uids to run")
+        print("error=no selected uids to run")
+        return 2
+    if bool(args.allow_fallback_all_uids) and bool(args.strict_uids):
+        print("error=--allow-fallback-all-uids requires --no-strict-uids")
+        return 2
+
+    print(f"selection_mode={selection.get('selection_mode')}")
+    print(f"uids_file_path={selection.get('uids_file_path')}")
+    print(f"uids_requested={selection.get('uids_requested')}")
+    print(f"uids_found={selection.get('uids_found')}")
+    print(f"uids_missing_count={selection.get('uids_missing_count')}")
+    print(f"uids_missing_sample={selection.get('uids_missing_sample')}")
+    print(f"dir_uids_sample={selection.get('dir_uids_sample')}")
 
     python_bin = sys.executable
     smoke_script = ROOT / "scripts" / "bye_regression_smoke.py"
@@ -393,6 +492,10 @@ def main() -> int:
             "num_uids": len(selected_uids),
             "runs_total": len(rows),
             "runs_ok": sum(1 for r in rows if int(r.get("returncode", 1)) == 0),
+            "selection_mode": str(selection.get("selection_mode", "")),
+            "uids_requested": int(selection.get("uids_requested", 0)),
+            "uids_found": int(selection.get("uids_found", 0)),
+            "uids_missing_count": int(selection.get("uids_missing_count", 0)),
         }
         numeric_keys: set[str] = set()
         for r in rows:
@@ -412,7 +515,7 @@ def main() -> int:
     metrics_csv_path = agg_dir / "metrics_by_budget.csv"
     metrics_md_path = agg_dir / "metrics_by_budget.md"
     _write_csv(metrics_csv_path, aggregate_rows)
-    _write_md(metrics_md_path, aggregate_rows)
+    _write_md(metrics_md_path, aggregate_rows, selection)
 
     primary_metric = _select_primary_metric(aggregate_rows, requested=str(args.primary_metric))
     critical_metric = _select_critical_metric(aggregate_rows)
@@ -451,9 +554,11 @@ def main() -> int:
             "skip_lint": bool(args.skip_lint),
             "skip_report": bool(args.skip_report),
             "skip_regression": bool(args.skip_regression),
+            "strict_uids": bool(args.strict_uids),
+            "allow_fallback_all_uids": bool(args.allow_fallback_all_uids),
         },
         "selected_uids": list(selected_uids),
-        "uids_selection": uids_selection,
+        "selection": selection,
         "primary_metric": primary_metric,
         "critical_fn_metric": critical_metric,
         "bye": {

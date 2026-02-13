@@ -77,12 +77,23 @@ def test_sweep_bye_budgets_smoke(tmp_path: Path) -> None:
     ]
     result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr or result.stdout
+    assert "selection_mode=uids_file" in result.stdout
+    assert "uids_missing_count=0" in result.stdout
+    assert "fallback" not in result.stdout.lower()
 
     assert (out_dir / "aggregate" / "metrics_by_budget.csv").exists()
     assert (out_dir / "aggregate" / "metrics_by_budget.md").exists()
     assert (out_dir / "snapshot.json").exists()
+    snapshot = json.loads((out_dir / "snapshot.json").read_text(encoding="utf-8"))
+    selection = snapshot.get("selection", {})
+    assert "selection_mode" in selection
+    assert "uids_file_path" in selection
+    assert "uids_requested" in selection
+    assert "uids_found" in selection
+    assert "uids_missing_count" in selection
+    assert "uids_missing_sample" in selection
+    assert "dir_uids_sample" in selection
     figures = list((out_dir / "figures").glob("fig_bye_quality_vs_budget_seconds.*"))
     assert figures
     critical_figs = list((out_dir / "figures").glob("fig_bye_critical_fn_vs_budget_seconds.*"))
     assert critical_figs
-

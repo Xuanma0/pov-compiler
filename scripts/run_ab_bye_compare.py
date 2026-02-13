@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import os
 import shutil
@@ -23,7 +24,7 @@ def _parse_bool_with_neg(parser: argparse.ArgumentParser, name: str, default: bo
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Reproducible AB runner (stub vs real) with optional BYE/NLQ/Figs compare")
     parser.add_argument("--root", required=True, help="Ego root")
-    parser.add_argument("--uids-file", required=True, help="UID list file for reproducible AB")
+    parser.add_argument("--uids-file", default=None, help="Optional UID list file for reproducible AB")
     parser.add_argument("--out_dir", required=True, help="Output root")
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--n", type=int, default=None)
@@ -93,7 +94,7 @@ def _build_smoke_cmd(
     *,
     out_dir: Path,
     root: str,
-    uids_file: str,
+    uids_file: str | None,
     jobs: int,
     n: int | None,
     with_eval: bool,
@@ -126,8 +127,6 @@ def _build_smoke_cmd(
         str(root),
         "--out_dir",
         str(out_dir),
-        "--uids-file",
-        str(uids_file),
         "--jobs",
         str(int(jobs)),
         "--min-size-bytes",
@@ -137,6 +136,8 @@ def _build_smoke_cmd(
         "--no-proxy",
         "--resume",
     ]
+    if uids_file:
+        cmd.extend(["--uids-file", str(uids_file)])
     if n is not None:
         cmd.extend(["--n", str(int(n))])
     if prefer_short:
@@ -211,7 +212,7 @@ def _copy_snapshots(run_dir: Path, label: str, snapshots_root: Path) -> list[str
 def _write_compare_readme(
     out_dir: Path,
     *,
-    uids_file: Path,
+    uids_file: Path | None,
     cmd_stub: list[str],
     cmd_real: list[str],
     cmd_bye_compare: list[str],
@@ -318,10 +319,26 @@ def main() -> int:
     if rc != 0:
         return rc
 
+    effective_uids_file: Path | None = Path(args.uids_file) if args.uids_file else None
+    if effective_uids_file is None:
+        summary_csv = run_stub / "summary.csv"
+        if not summary_csv.exists():
+            print("error=run_stub summary.csv missing; cannot derive reproducible uid set")
+            return 5
+        with summary_csv.open("r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        used_uids = [str(r.get("video_uid", "")).strip() for r in rows if str(r.get("video_uid", "")).strip()]
+        if not used_uids:
+            print("error=no video_uid found in run_stub summary.csv")
+            return 5
+        effective_uids_file = compare_dir / "uids_used.txt"
+        effective_uids_file.parent.mkdir(parents=True, exist_ok=True)
+        effective_uids_file.write_text("\n".join(used_uids) + "\n", encoding="utf-8")
+
     cmd_real = _build_smoke_cmd(
         out_dir=run_real,
         root=args.root,
-        uids_file=args.uids_file,
+        uids_file=str(effective_uids_file) if effective_uids_file else None,
         jobs=args.jobs,
         n=args.n,
         with_eval=args.with_eval,
@@ -378,7 +395,8 @@ def main() -> int:
         sweep_script = ROOT / "scripts" / "sweep_bye_budgets.py"
         common = [
             "--uids-file",
-            str(args.uids_file),
+            str(effective_uids_file) if effective_uids_file else "",
+            "--strict-uids",
             "--budgets",
             str(args.bye_budgets),
             "--primary-metric",
@@ -487,7 +505,7 @@ def main() -> int:
     _copy_snapshots(run_real, "real", compare_snapshots)
     _write_compare_readme(
         out_dir,
-        uids_file=Path(args.uids_file),
+        uids_file=effective_uids_file,
         cmd_stub=cmd_stub,
         cmd_real=cmd_real,
         cmd_bye_compare=cmd_bye_compare,

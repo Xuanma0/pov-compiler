@@ -116,3 +116,59 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "bye_budget" / "real" / "aggregate" / "metrics_by_budget.csv").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
+
+
+def test_run_ab_bye_compare_generates_uids_used_when_missing(tmp_path: Path) -> None:
+    root = tmp_path / "ego_root"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "demo.mp4").write_bytes(b"0")
+    uid = hashlib.md5("demo.mp4".encode("utf-8")).hexdigest()
+
+    out_dir = tmp_path / "ab_out_no_uids"
+    for run_name in ("run_stub", "run_real"):
+        run_dir = out_dir / run_name
+        _write_pipeline_json(run_dir / "json" / f"{uid}_v03_decisions.json", uid)
+        (run_dir / "cache" / f"{uid}.index.npz").parent.mkdir(parents=True, exist_ok=True)
+        (run_dir / "cache" / f"{uid}.index.npz").write_bytes(b"NPZ")
+        (run_dir / "cache" / f"{uid}.index_meta.json").write_text("{}", encoding="utf-8")
+        _write_perception_complete(run_dir, uid)
+
+    fake_bye = tmp_path / "fake_bye"
+    _write_fake_tool(fake_bye / "Gateway" / "scripts" / "lint_run_package.py")
+    _write_fake_tool(fake_bye / "report_run.py", writes_report=True)
+    _write_fake_tool(fake_bye / "run_regression_suite.py")
+
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "run_ab_bye_compare.py"),
+        "--root",
+        str(root),
+        "--out_dir",
+        str(out_dir),
+        "--n",
+        "1",
+        "--jobs",
+        "1",
+        "--with-bye",
+        "--with-bye-budget-sweep",
+        "--bye-budgets",
+        "20/50/4",
+        "--bye-root",
+        str(fake_bye),
+        "--bye-skip-regression",
+        "--min-size-bytes",
+        "0",
+        "--probe-candidates",
+        "0",
+    ]
+    result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    compare_dir = out_dir / "compare"
+    uids_used = compare_dir / "uids_used.txt"
+    assert uids_used.exists()
+    used_lines = [x.strip() for x in uids_used.read_text(encoding="utf-8").splitlines() if x.strip()]
+    assert used_lines
+    commands_text = (compare_dir / "commands.sh").read_text(encoding="utf-8")
+    assert "--uids-file" in commands_text
+    assert str(uids_used) in commands_text
