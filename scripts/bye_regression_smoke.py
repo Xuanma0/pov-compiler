@@ -13,11 +13,12 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from pov_compiler.integrations.bye.entrypoints import EntryPointResolver
 from pov_compiler.integrations.bye.exporter import export_bye_events_from_output_dict, write_jsonl
+from pov_compiler.integrations.bye.metrics import parse_bye_report, save_bye_metrics
 from pov_compiler.integrations.bye.run_package import (
     build_run_package,
     collect_report_candidates,
-    find_bye_entrypoints,
     get_git_commit_short,
     infer_args_for_tool,
     python_executable,
@@ -44,8 +45,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pov_json", required=True, help="Path to POV output json (e.g., *_v03_decisions.json)")
     parser.add_argument("--video_id", default=None, help="Optional video id override")
     parser.add_argument("--video", default=None, help="Optional video path for BYE run package")
+    parser.add_argument(
+        "--video-mode",
+        choices=["copy", "link"],
+        default="copy",
+        help="How to place video in run_package when --video is provided",
+    )
     parser.add_argument("--out_dir", required=True, help="Output directory for run package/logs/snapshot")
     parser.add_argument("--bye_root", default=None, help="External BYE repo root")
+    parser.add_argument("--bye-lint", default=None, help="Override path for BYE lint script (relative to BYE root or absolute)")
+    parser.add_argument(
+        "--bye-report", default=None, help="Override path for BYE report script (relative to BYE root or absolute)"
+    )
+    parser.add_argument(
+        "--bye-regression",
+        default=None,
+        help="Override path for BYE regression script (relative to BYE root or absolute)",
+    )
     parser.add_argument("--skip_lint", action="store_true", help="Skip BYE lint step")
     parser.add_argument("--skip_report", action="store_true", help="Skip BYE report step")
     parser.add_argument("--skip_regression", action="store_true", help="Skip BYE regression step")
@@ -90,7 +106,7 @@ def _copy_report_outputs(out_dir: Path, candidates: list[Path]) -> list[str]:
 def _run_tool_with_attempts(
     *,
     tool_name: str,
-    script_rel: str,
+    script_path: Path,
     bye_root: Path,
     run_package_dir: Path,
     out_dir: Path,
@@ -107,7 +123,7 @@ def _run_tool_with_attempts(
         result = run_bye_tool(
             py=python_executable(),
             bye_root=bye_root,
-            module_or_script_path=script_rel,
+            module_or_script_path=str(script_path),
             args_list=args_list,
             cwd=bye_root,
             log_dir=logs_dir,
@@ -127,12 +143,27 @@ def _run_tool_with_attempts(
 
     return {
         "tool": tool_name,
-        "script_relpath": script_rel.replace("\\", "/"),
+        "script_path": str(script_path),
         "attempts": attempts_meta,
         "ok": bool(last_result and int(last_result.get("returncode", 1)) == 0),
         "returncode": int(last_result.get("returncode", 1)) if last_result else 1,
         "stdout_log": str(last_result.get("stdout_log", "")) if last_result else "",
         "stderr_log": str(last_result.get("stderr_log", "")) if last_result else "",
+    }
+
+
+def _build_metrics_payload(status: str, report_dir: Path) -> dict[str, Any]:
+    if status == "ok":
+        return parse_bye_report(report_dir)
+    if status == "skipped":
+        return {"status": "skipped", "report_path": str(report_dir / "report.json"), "summary_keys": [], "numeric_metrics": {}}
+    if status == "failed":
+        return {"status": "failed", "report_path": str(report_dir / "report.json"), "summary_keys": [], "numeric_metrics": {}}
+    return {
+        "status": "missing_report",
+        "report_path": str(report_dir / "report.json"),
+        "summary_keys": [],
+        "numeric_metrics": {},
     }
 
 
@@ -160,6 +191,7 @@ def main() -> int:
         video_id=video_id,
         events_jsonl_path=events_jsonl_path,
         video_path=args.video,
+        video_mode=str(args.video_mode),
         extra_meta={"pov_json": str(pov_json_path), "include": list(include)},
     )
 
@@ -181,12 +213,55 @@ def main() -> int:
         "counts": {"events_total": int(len(exported_events))},
         "bye": {
             "root": None,
-            "found_entrypoints": {},
+            "entrypoints_resolved": {"lint": None, "report": None, "regression": None},
+            "entrypoints_method": {"lint": "missing", "report": "missing", "regression": "missing"},
             "steps": [],
             "status": "not_resolved",
             "warnings": [],
+            "notes": [],
         },
     }
+
+    # Minimal pre-BYE self checks.
+    if not events_jsonl_path.exists() or events_jsonl_path.stat().st_size <= 0:
+        msg = "events/events_v1.jsonl missing or empty"
+        snapshot["bye"]["warnings"].append(msg)
+        metrics_payload = _build_metrics_payload("failed", out_dir / "report")
+        metrics_payload["status"] = "failed"
+        metrics_payload["reason"] = msg
+        metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+        snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
+        snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
+        snapshot["outputs_rel"] = {
+            "events_jsonl": _to_rel(events_jsonl_path, out_dir),
+            "run_package_dir": _to_rel(run_pkg, out_dir),
+            "bye_metrics_json": _to_rel(metrics_json, out_dir),
+            "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
+        }
+        snapshot_path = _write_snapshot(snapshot, out_dir)
+        print(f"WARN: {msg}")
+        print(f"saved_snapshot={snapshot_path}")
+        return 4
+    metadata_path = run_pkg / "metadata.json"
+    if not metadata_path.exists():
+        msg = "run_package/metadata.json missing"
+        snapshot["bye"]["warnings"].append(msg)
+        metrics_payload = _build_metrics_payload("failed", out_dir / "report")
+        metrics_payload["status"] = "failed"
+        metrics_payload["reason"] = msg
+        metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+        snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
+        snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
+        snapshot["outputs_rel"] = {
+            "events_jsonl": _to_rel(events_jsonl_path, out_dir),
+            "run_package_dir": _to_rel(run_pkg, out_dir),
+            "bye_metrics_json": _to_rel(metrics_json, out_dir),
+            "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
+        }
+        snapshot_path = _write_snapshot(snapshot, out_dir)
+        print(f"WARN: {msg}")
+        print(f"saved_snapshot={snapshot_path}")
+        return 4
 
     bye_root = resolve_bye_root(args.bye_root)
     if bye_root is None:
@@ -194,11 +269,18 @@ def main() -> int:
         print(f"WARN: {msg}")
         snapshot["bye"]["warnings"].append(msg)
         snapshot["bye"]["status"] = "missing_bye_root"
+        metrics_payload = _build_metrics_payload("missing", out_dir / "report")
+        metrics_payload["reason"] = "missing_bye_root"
+        metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+        snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
+        snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
         snapshot["outputs_rel"] = {
             "events_jsonl": _to_rel(events_jsonl_path, out_dir),
             "run_package_dir": _to_rel(run_pkg, out_dir),
             "logs_dir": _to_rel(out_dir / "logs", out_dir),
             "report_dir": _to_rel(out_dir / "report", out_dir),
+            "bye_metrics_json": _to_rel(metrics_json, out_dir),
+            "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
         }
         snapshot_path = _write_snapshot(snapshot, out_dir)
         print(f"video_id={video_id}")
@@ -210,41 +292,58 @@ def main() -> int:
         return 0
 
     snapshot["bye"]["root"] = str(bye_root)
-    entrypoints = find_bye_entrypoints(bye_root)
-    snapshot["bye"]["found_entrypoints"] = dict(entrypoints)
+    resolver = EntryPointResolver(
+        bye_root=bye_root,
+        overrides={"lint": args.bye_lint, "report": args.bye_report, "regression": args.bye_regression},
+    )
+    resolution = resolver.resolve()
+    resolved_dict = resolution.as_dict(bye_root=bye_root)
+    snapshot["bye"]["entrypoints_resolved"] = {
+        "lint": resolved_dict.get("lint"),
+        "report": resolved_dict.get("report"),
+        "regression": resolved_dict.get("regression"),
+    }
+    snapshot["bye"]["entrypoints_method"] = dict(resolution.methods)
+    snapshot["bye"]["notes"] = list(resolution.notes)
     snapshot["bye"]["status"] = "resolved"
 
-    plan = [
-        ("lint", bool(args.skip_lint)),
-        ("report", bool(args.skip_report)),
-        ("regression", bool(args.skip_regression)),
-    ]
     strict_failure = False
+    if args.strict and not args.skip_report and resolution.report is None:
+        strict_failure = True
+        snapshot["bye"]["warnings"].append("strict: missing report entrypoint")
 
-    for tool_name, skip in plan:
+    plan = [
+        ("lint", bool(args.skip_lint), resolution.lint),
+        ("report", bool(args.skip_report), resolution.report),
+        ("regression", bool(args.skip_regression), resolution.regression),
+    ]
+    report_step_status = "skipped" if args.skip_report else "missing"
+    for tool_name, skip, script_path in plan:
         if skip:
             snapshot["bye"]["steps"].append({"tool": tool_name, "skipped": True, "reason": "cli_skip"})
             continue
-
-        rel = entrypoints.get(tool_name)
-        if not rel:
+        if script_path is None:
             msg = f"BYE {tool_name} entrypoint not found."
             print(f"WARN: {msg}")
             snapshot["bye"]["warnings"].append(msg)
             snapshot["bye"]["steps"].append({"tool": tool_name, "skipped": True, "reason": "entrypoint_missing"})
-            if args.strict:
+            if tool_name == "report":
+                report_step_status = "missing"
+            if args.strict and tool_name == "report":
                 strict_failure = True
             continue
 
         result = _run_tool_with_attempts(
             tool_name=tool_name,
-            script_rel=rel,
+            script_path=script_path,
             bye_root=bye_root,
             run_package_dir=run_pkg,
             out_dir=out_dir,
         )
         snapshot["bye"]["steps"].append(result)
         print(f"{tool_name}_returncode={result.get('returncode')}")
+        if tool_name == "report":
+            report_step_status = "ok" if result.get("ok", False) else "failed"
         if not result.get("ok", False):
             msg = f"BYE {tool_name} failed."
             print(f"WARN: {msg}")
@@ -257,12 +356,21 @@ def main() -> int:
         report_candidates = collect_report_candidates(run_pkg)
     copied_reports = _copy_report_outputs(out_dir, report_candidates) if report_candidates else []
     snapshot["outputs"]["report_files"] = copied_reports
+
+    metrics_payload = _build_metrics_payload(report_step_status, out_dir / "report")
+    if report_step_status != "ok":
+        metrics_payload["reason"] = report_step_status
+    metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+    snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
+    snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
     snapshot["outputs_rel"] = {
         "events_jsonl": _to_rel(events_jsonl_path, out_dir),
         "run_package_dir": _to_rel(run_pkg, out_dir),
         "logs_dir": _to_rel(out_dir / "logs", out_dir),
         "report_dir": _to_rel(out_dir / "report", out_dir),
         "report_files": [_to_rel(x, out_dir) for x in copied_reports],
+        "bye_metrics_json": _to_rel(metrics_json, out_dir),
+        "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
     }
 
     snapshot_path = _write_snapshot(snapshot, out_dir)
@@ -272,6 +380,8 @@ def main() -> int:
     print(f"saved_events={events_jsonl_path}")
     print(f"saved_snapshot={snapshot_path}")
     print(f"report_files={len(copied_reports)}")
+    print(f"bye_metrics_json={metrics_json}")
+    print(f"bye_metrics_csv={metrics_csv}")
 
     if strict_failure:
         return 3
@@ -280,3 +390,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

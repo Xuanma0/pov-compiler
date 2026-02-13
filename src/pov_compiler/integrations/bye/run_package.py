@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pov_compiler.integrations.bye.entrypoints import EntryPointResolver
+
 
 def resolve_bye_root(cli_arg: str | None, env_var: str = "BYE_ROOT") -> Path | None:
     candidates: list[Path] = []
@@ -58,33 +60,21 @@ def _looks_like_bye_root(path: Path) -> bool:
 
 
 def find_bye_entrypoints(bye_root: Path) -> dict[str, str | None]:
-    names = {
-        "lint": ["lint_run_package.py"],
-        "report": ["report_run.py", "generate_report.py"],
-        "regression": ["run_regression_suite.py", "regression_suite.py"],
+    resolution = EntryPointResolver(bye_root=Path(bye_root)).resolve()
+
+    def _to_rel(p: Path | None) -> str | None:
+        if p is None:
+            return None
+        try:
+            return str(Path(p).resolve().relative_to(Path(bye_root).resolve())).replace("\\", "/")
+        except Exception:
+            return str(p)
+
+    return {
+        "lint": _to_rel(resolution.lint),
+        "report": _to_rel(resolution.report),
+        "regression": _to_rel(resolution.regression),
     }
-    found: dict[str, str | None] = {"lint": None, "report": None, "regression": None}
-
-    for tool, file_names in names.items():
-        hits: list[Path] = []
-        for file_name in file_names:
-            hits.extend(list(bye_root.rglob(file_name)))
-        if hits:
-            hits.sort(key=lambda p: (len(str(p.relative_to(bye_root)).split("/")), str(p.relative_to(bye_root)).lower()))
-            found[tool] = str(hits[0].relative_to(bye_root)).replace("\\", "/")
-            continue
-
-        # Fallback fuzzy search by filename keywords.
-        fuzzy: list[Path] = []
-        kw = tool.lower()
-        for p in bye_root.rglob("*.py"):
-            name = p.name.lower()
-            if kw in name and ("run" in name or "lint" in name or "report" in name):
-                fuzzy.append(p)
-        if fuzzy:
-            fuzzy.sort(key=lambda p: (len(str(p.relative_to(bye_root)).split("/")), str(p.relative_to(bye_root)).lower()))
-            found[tool] = str(fuzzy[0].relative_to(bye_root)).replace("\\", "/")
-    return found
 
 
 def build_run_package(
@@ -92,6 +82,7 @@ def build_run_package(
     video_id: str,
     events_jsonl_path: str | Path,
     video_path: str | Path | None = None,
+    video_mode: str = "copy",
     extra_meta: dict[str, Any] | None = None,
 ) -> Path:
     out_root = Path(out_dir)
@@ -117,7 +108,15 @@ def build_run_package(
             video_dir = run_pkg / "video"
             video_dir.mkdir(parents=True, exist_ok=True)
             dst_video = video_dir / src_video.name
-            shutil.copyfile(src_video, dst_video)
+            if str(video_mode).lower() == "link":
+                try:
+                    if dst_video.exists():
+                        dst_video.unlink()
+                    os.link(str(src_video), str(dst_video))
+                except Exception:
+                    shutil.copyfile(src_video, dst_video)
+            else:
+                shutil.copyfile(src_video, dst_video)
             manifest["video_relpath"] = str(Path("video") / src_video.name).replace("\\", "/")
             manifest["video_name"] = src_video.name
 
@@ -125,6 +124,12 @@ def build_run_package(
         manifest["extra_meta"] = dict(extra_meta)
 
     (run_pkg / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    git_commit = get_git_commit_short(Path(__file__).resolve().parents[4])
+    try:
+        from pov_compiler import __version__ as pov_version
+    except Exception:
+        pov_version = "unknown"
+
     (run_pkg / "metadata.json").write_text(
         json.dumps(
             {
@@ -132,6 +137,9 @@ def build_run_package(
                 "source": "pov-compiler",
                 "events_format": "events_v1.jsonl",
                 "created_at_utc": manifest["created_at_utc"],
+                "created_utc": manifest["created_at_utc"],
+                "git_commit": git_commit,
+                "pov_compiler_version": str(pov_version),
             },
             ensure_ascii=False,
             indent=2,

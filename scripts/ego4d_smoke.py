@@ -60,6 +60,7 @@ def scan_and_plan(
                 "index_prefix": None,
                 "cross_eval_dir": None,
                 "nlq_eval_dir": None,
+                "bye_eval_dir": None,
                 "perception_dir": None,
                 "event_dir": None,
                 "status_stage": "scanned",
@@ -390,6 +391,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nlq-n", type=int, default=10, help="NLQ query count knob")
     parser.add_argument("--nlq-seed", type=int, default=0, help="NLQ query seed")
     parser.add_argument("--nlq-topk", type=int, default=6, help="NLQ query top_k")
+    _parse_bool_auto_args(parser, "run-bye", default=False, help_text="Run BYE regression smoke integration per video")
+    parser.add_argument("--bye-root", default=None, help="External BYE repo root")
+    parser.add_argument("--bye-strict", action="store_true", help="Fail video/job if BYE stage fails")
+    parser.add_argument("--bye-skip-lint", action="store_true", help="Skip BYE lint step")
+    parser.add_argument("--bye-skip-report", action="store_true", help="Skip BYE report step")
+    parser.add_argument("--bye-skip-regression", action="store_true", help="Skip BYE regression step")
+    parser.add_argument("--bye-lint", default=None, help="Override BYE lint script path")
+    parser.add_argument("--bye-report", default=None, help="Override BYE report script path")
+    parser.add_argument("--bye-regression", default=None, help="Override BYE regression script path")
+    parser.add_argument("--bye-video-mode", choices=["none", "copy", "link"], default="none")
     _parse_bool_auto_args(parser, "run-perception", default=False, help_text="Run Perception v0 stage")
     parser.add_argument("--perception-fps", type=float, default=10.0, help="Perception sample fps")
     parser.add_argument("--perception-max-frames", type=int, default=300, help="Perception max frames per video")
@@ -428,6 +439,58 @@ def _run_python_script(script_path: Path, args: list[str], cwd: Path) -> tuple[b
     result = run_command(cmd, cwd=cwd, check=False)
     output = (result.stdout or "") + (("\n" + result.stderr.strip()) if result.stderr.strip() else "")
     return result.returncode == 0, output.strip()
+
+
+def _load_bye_snapshot(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _extract_bye_step_rc(snapshot: dict[str, Any], tool: str) -> int | None:
+    bye = snapshot.get("bye")
+    if not isinstance(bye, dict):
+        return None
+    steps = bye.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if isinstance(step, dict) and str(step.get("tool", "")) == str(tool):
+            rc = step.get("returncode")
+            try:
+                return int(rc)
+            except Exception:
+                return None
+    return None
+
+
+def _load_bye_numeric_metrics(path: Path) -> dict[str, float]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+    except Exception:
+        return {}
+    if not rows:
+        return {}
+    row = rows[0]
+    out: dict[str, float] = {}
+    for key, value in row.items():
+        if key in {"status", "report_path", "summary_keys"}:
+            continue
+        try:
+            number = float(value)
+        except Exception:
+            continue
+        if number != number:
+            continue
+        out[str(key)] = float(number)
+    return out
 
 
 def _build_proxy(
@@ -544,6 +607,14 @@ def _is_nlq_complete(nlq_dir: Path) -> bool:
     return (nlq_dir / "nlq_report.md").exists()
 
 
+def _is_bye_complete(bye_dir: Path) -> bool:
+    return (
+        (bye_dir / "snapshot.json").exists()
+        and (bye_dir / "events" / "events_v1.jsonl").exists()
+        and (bye_dir / "bye_metrics.json").exists()
+    )
+
+
 def _is_perception_complete(perception_dir: Path) -> bool:
     return (
         (perception_dir / "perception.json").exists()
@@ -559,8 +630,10 @@ def plan_stage_actions(
     queries_path: Path,
     eval_dir: Path,
     nlq_dir: Path,
+    bye_dir: Path | None,
     run_eval: bool,
     run_nlq: bool,
+    run_bye: bool,
     resume: bool,
     perception_dir: Path | None = None,
     run_perception: bool = False,
@@ -571,6 +644,7 @@ def plan_stage_actions(
         "gen_queries": bool(run_eval),
         "eval_cross": bool(run_eval),
         "eval_nlq": bool(run_nlq),
+        "run_bye": bool(run_bye),
     }
     if bool(run_perception):
         actions["run_perception"] = True
@@ -592,6 +666,8 @@ def plan_stage_actions(
                 actions["gen_queries"] = False
     if run_nlq and _is_nlq_complete(nlq_dir):
         actions["eval_nlq"] = False
+    if run_bye and bye_dir is not None and _is_bye_complete(bye_dir):
+        actions["run_bye"] = False
 
     # Dependency propagation.
     if actions["run_offline"]:
@@ -603,6 +679,8 @@ def plan_stage_actions(
             actions["eval_cross"] = True
         if run_nlq:
             actions["eval_nlq"] = True
+        if run_bye:
+            actions["run_bye"] = True
     if bool(run_perception) and actions.get("run_perception", False) and actions.get("run_offline", False):
         actions["run_perception"] = True
     elif actions["build_index"]:
@@ -610,6 +688,8 @@ def plan_stage_actions(
             actions["eval_nlq"] = True
     if run_eval and actions["eval_cross"] and not _is_queries_complete(queries_path):
         actions["gen_queries"] = True
+    if actions.get("run_bye", False) and actions.get("run_offline", False):
+        actions["run_bye"] = True
     return actions
 
 
@@ -658,6 +738,7 @@ def _process_video(
     cache_dir: Path,
     eval_root_dir: Path,
     nlq_root_dir: Path,
+    bye_root_dir: Path,
     perception_root_dir: Path,
     event_root_dir: Path,
     seed: int,
@@ -677,6 +758,16 @@ def _process_video(
     nlq_n: int,
     nlq_seed: int,
     nlq_topk: int,
+    run_bye: bool,
+    bye_root: str | None,
+    bye_strict: bool,
+    bye_skip_lint: bool,
+    bye_skip_report: bool,
+    bye_skip_regression: bool,
+    bye_lint: str | None,
+    bye_report: str | None,
+    bye_regression: str | None,
+    bye_video_mode: str,
     resume: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     scripts_dir = ROOT / "scripts"
@@ -685,6 +776,7 @@ def _process_video(
     gen_queries_script = scripts_dir / "gen_queries.py"
     eval_cross_script = scripts_dir / "eval_cross.py"
     eval_nlq_script = scripts_dir / "eval_nlq.py"
+    bye_smoke_script = scripts_dir / "bye_regression_smoke.py"
     perception_smoke_script = scripts_dir / "perception_smoke.py"
 
     uid = str(entry["video_uid"])
@@ -695,11 +787,13 @@ def _process_video(
     index_prefix = cache_dir / uid
     eval_dir = eval_root_dir / uid
     nlq_dir = nlq_root_dir / uid
+    bye_dir = bye_root_dir / uid
     perception_dir = perception_root_dir / uid
     event_dir = event_root_dir / uid
     perception_cache_dir = perception_cache_root / uid
     eval_dir.mkdir(parents=True, exist_ok=True)
     nlq_dir.mkdir(parents=True, exist_ok=True)
+    bye_dir.mkdir(parents=True, exist_ok=True)
     perception_dir.mkdir(parents=True, exist_ok=True)
     event_dir.mkdir(parents=True, exist_ok=True)
     queries_path = eval_dir / "queries.jsonl"
@@ -710,10 +804,12 @@ def _process_video(
         queries_path=queries_path,
         eval_dir=eval_dir,
         nlq_dir=nlq_dir,
+        bye_dir=bye_dir,
         perception_dir=perception_dir,
         run_perception=run_perception,
         run_eval=run_eval,
         run_nlq=run_nlq,
+        run_bye=run_bye,
         resume=resume,
     )
 
@@ -880,6 +976,71 @@ def _process_video(
     elif run_nlq:
         stage_results["eval_nlq"] = "skipped"
 
+    bye_snapshot_path = bye_dir / "snapshot.json"
+    bye_metrics_csv_path = bye_dir / "bye_metrics.csv"
+    bye_status = "skipped"
+    bye_report_rc: int | None = None
+    bye_regression_rc: int | None = None
+    bye_numeric: dict[str, float] = {}
+    if status == "ok" and run_bye and actions.get("run_bye", False):
+        bye_args = [
+            "--pov_json",
+            str(json_path),
+            "--out_dir",
+            str(bye_dir),
+            "--include",
+            "events_v1,highlights,tokens,decisions",
+        ]
+        if str(bye_video_mode) in {"copy", "link"}:
+            bye_args.extend(["--video", str(input_path), "--video-mode", str(bye_video_mode)])
+        if bye_root:
+            bye_args.extend(["--bye_root", str(bye_root)])
+        if bye_skip_lint:
+            bye_args.append("--skip_lint")
+        if bye_skip_report:
+            bye_args.append("--skip_report")
+        if bye_skip_regression:
+            bye_args.append("--skip_regression")
+        if bye_lint:
+            bye_args.extend(["--bye-lint", str(bye_lint)])
+        if bye_report:
+            bye_args.extend(["--bye-report", str(bye_report)])
+        if bye_regression:
+            bye_args.extend(["--bye-regression", str(bye_regression)])
+        if bye_strict:
+            bye_args.append("--strict")
+        ok, log = _run_python_script(bye_smoke_script, bye_args, cwd=ROOT)
+        snapshot_payload = _load_bye_snapshot(bye_snapshot_path)
+        bye_report_rc = _extract_bye_step_rc(snapshot_payload, "report")
+        bye_regression_rc = _extract_bye_step_rc(snapshot_payload, "regression")
+        bye_numeric = _load_bye_numeric_metrics(bye_metrics_csv_path)
+        if ok:
+            stage_results["run_bye"] = "done"
+            status_stage = "run_bye"
+            bye_state = snapshot_payload.get("bye", {}) if isinstance(snapshot_payload, dict) else {}
+            bye_status = str(bye_state.get("status", "ok")) if isinstance(bye_state, dict) else "ok"
+            if bye_status == "resolved":
+                bye_status = "ok"
+        else:
+            stage_results["run_bye"] = "failed"
+            snapshot_bye = snapshot_payload.get("bye", {}) if isinstance(snapshot_payload, dict) else {}
+            snap_status = str(snapshot_bye.get("status", "")) if isinstance(snapshot_bye, dict) else ""
+            if snap_status:
+                bye_status = snap_status
+            else:
+                bye_status = "failed"
+            if bye_strict:
+                _fail("run_bye", log)
+    elif run_bye:
+        stage_results["run_bye"] = "skipped"
+        snapshot_payload = _load_bye_snapshot(bye_snapshot_path)
+        bye_report_rc = _extract_bye_step_rc(snapshot_payload, "report")
+        bye_regression_rc = _extract_bye_step_rc(snapshot_payload, "regression")
+        bye_numeric = _load_bye_numeric_metrics(bye_metrics_csv_path)
+        bye_state = snapshot_payload.get("bye", {}) if isinstance(snapshot_payload, dict) else {}
+        if isinstance(bye_state, dict):
+            bye_status = str(bye_state.get("status", "skipped"))
+
     updated_entry = dict(entry)
     updated_entry.update(
         {
@@ -887,6 +1048,7 @@ def _process_video(
             "index_prefix": str(index_prefix),
             "cross_eval_dir": str(eval_dir),
             "nlq_eval_dir": str(nlq_dir),
+            "bye_eval_dir": str(bye_dir),
             "perception_dir": str(perception_dir),
             "event_dir": str(event_dir),
             "status_stage": status_stage if status == "ok" else status,
@@ -909,6 +1071,13 @@ def _process_video(
         "nlq_summary_path": str(nlq_summary_path),
         "nlq_report_path": str(nlq_report_path),
         "nlq_safety_path": str(nlq_safety_path),
+        "bye_dir": str(bye_dir),
+        "bye_snapshot_path": str(bye_snapshot_path),
+        "bye_metrics_csv_path": str(bye_metrics_csv_path),
+        "bye_status": str(bye_status),
+        "bye_report_rc": bye_report_rc if bye_report_rc is not None else "",
+        "bye_regression_rc": bye_regression_rc if bye_regression_rc is not None else "",
+        "bye_numeric_metrics": bye_numeric,
         "perception_dir": str(perception_dir),
         "event_dir": str(event_dir),
         "perception_json_path": str(perception_json_path),
@@ -960,6 +1129,8 @@ def _write_summary(
     sweep: bool,
     run_nlq: bool,
     nlq_mode: str,
+    run_bye: bool,
+    bye_strict: bool,
     run_perception: bool,
     summary_budget: dict[str, Any],
     nlq_summary_all_path: Path,
@@ -968,6 +1139,7 @@ def _write_summary(
     summary_md = out_dir / "summary.md"
 
     csv_rows: list[dict[str, Any]] = []
+    bye_numeric_keys_seen: list[str] = []
     for record in run_records:
         row: dict[str, Any] = {
             "video_uid": record.get("video_uid"),
@@ -988,7 +1160,28 @@ def _write_summary(
             "critical_fn_count": "",
             "critical_fn_denominator": "",
             "safety_count_granularity": "",
+            "bye_status": "",
+            "bye_report_rc": "",
+            "bye_regression_rc": "",
+            "bye_metrics_path": "",
         }
+        if run_bye:
+            row["bye_status"] = record.get("bye_status", "")
+            row["bye_report_rc"] = record.get("bye_report_rc", "")
+            row["bye_regression_rc"] = record.get("bye_regression_rc", "")
+            bye_metrics_path = Path(str(record.get("bye_metrics_csv_path", "")))
+            if bye_metrics_path.exists():
+                try:
+                    row["bye_metrics_path"] = str(bye_metrics_path.relative_to(out_dir))
+                except Exception:
+                    row["bye_metrics_path"] = str(bye_metrics_path)
+            metrics_dict = record.get("bye_numeric_metrics", {})
+            if isinstance(metrics_dict, dict):
+                for key, value in metrics_dict.items():
+                    prefixed = f"bye_numeric_{key}"
+                    row[prefixed] = value
+                    if prefixed not in bye_numeric_keys_seen:
+                        bye_numeric_keys_seen.append(prefixed)
         results_overall_path = Path(str(record.get("results_overall_path", "")))
         if results_overall_path.exists():
             with results_overall_path.open("r", encoding="utf-8", newline="") as f:
@@ -1037,6 +1230,12 @@ def _write_summary(
                 row["safety_count_granularity"] = safety_payload.get("count_granularity", "")
         csv_rows.append(row)
 
+    bye_numeric_keys = sorted(bye_numeric_keys_seen)[:30]
+    if run_bye and bye_numeric_keys:
+        for row in csv_rows:
+            for key in bye_numeric_keys:
+                row.setdefault(key, "")
+
     summary_csv.parent.mkdir(parents=True, exist_ok=True)
     columns: list[str] = []
     for row in csv_rows:
@@ -1060,6 +1259,8 @@ def _write_summary(
     lines.append(f"- sweep: {str(sweep).lower()}")
     lines.append(f"- run_nlq: {str(run_nlq).lower()}")
     lines.append(f"- nlq_mode: {nlq_mode}")
+    lines.append(f"- run_bye: {str(run_bye).lower()}")
+    lines.append(f"- bye_strict: {str(bye_strict).lower()}")
     lines.append(f"- run_perception: {str(run_perception).lower()}")
     lines.append(f"- summary_csv: `{summary_csv}`")
     lines.append(f"- nlq_summary_all_csv: `{nlq_summary_all_path}`")
@@ -1083,8 +1284,14 @@ def _write_summary(
         lines.append(f"- index_prefix: `{record.get('index_prefix', '')}`")
         lines.append(f"- eval_dir: `{record.get('eval_dir', '')}`")
         lines.append(f"- nlq_dir: `{record.get('nlq_dir', '')}`")
+        lines.append(f"- bye_dir: `{record.get('bye_dir', '')}`")
         lines.append(f"- perception_dir: `{record.get('perception_dir', '')}`")
         lines.append(f"- event_dir: `{record.get('event_dir', '')}`")
+        if run_bye:
+            lines.append(f"- bye_status: `{record.get('bye_status', '')}`")
+            lines.append(f"- bye_report_rc: `{record.get('bye_report_rc', '')}`")
+            lines.append(f"- bye_regression_rc: `{record.get('bye_regression_rc', '')}`")
+            lines.append(f"- bye_metrics_csv: `{record.get('bye_metrics_csv_path', '')}`")
         report_path = Path(str(record.get("report_path", "")))
         if report_path.exists():
             report_text = report_path.read_text(encoding="utf-8")
@@ -1182,6 +1389,14 @@ def main() -> int:
     if proxy_requested and not ffmpeg_available:
         print("warn=ffmpeg_not_found proxy_skipped=true")
     print(f"proxy_enabled={str(proxy_enabled).lower()}")
+    print(f"run_bye={str(bool(args.run_bye)).lower()}")
+    if bool(args.run_bye):
+        print(f"bye_root={str(args.bye_root) if args.bye_root else 'auto'}")
+        print(f"bye_strict={str(bool(args.bye_strict)).lower()}")
+        print(f"bye_skip_lint={str(bool(args.bye_skip_lint)).lower()}")
+        print(f"bye_skip_report={str(bool(args.bye_skip_report)).lower()}")
+        print(f"bye_skip_regression={str(bool(args.bye_skip_regression)).lower()}")
+        print(f"bye_video_mode={str(args.bye_video_mode)}")
     print(f"run_perception={str(bool(args.run_perception)).lower()}")
     if bool(args.run_perception):
         print(f"perception_fps={float(args.perception_fps):.2f}")
@@ -1235,12 +1450,14 @@ def main() -> int:
     cache_dir = out_dir / "cache"
     eval_root_dir = out_dir / "eval"
     nlq_root_dir = out_dir / "nlq"
+    bye_root_dir = out_dir / "bye"
     perception_root_dir = out_dir / "perception"
     event_root_dir = out_dir / "event"
     json_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     eval_root_dir.mkdir(parents=True, exist_ok=True)
     nlq_root_dir.mkdir(parents=True, exist_ok=True)
+    bye_root_dir.mkdir(parents=True, exist_ok=True)
     perception_root_dir.mkdir(parents=True, exist_ok=True)
     event_root_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1250,6 +1467,7 @@ def main() -> int:
         "cache_dir": cache_dir,
         "eval_root_dir": eval_root_dir,
         "nlq_root_dir": nlq_root_dir,
+        "bye_root_dir": bye_root_dir,
         "perception_root_dir": perception_root_dir,
         "event_root_dir": event_root_dir,
         "seed": int(args.seed),
@@ -1269,6 +1487,16 @@ def main() -> int:
         "nlq_n": int(args.nlq_n),
         "nlq_seed": int(args.nlq_seed),
         "nlq_topk": int(args.nlq_topk),
+        "run_bye": bool(args.run_bye),
+        "bye_root": str(args.bye_root) if args.bye_root else None,
+        "bye_strict": bool(args.bye_strict),
+        "bye_skip_lint": bool(args.bye_skip_lint),
+        "bye_skip_report": bool(args.bye_skip_report),
+        "bye_skip_regression": bool(args.bye_skip_regression),
+        "bye_lint": str(args.bye_lint) if args.bye_lint else None,
+        "bye_report": str(args.bye_report) if args.bye_report else None,
+        "bye_regression": str(args.bye_regression) if args.bye_regression else None,
+        "bye_video_mode": str(args.bye_video_mode),
         "resume": bool(args.resume),
     }
 
@@ -1286,7 +1514,7 @@ def main() -> int:
             print(
                 f"per_video uid={uid} status={run_record['status']} stage={run_record['status_stage']} "
                 f"json={run_record['json_path']} index={run_record['index_prefix']} eval={run_record['eval_dir']} "
-                f"nlq={run_record['nlq_dir']} perception={run_record.get('perception_dir','')} "
+                f"nlq={run_record['nlq_dir']} bye={run_record.get('bye_dir','')} perception={run_record.get('perception_dir','')} "
                 f"event={run_record.get('event_dir','')} stages={stage_text}"
             )
     else:
@@ -1305,7 +1533,7 @@ def main() -> int:
                 print(
                     f"per_video uid={uid} status={run_record['status']} stage={run_record['status_stage']} "
                     f"json={run_record['json_path']} index={run_record['index_prefix']} eval={run_record['eval_dir']} "
-                    f"nlq={run_record['nlq_dir']} perception={run_record.get('perception_dir','')} "
+                    f"nlq={run_record['nlq_dir']} bye={run_record.get('bye_dir','')} perception={run_record.get('perception_dir','')} "
                     f"event={run_record.get('event_dir','')} stages={stage_text}"
                 )
 
@@ -1329,6 +1557,8 @@ def main() -> int:
         sweep=bool(args.sweep),
         run_nlq=bool(args.run_nlq),
         nlq_mode=str(args.nlq_mode),
+        run_bye=bool(args.run_bye),
+        bye_strict=bool(args.bye_strict),
         run_perception=bool(args.run_perception),
         summary_budget=summary_budget,
         nlq_summary_all_path=nlq_summary_all_path,
@@ -1337,6 +1567,11 @@ def main() -> int:
     print(f"summary saved={summary_md}")
     print(f"summary_csv_saved={summary_csv}")
     print(f"nlq_summary_all_saved={nlq_summary_all_path}")
+    if bool(args.bye_strict):
+        bye_failed = any(str(record.get("status", "")).startswith("failed_run_bye") for record in run_records)
+        if bye_failed:
+            print("error=bye_strict_failed")
+            return 2
     return 0
 
 

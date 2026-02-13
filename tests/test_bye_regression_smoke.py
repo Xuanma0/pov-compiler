@@ -128,10 +128,13 @@ def test_resolve_bye_root_and_smoke_with_fake_repo(tmp_path: Path) -> None:
         assert snapshot["video_id"] == "demo_uid"
         assert "bye" in snapshot and "steps" in snapshot["bye"]
         assert snapshot["bye"]["root"] == str(fake_bye.resolve())
-        assert isinstance(snapshot["bye"]["found_entrypoints"], dict)
+        assert isinstance(snapshot["bye"]["entrypoints_resolved"], dict)
+        assert isinstance(snapshot["bye"]["entrypoints_method"], dict)
         assert len(snapshot["bye"]["steps"]) >= 2
         assert "outputs" in snapshot and "events_jsonl" in snapshot["outputs"]
         assert isinstance(snapshot["outputs"].get("report_files", []), list)
+        assert (out_dir / "bye_metrics.json").exists()
+        assert (out_dir / "bye_metrics.csv").exists()
     finally:
         if old_env is None:
             os.environ.pop("BYE_ROOT", None)
