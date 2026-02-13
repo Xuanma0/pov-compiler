@@ -145,6 +145,82 @@ def _duration_bucket(duration: float | None, bins: list[float]) -> int:
     return len(bins)
 
 
+def _normalize_uid_token(value: str) -> str:
+    token = str(value).strip()
+    if not token:
+        return ""
+    if token.lower().endswith(".mp4"):
+        token = token[: -4]
+    return token.strip().lower()
+
+
+def _read_uids_file(path: Path) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    for line in lines:
+        text = str(line).strip()
+        if not text:
+            continue
+        if text.startswith("#"):
+            continue
+        if "#" in text:
+            text = text.split("#", 1)[0].strip()
+        norm = _normalize_uid_token(text)
+        if norm:
+            out.append(norm)
+    return out
+
+
+def select_entries_by_uids(
+    candidates: list[dict[str, Any]],
+    requested_uids: list[str],
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    # Deterministic resolution: prefer first candidate in path order.
+    index: dict[str, list[dict[str, Any]]] = {}
+    for entry in candidates:
+        keys: set[str] = set()
+        uid = _normalize_uid_token(str(entry.get("video_uid", "")))
+        if uid:
+            keys.add(uid)
+        rel = str(entry.get("relative_path", ""))
+        if rel:
+            p = Path(rel)
+            keys.add(_normalize_uid_token(p.stem))
+            keys.add(_normalize_uid_token(p.name))
+        src = str(entry.get("src_path", ""))
+        if src:
+            p = Path(src)
+            keys.add(_normalize_uid_token(p.stem))
+            keys.add(_normalize_uid_token(p.name))
+        for k in keys:
+            if not k:
+                continue
+            index.setdefault(k, []).append(entry)
+
+    chosen: list[dict[str, Any]] = []
+    found: list[str] = []
+    missing: list[str] = []
+    used_ids: set[int] = set()
+    for req in requested_uids:
+        options = index.get(_normalize_uid_token(req), [])
+        pick: dict[str, Any] | None = None
+        for item in options:
+            marker = id(item)
+            if marker in used_ids:
+                continue
+            pick = item
+            used_ids.add(marker)
+            break
+        if pick is None and options:
+            pick = options[0]
+        if pick is None:
+            missing.append(req)
+            continue
+        chosen.append(pick)
+        found.append(req)
+    return chosen, found, missing
+
+
 def choose_sample_entries(
     candidates: list[dict[str, Any]],
     *,
@@ -365,8 +441,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ego4D local smoke test runner for POV Compiler")
     parser.add_argument("--root", default=r"D:\Ego4D_Dataset", help="Ego4D root directory")
     parser.add_argument("--out_dir", default="data/outputs/ego4d_smoke", help="Output directory")
-    parser.add_argument("--n", type=int, default=5, help="Number of sampled videos")
+    parser.add_argument("--n", type=int, default=None, help="Number of sampled videos (default 5, or uids count with --uids-file)")
     parser.add_argument("--seed", type=int, default=0, help="Sampling seed")
+    parser.add_argument("--uids-file", default=None, help="Optional UID list file (one uid per line, supports comments with #)")
     parser.add_argument("--jobs", type=int, default=1, help="Parallel jobs (default 1)")
     _parse_bool_auto_args(parser, "resume", default=True, help_text="Skip completed stages if outputs are valid")
 
@@ -1134,6 +1211,7 @@ def _write_summary(
     run_perception: bool,
     summary_budget: dict[str, Any],
     nlq_summary_all_path: Path,
+    selection_info: dict[str, Any],
 ) -> tuple[Path, Path]:
     summary_csv = out_dir / "summary.csv"
     summary_md = out_dir / "summary.md"
@@ -1164,6 +1242,12 @@ def _write_summary(
             "bye_report_rc": "",
             "bye_regression_rc": "",
             "bye_metrics_path": "",
+            "selection_mode": str(selection_info.get("mode", "random")),
+            "uids_file_path": str(selection_info.get("uids_file_path", "")),
+            "uids_requested": int(selection_info.get("uids_requested", 0)),
+            "uids_found": int(selection_info.get("uids_found", 0)),
+            "uids_missing_count": int(selection_info.get("uids_missing_count", 0)),
+            "uids_missing_sample": str(selection_info.get("uids_missing_sample", "")),
         }
         if run_bye:
             row["bye_status"] = record.get("bye_status", "")
@@ -1262,6 +1346,13 @@ def _write_summary(
     lines.append(f"- run_bye: {str(run_bye).lower()}")
     lines.append(f"- bye_strict: {str(bye_strict).lower()}")
     lines.append(f"- run_perception: {str(run_perception).lower()}")
+    lines.append(f"- selection_mode: {selection_info.get('mode', 'random')}")
+    if selection_info.get("mode") == "uids_file":
+        lines.append(f"- uids_file_path: `{selection_info.get('uids_file_path', '')}`")
+        lines.append(f"- uids_requested: {selection_info.get('uids_requested', 0)}")
+        lines.append(f"- uids_found: {selection_info.get('uids_found', 0)}")
+        lines.append(f"- uids_missing_count: {selection_info.get('uids_missing_count', 0)}")
+        lines.append(f"- uids_missing_sample: `{selection_info.get('uids_missing_sample', '')}`")
     lines.append(f"- summary_csv: `{summary_csv}`")
     lines.append(f"- nlq_summary_all_csv: `{nlq_summary_all_path}`")
     lines.append("")
@@ -1353,20 +1444,50 @@ def main() -> int:
         seed=int(args.seed),
         jobs=jobs,
     )
-    chosen_entries = choose_sample_entries(
-        candidates,
-        n=int(args.n),
-        seed=int(args.seed),
-        prefer_short=bool(args.prefer_short),
-        prefer_long=bool(args.prefer_long),
-        stratified=bool(args.stratified),
-        duration_bins=parse_duration_bins(str(args.duration_bins)),
-        min_duration_s=args.min_duration_s,
-        max_duration_s=args.max_duration_s,
-    )
+    selection_mode = "random"
+    requested_uids: list[str] = []
+    found_uids: list[str] = []
+    missing_uids: list[str] = []
+    uids_file_rel = ""
+    if args.uids_file:
+        selection_mode = "uids_file"
+        uids_file = Path(str(args.uids_file))
+        requested_uids = _read_uids_file(uids_file)
+        chosen_by_uid, found_uids, missing_uids = select_entries_by_uids(candidates, requested_uids)
+        n_limit = int(args.n) if args.n is not None else len(requested_uids)
+        if n_limit > 0:
+            chosen_entries = chosen_by_uid[:n_limit]
+        else:
+            chosen_entries = []
+        try:
+            uids_file_rel = str(uids_file.resolve().relative_to(out_dir.resolve())).replace("\\", "/")
+        except Exception:
+            uids_file_rel = str(uids_file)
+    else:
+        n_value = int(args.n) if args.n is not None else 5
+        chosen_entries = choose_sample_entries(
+            candidates,
+            n=n_value,
+            seed=int(args.seed),
+            prefer_short=bool(args.prefer_short),
+            prefer_long=bool(args.prefer_long),
+            stratified=bool(args.stratified),
+            duration_bins=parse_duration_bins(str(args.duration_bins)),
+            min_duration_s=args.min_duration_s,
+            max_duration_s=args.max_duration_s,
+        )
     chosen_ids = {str(entry.get("video_uid")) for entry in chosen_entries}
     for entry in entries:
         entry["chosen"] = str(entry.get("video_uid")) in chosen_ids
+
+    selection_info = {
+        "mode": selection_mode,
+        "uids_file_path": uids_file_rel,
+        "uids_requested": len(requested_uids),
+        "uids_found": len(found_uids),
+        "uids_missing_count": len(missing_uids),
+        "uids_missing_sample": ",".join(missing_uids[:10]),
+    }
 
     known_durations = [
         float(entry["duration_s"])
@@ -1382,6 +1503,11 @@ def main() -> int:
     print(f"probed={probed_count}")
     print(f"chosen={len(chosen_entries)}")
     print(f"avg_duration={(f'{avg_duration:.2f}' if avg_duration is not None else 'na')}")
+    print(f"selection_mode={selection_mode}")
+    if selection_mode == "uids_file":
+        print(f"uids_requested={len(requested_uids)}")
+        print(f"uids_found={len(found_uids)}")
+        print(f"uids_missing_count={len(missing_uids)}")
 
     ffmpeg_available = has_command("ffmpeg")
     proxy_requested = True if args.proxy is None else bool(args.proxy)
@@ -1562,6 +1688,7 @@ def main() -> int:
         run_perception=bool(args.run_perception),
         summary_budget=summary_budget,
         nlq_summary_all_path=nlq_summary_all_path,
+        selection_info=selection_info,
     )
     print(f"manifest_saved={manifest_path}")
     print(f"summary saved={summary_md}")

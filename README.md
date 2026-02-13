@@ -102,6 +102,7 @@ docs/
 | `scripts\debug_rerank.py` | Score decomposition debug for reranker | `--json --index --out --rerank-cfg` | debug CSV + summary logs |
 | `scripts\export_bye_events.py` / `scripts\bye_regression_smoke.py` | BYE offline injection export and optional lint/report/regression loop | `--json/--pov_json --out_dir --bye_root --strict` | `events/events_v1.jsonl`, `run_package/`, `logs/`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
+| `scripts\run_ab_bye_compare.py` | Reproducible AB runner on fixed UID list (stub vs real) + BYE compare | `--root --uids-file --out_dir [--with-bye]` | `run_stub/`, `run_real/`, `compare/{commands.sh,table_bye_compare.*}` |
 
 ## Output Directory Contract
 
