@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import json
 import os
 import shutil
 import shlex
@@ -252,6 +253,12 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye_budget'}`",
             f"- `{out_dir / 'compare' / 'commands.sh'}`",
             f"- `{out_dir / 'compare' / 'snapshots'}`",
+            "",
+            "## BYE Budget Compare",
+            "",
+            f"- table: `{out_dir / 'compare' / 'bye_budget' / 'compare' / 'tables' / 'table_budget_compare.md'}`",
+            f"- curve: `{out_dir / 'compare' / 'bye_budget' / 'compare' / 'figures' / 'fig_bye_primary_vs_budget_seconds_compare.png'}`",
+            f"- delta: `{out_dir / 'compare' / 'bye_budget' / 'compare' / 'figures' / 'fig_bye_primary_delta_vs_budget_seconds.png'}`",
         ]
     )
     (out_dir / "compare" / "README.md").write_text("\n".join(lines), encoding="utf-8")
@@ -266,12 +273,14 @@ def main() -> int:
     compare_bye_dir = compare_dir / "bye"
     compare_bye_budget_stub = compare_dir / "bye_budget" / "stub"
     compare_bye_budget_real = compare_dir / "bye_budget" / "real"
+    compare_bye_budget_compare = compare_dir / "bye_budget" / "compare"
     compare_snapshots = compare_dir / "snapshots"
     run_stub.mkdir(parents=True, exist_ok=True)
     run_real.mkdir(parents=True, exist_ok=True)
     compare_bye_dir.mkdir(parents=True, exist_ok=True)
     compare_bye_budget_stub.mkdir(parents=True, exist_ok=True)
     compare_bye_budget_real.mkdir(parents=True, exist_ok=True)
+    compare_bye_budget_compare.mkdir(parents=True, exist_ok=True)
     compare_snapshots.mkdir(parents=True, exist_ok=True)
     commands_file = compare_dir / "commands.sh"
     if not commands_file.exists():
@@ -385,6 +394,8 @@ def main() -> int:
         return rc
 
     bye_budget_cmds: list[list[str]] = []
+    bye_budget_compare_cmd: list[str] | None = None
+    bye_budget_summary_path = compare_bye_budget_compare / "compare_summary.json"
     if args.with_bye_budget_sweep:
         if not args.with_bye:
             print("error=--with-bye-budget-sweep requires --with-bye")
@@ -434,6 +445,34 @@ def main() -> int:
             if rc != 0:
                 return rc
             bye_budget_cmds.append(cmd)
+
+        bye_budget_compare_cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "compare_bye_budget_sweeps.py"),
+            "--a_dir",
+            str(compare_bye_budget_stub),
+            "--b_dir",
+            str(compare_bye_budget_real),
+            "--a_label",
+            "stub",
+            "--b_label",
+            "real",
+            "--primary-metric",
+            str(args.bye_primary_metric),
+            "--format",
+            "md+csv",
+            "--out_dir",
+            str(compare_bye_budget_compare),
+        ]
+        rc = _run(
+            bye_budget_compare_cmd,
+            cwd=ROOT,
+            log_prefix=compare_dir / "bye_budget_compare",
+            commands_file=commands_file,
+        )
+        if rc != 0:
+            return rc
+        bye_budget_cmds.append(bye_budget_compare_cmd)
 
     fig_cmds: list[list[str]] = []
     if args.with_figs:
@@ -516,6 +555,16 @@ def main() -> int:
     print(f"saved_stub={run_stub}")
     print(f"saved_real={run_real}")
     print(f"saved_compare={compare_dir}")
+    if args.with_bye_budget_sweep:
+        print(f"bye_budget_stub_saved={compare_bye_budget_stub}")
+        print(f"bye_budget_real_saved={compare_bye_budget_real}")
+        print(f"bye_budget_compare_saved={compare_bye_budget_compare}")
+        if bye_budget_summary_path.exists():
+            try:
+                payload = json.loads(bye_budget_summary_path.read_text(encoding="utf-8"))
+                print(f"budgets_matched={payload.get('budgets_matched')}")
+            except Exception:
+                pass
     return 0
 
 

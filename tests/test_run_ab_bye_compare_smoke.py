@@ -114,6 +114,10 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "bye" / "compare_summary.json").exists()
     assert (compare_dir / "bye_budget" / "stub" / "aggregate" / "metrics_by_budget.csv").exists()
     assert (compare_dir / "bye_budget" / "real" / "aggregate" / "metrics_by_budget.csv").exists()
+    assert (compare_dir / "bye_budget" / "compare" / "tables" / "table_budget_compare.csv").exists()
+    assert (compare_dir / "bye_budget" / "compare" / "tables" / "table_budget_compare.md").exists()
+    assert (compare_dir / "bye_budget" / "compare" / "figures" / "fig_bye_primary_vs_budget_seconds_compare.png").exists()
+    assert (compare_dir / "bye_budget" / "compare" / "figures" / "fig_bye_primary_delta_vs_budget_seconds.png").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
 
@@ -172,3 +176,4 @@ def test_run_ab_bye_compare_generates_uids_used_when_missing(tmp_path: Path) -> 
     commands_text = (compare_dir / "commands.sh").read_text(encoding="utf-8")
     assert "--uids-file" in commands_text
     assert str(uids_used) in commands_text
+    assert "compare_bye_budget_sweeps.py" in commands_text

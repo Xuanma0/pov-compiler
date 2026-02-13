@@ -80,3 +80,35 @@ python scripts/ego4d_smoke.py \
 ```
 
 Per UID output goes to `out_dir/bye/<uid>/...`, and `summary.csv` includes `bye_status`, `bye_report_rc`, `bye_regression_rc`, `bye_metrics_path`, and `bye_numeric_*` columns.
+
+## Budget Sweep + A/B Compare
+
+Quality-vs-budget curve for one run (strict UID matching by default):
+
+```bash
+python scripts/sweep_bye_budgets.py \
+  --pov-json-dir data/outputs/<run>/json \
+  --uids-file data/outputs/uids.txt \
+  --out-dir data/outputs/<run>/bye_budget \
+  --bye-root <path_to_bye_repo_or_fake_bye> \
+  --budgets "20/50/4,40/100/8,60/200/12" \
+  --primary-metric qualityScore
+```
+
+Compare two sweeps (e.g., stub vs real):
+
+```bash
+python scripts/compare_bye_budget_sweeps.py \
+  --a_dir data/outputs/ab/run_stub/compare/bye_budget/stub \
+  --b_dir data/outputs/ab/run_real/compare/bye_budget/real \
+  --a_label stub --b_label real \
+  --primary-metric qualityScore \
+  --out_dir data/outputs/ab/compare/bye_budget/compare
+```
+
+Main compare artifacts:
+- `tables/table_budget_compare.csv`
+- `tables/table_budget_compare.md`
+- `figures/fig_bye_primary_vs_budget_seconds_compare.(png/pdf)`
+- `figures/fig_bye_primary_delta_vs_budget_seconds.(png/pdf)`
+- `compare_summary.json`
