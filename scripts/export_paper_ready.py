@@ -1,0 +1,521 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+def _parse_bool_with_neg(parser: argparse.ArgumentParser, name: str, default: bool) -> None:
+    group = parser.add_mutually_exclusive_group()
+    dest = name.replace("-", "_")
+    group.add_argument(f"--{name}", dest=dest, action="store_true")
+    group.add_argument(f"--no-{name}", dest=dest, action="store_false")
+    parser.set_defaults(**{dest: default})
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export unified paper-ready budget panel across BYE/NLQ/Streaming")
+    parser.add_argument("--compare_dir", required=True, help="AB compare directory")
+    parser.add_argument("--out_dir", required=True)
+    parser.add_argument("--label_a", default="stub")
+    parser.add_argument("--label_b", default="real")
+    parser.add_argument("--primary_metrics_json", default=None)
+    parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
+    _parse_bool_with_neg(parser, "with-figs", default=True)
+    parser.add_argument("--png", action="store_true")
+    parser.add_argument("--pdf", action="store_true")
+    return parser.parse_args()
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    if out != out:
+        return None
+    return out
+
+
+def _read_csv(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def _parse_json_arg(raw: str | None) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    text = str(raw).strip()
+    if not text:
+        return {}
+    try:
+        val = json.loads(text)
+        if isinstance(val, dict):
+            return val
+    except Exception:
+        pass
+    p = Path(text)
+    if p.exists():
+        try:
+            val = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            return {}
+    return {}
+
+
+def _budget_key(row: dict[str, Any]) -> str:
+    def _pick(*keys: str) -> float | None:
+        for k in keys:
+            if k in row:
+                v = _to_float(row.get(k))
+                if v is not None:
+                    return v
+        return None
+
+    s = _pick("budget_seconds", "budget_max_total_s", "max_total_s")
+    t = _pick("budget_max_tokens", "max_tokens")
+    d = _pick("budget_max_decisions", "max_decisions")
+    if s is not None and t is not None and d is not None:
+        return f"{int(round(s))}/{int(t)}/{int(d)}"
+    tag = str(row.get("budget_key", row.get("budget_tag", ""))).strip()
+    return tag or "unknown_budget"
+
+
+def _budget_seconds(row: dict[str, Any]) -> float:
+    for k in ("budget_seconds", "budget_max_total_s", "max_total_s"):
+        v = _to_float(row.get(k))
+        if v is not None:
+            return float(v)
+    key = _budget_key(row)
+    parts = key.split("/")
+    if len(parts) == 3:
+        v = _to_float(parts[0])
+        if v is not None:
+            return float(v)
+    return 0.0
+
+
+def _to_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = _budget_key(row)
+        if key not in out:
+            out[key] = row
+    return out
+
+
+def _numeric_cols(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return []
+    reserved = {
+        "budget_key",
+        "budget_tag",
+        "budget_seconds",
+        "budget_max_total_s",
+        "budget_max_tokens",
+        "budget_max_decisions",
+        "num_uids",
+        "runs_total",
+        "runs_ok",
+        "selection_mode",
+        "uids_requested",
+        "uids_found",
+        "uids_missing_count",
+        "policy",
+    }
+    out: list[str] = []
+    for key in rows[0].keys():
+        if key in reserved:
+            continue
+        if any(_to_float(r.get(key)) is not None for r in rows):
+            out.append(str(key))
+    return out
+
+
+def _select_primary(task: str, rows_a: list[dict[str, Any]], rows_b: list[dict[str, Any]], override: dict[str, Any]) -> str | None:
+    rows = list(rows_a) + list(rows_b)
+    cols = _numeric_cols(rows)
+    if not cols:
+        return None
+    requested = str(override.get(task, "")).strip()
+    if requested and requested in cols:
+        return requested
+    candidates: list[str]
+    task_l = task.lower()
+    if task_l == "bye":
+        candidates = ["qualityScore", "bye_qualityScore", "bye_primary", "primary_metric"]
+        for cand in candidates:
+            if cand in cols:
+                return cand
+        pref = [c for c in cols if c.startswith("bye_numeric_primary_")]
+        if pref:
+            pref.sort()
+            return pref[0]
+    elif task_l == "nlq":
+        candidates = ["objective", "nlq_full_hit_at_k_strict", "full_hit_at_k_strict", "hit_at_k_strict"]
+        for cand in candidates:
+            if cand in cols:
+                return cand
+    else:
+        candidates = ["hit@k_strict", "hit_at_k_strict", "nlq_full_hit_at_k_strict", "mrr"]
+        for cand in candidates:
+            if cand in cols:
+                return cand
+    cols.sort()
+    return cols[0]
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]], columns: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _write_md(path: Path, rows: list[dict[str, Any]], columns: list[str], title: str, summary_lines: list[str]) -> None:
+    lines = [f"# {title}", "", *summary_lines, "", "| " + " | ".join(columns) + " |", "|" + "|".join(["---"] * len(columns)) + "|"]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row.get(c, "")) for c in columns) + " |")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _make_figures(
+    *,
+    panel_rows: list[dict[str, Any]],
+    out_dir: Path,
+    label_a: str,
+    label_b: str,
+    with_figs: bool,
+    formats: list[str],
+    recommend_points: dict[str, dict[str, str]],
+) -> list[str]:
+    if not with_figs:
+        return []
+    import matplotlib.pyplot as plt
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    figure_paths: list[str] = []
+    task_names = sorted({str(r.get("task", "")) for r in panel_rows if str(r.get("task", ""))})
+
+    # 1) Primary panel.
+    fig1 = out_dir / "fig_budget_primary_vs_seconds_panel"
+    plt.figure(figsize=(8.2, 4.6))
+    for task in task_names:
+        rows = sorted([r for r in panel_rows if str(r.get("task")) == task], key=lambda x: float(x.get("budget_seconds", 0.0)))
+        xs = [float(r.get("budget_seconds", 0.0)) for r in rows]
+        ya = [float(_to_float(r.get("primary_a")) or 0.0) for r in rows]
+        yb = [float(_to_float(r.get("primary_b")) or 0.0) for r in rows]
+        plt.plot(xs, ya, marker="o", linestyle="-", label=f"{task}-{label_a}")
+        plt.plot(xs, yb, marker="o", linestyle="--", label=f"{task}-{label_b}")
+    plt.xlabel("Budget Seconds")
+    plt.ylabel("Primary Metric")
+    plt.title("Budget Primary Curves Panel")
+    plt.grid(True, alpha=0.35)
+    plt.legend(ncol=2)
+    plt.tight_layout()
+    for ext in formats:
+        p = fig1.with_suffix(f".{ext}")
+        plt.savefig(p)
+        figure_paths.append(str(p))
+    plt.close()
+
+    # 2) Delta panel.
+    fig2 = out_dir / "fig_budget_primary_delta_vs_seconds_panel"
+    plt.figure(figsize=(8.2, 4.6))
+    for task in task_names:
+        rows = sorted([r for r in panel_rows if str(r.get("task")) == task], key=lambda x: float(x.get("budget_seconds", 0.0)))
+        xs = [float(r.get("budget_seconds", 0.0)) for r in rows]
+        yd = [float(_to_float(r.get("delta_primary")) or 0.0) for r in rows]
+        plt.plot(xs, yd, marker="o", label=task)
+    plt.axhline(y=0.0, linewidth=1.0)
+    plt.xlabel("Budget Seconds")
+    plt.ylabel(f"Delta Primary ({label_b}-{label_a})")
+    plt.title("Budget Primary Delta Panel")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = fig2.with_suffix(f".{ext}")
+        plt.savefig(p)
+        figure_paths.append(str(p))
+    plt.close()
+
+    # 3) Streaming latency.
+    fig3 = out_dir / "fig_budget_latency_vs_seconds_streaming"
+    stream_rows = sorted([r for r in panel_rows if str(r.get("task")) == "streaming"], key=lambda x: float(x.get("budget_seconds", 0.0)))
+    plt.figure(figsize=(8.2, 4.6))
+    if stream_rows:
+        xs = [float(r.get("budget_seconds", 0.0)) for r in stream_rows]
+        e2e_a = [float(_to_float(r.get("e2e_ms_p50_a")) or 0.0) for r in stream_rows]
+        e2e_b = [float(_to_float(r.get("e2e_ms_p50_b")) or 0.0) for r in stream_rows]
+        p95_a = [float(_to_float(r.get("e2e_ms_p95_a")) or 0.0) for r in stream_rows]
+        p95_b = [float(_to_float(r.get("e2e_ms_p95_b")) or 0.0) for r in stream_rows]
+        plt.plot(xs, e2e_a, marker="o", linestyle="-", label=f"e2e_p50_{label_a}")
+        plt.plot(xs, e2e_b, marker="o", linestyle="--", label=f"e2e_p50_{label_b}")
+        plt.plot(xs, p95_a, marker="s", linestyle="-", label=f"e2e_p95_{label_a}")
+        plt.plot(xs, p95_b, marker="s", linestyle="--", label=f"e2e_p95_{label_b}")
+    else:
+        plt.text(0.5, 0.5, "streaming metrics missing", ha="center", va="center")
+    plt.xlabel("Budget Seconds")
+    plt.ylabel("Latency (ms)")
+    plt.title("Streaming Latency vs Budget Seconds")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = fig3.with_suffix(f".{ext}")
+        plt.savefig(p)
+        figure_paths.append(str(p))
+    plt.close()
+
+    # 4) recommended points.
+    fig4 = out_dir / "fig_budget_recommended_points"
+    plt.figure(figsize=(8.2, 4.6))
+    drew = False
+    for side, cfg in ((label_a, recommend_points.get(label_a, {})), (label_b, recommend_points.get(label_b, {}))):
+        budget_key = str(cfg.get("top1_budget_key", "")).strip()
+        if not budget_key:
+            continue
+        for task in task_names:
+            rows = [r for r in panel_rows if str(r.get("task")) == task and str(r.get("budget_key")) == budget_key]
+            if not rows:
+                continue
+            row = rows[0]
+            y = _to_float(row.get("primary_a" if side == label_a else "primary_b"))
+            if y is None:
+                continue
+            x = float(row.get("budget_seconds", 0.0))
+            plt.scatter([x], [float(y)], marker="*", s=140, label=f"{task}-{side}-top1")
+            drew = True
+    if not drew:
+        plt.text(0.5, 0.5, "recommendation points missing", ha="center", va="center")
+    plt.xlabel("Budget Seconds")
+    plt.ylabel("Primary Metric")
+    plt.title("Recommended Budget Points")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = fig4.with_suffix(f".{ext}")
+        plt.savefig(p)
+        figure_paths.append(str(p))
+    plt.close()
+
+    return figure_paths
+
+
+def main() -> int:
+    args = parse_args()
+    compare_dir = Path(args.compare_dir)
+    out_dir = Path(args.out_dir)
+    tables_dir = out_dir / "tables"
+    figures_dir = out_dir / "figures"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.png or args.pdf:
+        formats = []
+        if args.png:
+            formats.append("png")
+        if args.pdf:
+            formats.append("pdf")
+    else:
+        formats = ["png", "pdf"]
+
+    primary_override = _parse_json_arg(args.primary_metrics_json)
+    task_sources = {
+        "bye": {
+            args.label_a: compare_dir / "bye_budget" / args.label_a / "aggregate" / "metrics_by_budget.csv",
+            args.label_b: compare_dir / "bye_budget" / args.label_b / "aggregate" / "metrics_by_budget.csv",
+        },
+        "nlq": {
+            args.label_a: compare_dir / "nlq_budget" / args.label_a / "aggregate" / "metrics_by_budget.csv",
+            args.label_b: compare_dir / "nlq_budget" / args.label_b / "aggregate" / "metrics_by_budget.csv",
+        },
+        "streaming": {
+            args.label_a: compare_dir / "streaming_budget" / args.label_a / "aggregate" / "metrics_by_budget.csv",
+            args.label_b: compare_dir / "streaming_budget" / args.label_b / "aggregate" / "metrics_by_budget.csv",
+        },
+    }
+    recommend_sources = {
+        args.label_a: compare_dir / "budget_recommend" / args.label_a / "recommend_summary.json",
+        args.label_b: compare_dir / "budget_recommend" / args.label_b / "recommend_summary.json",
+    }
+
+    panel_rows: list[dict[str, Any]] = []
+    missing_tasks: list[str] = []
+    chosen_primary: dict[str, str] = {}
+    for task, paths in task_sources.items():
+        rows_a = _read_csv(Path(paths[args.label_a]))
+        rows_b = _read_csv(Path(paths[args.label_b]))
+        if not rows_a and not rows_b:
+            missing_tasks.append(task)
+            continue
+        primary = _select_primary(task, rows_a, rows_b, primary_override)
+        if not primary:
+            missing_tasks.append(task)
+            continue
+        chosen_primary[task] = primary
+        map_a = _to_map(rows_a)
+        map_b = _to_map(rows_b)
+        all_keys = sorted(set(map_a.keys()) | set(map_b.keys()), key=lambda k: _budget_seconds(map_a.get(k, map_b.get(k, {}))))
+        for key in all_keys:
+            ra = map_a.get(key, {})
+            rb = map_b.get(key, {})
+            pa = _to_float(ra.get(primary))
+            pb = _to_float(rb.get(primary))
+            row = {
+                "task": task,
+                "budget_key": key,
+                "budget_seconds": _budget_seconds(ra or rb),
+                "primary_metric": primary,
+                "primary_a": pa,
+                "primary_b": pb,
+                "delta_primary": None if pa is None or pb is None else float(pb - pa),
+                "status_a": "ok" if ra else "missing",
+                "status_b": "ok" if rb else "missing",
+            }
+            # attach common latency fields for streaming chart.
+            for fld in ("e2e_ms_p50", "e2e_ms_p95", "retrieval_ms_p50", "retrieval_ms_p95"):
+                row[f"{fld}_a"] = _to_float(ra.get(fld))
+                row[f"{fld}_b"] = _to_float(rb.get(fld))
+            panel_rows.append(row)
+
+    panel_rows.sort(key=lambda r: (str(r.get("task", "")), float(_to_float(r.get("budget_seconds")) or 0.0), str(r.get("budget_key", ""))))
+
+    delta_rows = [
+        {
+            "task": str(r.get("task", "")),
+            "budget_key": str(r.get("budget_key", "")),
+            "budget_seconds": float(_to_float(r.get("budget_seconds")) or 0.0),
+            "delta_primary": _to_float(r.get("delta_primary")),
+            "primary_metric": str(r.get("primary_metric", "")),
+        }
+        for r in panel_rows
+    ]
+
+    panel_cols = [
+        "task",
+        "budget_key",
+        "budget_seconds",
+        "primary_metric",
+        "primary_a",
+        "primary_b",
+        "delta_primary",
+        "status_a",
+        "status_b",
+        "e2e_ms_p50_a",
+        "e2e_ms_p50_b",
+        "e2e_ms_p95_a",
+        "e2e_ms_p95_b",
+        "retrieval_ms_p50_a",
+        "retrieval_ms_p50_b",
+        "retrieval_ms_p95_a",
+        "retrieval_ms_p95_b",
+    ]
+    delta_cols = ["task", "budget_key", "budget_seconds", "primary_metric", "delta_primary"]
+
+    panel_csv = tables_dir / "table_budget_panel.csv"
+    panel_md = tables_dir / "table_budget_panel.md"
+    delta_csv = tables_dir / "table_budget_panel_delta.csv"
+    delta_md = tables_dir / "table_budget_panel_delta.md"
+
+    if args.format in {"csv", "md+csv"}:
+        _write_csv(panel_csv, panel_rows, panel_cols)
+        _write_csv(delta_csv, delta_rows, delta_cols)
+    if args.format in {"md", "md+csv"}:
+        summary_lines = [
+            f"- compare_dir: `{compare_dir}`",
+            f"- labels: `{args.label_a}` vs `{args.label_b}`",
+            f"- missing_tasks: `{missing_tasks}`",
+            f"- primary_metrics: `{json.dumps(chosen_primary, ensure_ascii=False, sort_keys=True)}`",
+        ]
+        _write_md(panel_md, panel_rows, panel_cols, "Unified Budget Panel", summary_lines)
+        _write_md(delta_md, delta_rows, delta_cols, "Unified Budget Panel Deltas", summary_lines)
+
+    recommend_points: dict[str, dict[str, str]] = {}
+    for side, p in recommend_sources.items():
+        if not p.exists():
+            continue
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            recommend_points[side] = {"top1_budget_key": str(payload.get("top1_budget_key", "")).strip()}
+
+    figure_paths = _make_figures(
+        panel_rows=panel_rows,
+        out_dir=figures_dir,
+        label_a=str(args.label_a),
+        label_b=str(args.label_b),
+        with_figs=bool(args.with_figs),
+        formats=formats,
+        recommend_points=recommend_points,
+    )
+
+    report_path = out_dir / "report.md"
+    report_lines = [
+        "# Paper-ready Unified Budget Panel",
+        "",
+        f"- compare_dir: `{compare_dir}`",
+        f"- labels: `{args.label_a}` vs `{args.label_b}`",
+        f"- missing_tasks: `{missing_tasks}`",
+        f"- primary_metrics: `{json.dumps(chosen_primary, ensure_ascii=False, sort_keys=True)}`",
+        f"- recommend_points: `{json.dumps(recommend_points, ensure_ascii=False, sort_keys=True)}`",
+        "",
+        "## Artifacts",
+        "",
+        f"- panel table: `{panel_csv}`",
+        f"- delta table: `{delta_csv}`",
+        f"- figures: `{figure_paths}`",
+    ]
+    report_path.write_text("\n".join(report_lines), encoding="utf-8")
+
+    snapshot_path = out_dir / "snapshot.json"
+    snapshot = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "inputs": {
+            "compare_dir": str(compare_dir),
+            "label_a": str(args.label_a),
+            "label_b": str(args.label_b),
+            "primary_metrics_override": primary_override,
+            "format": str(args.format),
+            "with_figs": bool(args.with_figs),
+            "formats": formats,
+        },
+        "sources": {
+            task: {side: str(path) for side, path in side_paths.items()}
+            for task, side_paths in task_sources.items()
+        },
+        "missing_tasks": missing_tasks,
+        "primary_metrics": chosen_primary,
+        "outputs": {
+            "table_budget_panel_csv": str(panel_csv),
+            "table_budget_panel_md": str(panel_md),
+            "table_budget_panel_delta_csv": str(delta_csv),
+            "table_budget_panel_delta_md": str(delta_md),
+            "figures": figure_paths,
+            "report_md": str(report_path),
+        },
+    }
+    snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"saved_table_panel={panel_csv}")
+    print(f"saved_table_delta={delta_csv}")
+    print(f"saved_figures={figure_paths}")
+    print(f"saved_snapshot={snapshot_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

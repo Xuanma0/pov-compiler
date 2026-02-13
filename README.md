@@ -104,7 +104,9 @@ docs/
 | `scripts\sweep_bye_budgets.py` | BYE metrics over budget points (strict UID matching by default) | `--pov-json-dir --uids-file --budgets --out-dir [--strict-uids]` | `aggregate/metrics_by_budget.*`, `figures/fig_bye_*`, `snapshot.json` |
 | `scripts\compare_bye_budget_sweeps.py` | Compare two BYE budget sweeps (A/B curve + delta) | `--a_dir/--a_csv --b_dir/--b_csv --out_dir --primary-metric` | `tables/table_budget_compare.*`, `figures/fig_bye_primary_*`, `compare_summary.json` |
 | `scripts\sweep_nlq_budgets.py` | NLQ hard/pseudo evaluation over explicit budget points (strict UID matching by default) | `--json_dir --index_dir --uids-file --budgets --out_dir` | `aggregate/metrics_by_budget.*`, `figures/fig_nlq_*`, `snapshot.json` |
+| `scripts\sweep_streaming_budgets.py` | Streaming online simulation budget sweep (fixed/adaptive) | `--json_dir --uids-file --budgets --out_dir --policy` | `aggregate/metrics_by_budget.*`, `figures/fig_streaming_quality_*`, `snapshot.json` |
 | `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
+| `scripts\export_paper_ready.py` | Unified BYE/NLQ/Streaming budget panel export (paper-ready tables/figures) | `--compare_dir --out_dir --label_a --label_b` | `tables/table_budget_panel*`, `figures/fig_budget_*`, `report.md`, `snapshot.json` |
 | `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive`) with strict query metrics | `--json --out_dir --budgets --budget-policy [--fixed-budget|--recommend-dir]` | `steps.csv`, `queries.csv`, `report.md`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ budget sweeps and budget recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-budget-recommend` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/budget_recommend/*` |
@@ -223,6 +225,12 @@ Run reproducible stub vs real on the same UID list (optional perception/NLQ/figs
 python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v12 --with-perception --stub-perception-backend stub --real-perception-backend real --with-eval --with-nlq --nlq-mode hard_pseudo_nlq --with-figs --with-bye --bye-root "<YOUR_BYE_ROOT>" --bye-skip-regression --with-bye-budget-sweep --bye-budgets "20/50/4,40/100/8,60/200/12" --bye-primary-metric qualityScore --with-nlq-budget-sweep --nlq-budgets "20/50/4,40/100/8,60/200/12" --with-budget-recommend
 ```
 
+v1.7 unified budget panel (BYE/NLQ/Streaming + paper-ready export):
+
+```text
+python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v17 --with-perception --stub-perception-backend stub --real-perception-backend real --with-nlq --nlq-mode hard_pseudo_nlq --with-streaming-budget --streaming-step-s 8 --with-bye --bye-root "<YOUR_BYE_ROOT>" --with-bye-budget-sweep --with-nlq-budget-sweep --with-budget-recommend --export-paper-ready
+```
+
 Main artifacts:
 - `data/outputs/ab_v12/run_stub/summary.csv`
 - `data/outputs/ab_v12/run_real/summary.csv`
@@ -231,8 +239,12 @@ Main artifacts:
 - `data/outputs/ab_v12/compare/bye_budget/compare/figures/fig_bye_primary_vs_budget_seconds_compare.png`
 - `data/outputs/ab_v12/compare/nlq_budget/stub/aggregate/metrics_by_budget.csv`
 - `data/outputs/ab_v12/compare/nlq_budget/real/aggregate/metrics_by_budget.csv`
+- `data/outputs/ab_v12/compare/streaming_budget/stub/aggregate/metrics_by_budget.csv`
+- `data/outputs/ab_v12/compare/streaming_budget/real/aggregate/metrics_by_budget.csv`
 - `data/outputs/ab_v12/compare/budget_recommend/stub/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/budget_recommend/real/tables/table_budget_recommend.md`
+- `data/outputs/ab_v12/compare/paper_ready/tables/table_budget_panel.md`
+- `data/outputs/ab_v12/compare/paper_ready/figures/fig_budget_primary_vs_seconds_panel.png`
 - `data/outputs/ab_v12/compare/paper_figs_compare/`
 
 ## Streaming Budget Policy (v1.6)

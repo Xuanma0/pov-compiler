@@ -35,7 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nlq-mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "ego4d"], default="hard_pseudo_nlq")
     _parse_bool_with_neg(parser, "with-nlq-budget-sweep", default=False)
     parser.add_argument("--nlq-budgets", default="20/50/4,40/100/8,60/200/12")
+    _parse_bool_with_neg(parser, "with-streaming-budget", default=True)
+    parser.add_argument("--streaming-step-s", type=float, default=8.0)
     _parse_bool_with_neg(parser, "with-figs", default=False)
+    _parse_bool_with_neg(parser, "export-paper-ready", default=False)
+    parser.add_argument("--paper-ready-format", choices=["md", "csv", "md+csv"], default="md+csv")
 
     _parse_bool_with_neg(parser, "with-perception", default=False)
     parser.add_argument("--stub-perception-backend", choices=["stub", "real"], default="stub")
@@ -225,7 +229,9 @@ def _write_compare_readme(
     cmd_bye_compare: list[str],
     cmd_bye_budget: list[list[str]],
     cmd_nlq_budget: list[list[str]],
+    cmd_streaming_budget: list[list[str]],
     cmd_budget_recommend: list[list[str]],
+    cmd_paper_ready: list[list[str]],
     fig_cmds: list[list[str]],
 ) -> None:
     lines = [
@@ -247,7 +253,11 @@ def _write_compare_readme(
         lines.append(_render_cmd(cmd))
     for cmd in cmd_nlq_budget:
         lines.append(_render_cmd(cmd))
+    for cmd in cmd_streaming_budget:
+        lines.append(_render_cmd(cmd))
     for cmd in cmd_budget_recommend:
+        lines.append(_render_cmd(cmd))
+    for cmd in cmd_paper_ready:
         lines.append(_render_cmd(cmd))
     for cmd in fig_cmds:
         lines.append(_render_cmd(cmd))
@@ -264,7 +274,9 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye' / 'compare_summary.json'}`",
             f"- `{out_dir / 'compare' / 'bye_budget'}`",
             f"- `{out_dir / 'compare' / 'nlq_budget'}`",
+            f"- `{out_dir / 'compare' / 'streaming_budget'}`",
             f"- `{out_dir / 'compare' / 'budget_recommend'}`",
+            f"- `{out_dir / 'compare' / 'paper_ready'}`",
             f"- `{out_dir / 'compare' / 'commands.sh'}`",
             f"- `{out_dir / 'compare' / 'snapshots'}`",
             "",
@@ -279,6 +291,12 @@ def _write_compare_readme(
             f"- stub table: `{out_dir / 'compare' / 'budget_recommend' / 'stub' / 'tables' / 'table_budget_recommend.md'}`",
             f"- real table: `{out_dir / 'compare' / 'budget_recommend' / 'real' / 'tables' / 'table_budget_recommend.md'}`",
             "- objective combines BYE and NLQ metrics with configurable weights and gate constraints.",
+            "",
+            "## Unified Budget Panel",
+            "",
+            f"- panel table: `{out_dir / 'compare' / 'paper_ready' / 'tables' / 'table_budget_panel.md'}`",
+            f"- delta table: `{out_dir / 'compare' / 'paper_ready' / 'tables' / 'table_budget_panel_delta.md'}`",
+            f"- primary curves: `{out_dir / 'compare' / 'paper_ready' / 'figures' / 'fig_budget_primary_vs_seconds_panel.png'}`",
         ]
     )
     (out_dir / "compare" / "README.md").write_text("\n".join(lines), encoding="utf-8")
@@ -296,9 +314,12 @@ def main() -> int:
     compare_bye_budget_compare = compare_dir / "bye_budget" / "compare"
     compare_nlq_budget_stub = compare_dir / "nlq_budget" / "stub"
     compare_nlq_budget_real = compare_dir / "nlq_budget" / "real"
+    compare_streaming_budget_stub = compare_dir / "streaming_budget" / "stub"
+    compare_streaming_budget_real = compare_dir / "streaming_budget" / "real"
     compare_budget_recommend_stub = compare_dir / "budget_recommend" / "stub"
     compare_budget_recommend_real = compare_dir / "budget_recommend" / "real"
     compare_budget_recommend_compare = compare_dir / "budget_recommend" / "compare"
+    compare_paper_ready = compare_dir / "paper_ready"
     compare_snapshots = compare_dir / "snapshots"
     run_stub.mkdir(parents=True, exist_ok=True)
     run_real.mkdir(parents=True, exist_ok=True)
@@ -308,9 +329,12 @@ def main() -> int:
     compare_bye_budget_compare.mkdir(parents=True, exist_ok=True)
     compare_nlq_budget_stub.mkdir(parents=True, exist_ok=True)
     compare_nlq_budget_real.mkdir(parents=True, exist_ok=True)
+    compare_streaming_budget_stub.mkdir(parents=True, exist_ok=True)
+    compare_streaming_budget_real.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_stub.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_real.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_compare.mkdir(parents=True, exist_ok=True)
+    compare_paper_ready.mkdir(parents=True, exist_ok=True)
     compare_snapshots.mkdir(parents=True, exist_ok=True)
     commands_file = compare_dir / "commands.sh"
     if not commands_file.exists():
@@ -557,6 +581,51 @@ def main() -> int:
                 return rc
             nlq_budget_cmds.append(cmd)
 
+    streaming_budget_cmds: list[list[str]] = []
+    if args.with_streaming_budget:
+        streaming_sweep_script = ROOT / "scripts" / "sweep_streaming_budgets.py"
+        common = [
+            "--uids-file",
+            str(effective_uids_file) if effective_uids_file else "",
+            "--strict-uids",
+            "--budgets",
+            str(args.nlq_budgets),
+            "--step-s",
+            str(float(args.streaming_step_s)),
+            "--mode",
+            str(args.nlq_mode),
+            "--policy",
+            "fixed",
+            "--formats",
+            "png,pdf",
+        ]
+        cmd_stub_stream = [
+            sys.executable,
+            str(streaming_sweep_script),
+            "--json_dir",
+            str(run_stub / "json"),
+            "--out_dir",
+            str(compare_streaming_budget_stub),
+            *common,
+        ]
+        cmd_real_stream = [
+            sys.executable,
+            str(streaming_sweep_script),
+            "--json_dir",
+            str(run_real / "json"),
+            "--out_dir",
+            str(compare_streaming_budget_real),
+            *common,
+        ]
+        for cmd, lp in (
+            (cmd_stub_stream, compare_dir / "streaming_budget_stub"),
+            (cmd_real_stream, compare_dir / "streaming_budget_real"),
+        ):
+            rc = _run(cmd, cwd=ROOT, log_prefix=lp, commands_file=commands_file)
+            if rc != 0:
+                return rc
+            streaming_budget_cmds.append(cmd)
+
     budget_recommend_cmds: list[list[str]] = []
     if args.with_budget_recommend:
         if not args.with_bye_budget_sweep or not args.with_nlq_budget_sweep:
@@ -677,6 +746,28 @@ def main() -> int:
                 return rc
             fig_cmds.append(cmd)
 
+    paper_ready_cmds: list[list[str]] = []
+    if args.export_paper_ready:
+        cmd_paper_ready = [
+            sys.executable,
+            str(ROOT / "scripts" / "export_paper_ready.py"),
+            "--compare_dir",
+            str(compare_dir),
+            "--out_dir",
+            str(compare_paper_ready),
+            "--label_a",
+            "stub",
+            "--label_b",
+            "real",
+            "--format",
+            str(args.paper_ready_format),
+            "--with-figs",
+        ]
+        rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
+        if rc != 0:
+            return rc
+        paper_ready_cmds.append(cmd_paper_ready)
+
     _copy_snapshots(run_stub, "stub", compare_snapshots)
     _copy_snapshots(run_real, "real", compare_snapshots)
     _write_compare_readme(
@@ -687,7 +778,9 @@ def main() -> int:
         cmd_bye_compare=cmd_bye_compare,
         cmd_bye_budget=bye_budget_cmds,
         cmd_nlq_budget=nlq_budget_cmds,
+        cmd_streaming_budget=streaming_budget_cmds,
         cmd_budget_recommend=budget_recommend_cmds,
+        cmd_paper_ready=paper_ready_cmds,
         fig_cmds=fig_cmds,
     )
 
@@ -707,6 +800,9 @@ def main() -> int:
     if args.with_nlq_budget_sweep:
         print(f"nlq_budget_stub_saved={compare_nlq_budget_stub}")
         print(f"nlq_budget_real_saved={compare_nlq_budget_real}")
+    if args.with_streaming_budget:
+        print(f"streaming_budget_stub_saved={compare_streaming_budget_stub}")
+        print(f"streaming_budget_real_saved={compare_streaming_budget_real}")
     if args.with_budget_recommend:
         print(f"budget_recommend_stub_saved={compare_budget_recommend_stub}")
         print(f"budget_recommend_real_saved={compare_budget_recommend_real}")
@@ -719,6 +815,21 @@ def main() -> int:
                     print(f"top1_{label}={payload.get('top1_budget_key')}")
                 except Exception:
                     pass
+    if args.export_paper_ready:
+        print(f"paper_ready_saved={compare_paper_ready}")
+        panel_csv = compare_paper_ready / "tables" / "table_budget_panel.csv"
+        if panel_csv.exists():
+            try:
+                with panel_csv.open("r", encoding="utf-8", newline="") as f:
+                    rows = list(csv.DictReader(f))
+                keys = {
+                    str(r.get("budget_key", "")).strip()
+                    for r in rows
+                    if str(r.get("budget_key", "")).strip()
+                }
+                print(f"budgets_matched={len(keys)}")
+            except Exception:
+                pass
     return 0
 
 

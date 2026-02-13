@@ -123,3 +123,5 @@ python scripts/recommend_budget.py \
 ```
 
 This outputs ranked budgets (`table_budget_recommend.*`) with gate filtering and objective curves.
+
+In v1.7, `scripts/export_paper_ready.py` aligns BYE/NLQ/Streaming budget sweeps into one unified panel (`table_budget_panel.*` + `fig_budget_*`) so quality-vs-budget trade-offs are visible in a single paper-ready view.
