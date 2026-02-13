@@ -33,6 +33,8 @@ def parse_args() -> argparse.Namespace:
     _parse_bool_with_neg(parser, "with-eval", default=False)
     _parse_bool_with_neg(parser, "with-nlq", default=False)
     parser.add_argument("--nlq-mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "ego4d"], default="hard_pseudo_nlq")
+    _parse_bool_with_neg(parser, "with-nlq-budget-sweep", default=False)
+    parser.add_argument("--nlq-budgets", default="20/50/4,40/100/8,60/200/12")
     _parse_bool_with_neg(parser, "with-figs", default=False)
 
     _parse_bool_with_neg(parser, "with-perception", default=False)
@@ -59,6 +61,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bye-report", default=None)
     parser.add_argument("--bye-regression", default=None)
     parser.add_argument("--strict", action="store_true", help="Fail if BYE missing when --with-bye")
+    _parse_bool_with_neg(parser, "with-budget-recommend", default=False)
+    parser.add_argument("--budget-weights-json", default=None)
+    parser.add_argument("--budget-gates-json", default=None)
+    parser.add_argument("--nlq-eval-script", default=None, help="Optional override for eval_nlq.py path (testing)")
 
     parser.add_argument("--prefer-short", action="store_true")
     parser.add_argument("--prefer-long", action="store_true")
@@ -218,6 +224,8 @@ def _write_compare_readme(
     cmd_real: list[str],
     cmd_bye_compare: list[str],
     cmd_bye_budget: list[list[str]],
+    cmd_nlq_budget: list[list[str]],
+    cmd_budget_recommend: list[list[str]],
     fig_cmds: list[list[str]],
 ) -> None:
     lines = [
@@ -237,6 +245,10 @@ def _write_compare_readme(
     ]
     for cmd in cmd_bye_budget:
         lines.append(_render_cmd(cmd))
+    for cmd in cmd_nlq_budget:
+        lines.append(_render_cmd(cmd))
+    for cmd in cmd_budget_recommend:
+        lines.append(_render_cmd(cmd))
     for cmd in fig_cmds:
         lines.append(_render_cmd(cmd))
     lines.extend(
@@ -251,6 +263,8 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye' / 'table_bye_compare.md'}`",
             f"- `{out_dir / 'compare' / 'bye' / 'compare_summary.json'}`",
             f"- `{out_dir / 'compare' / 'bye_budget'}`",
+            f"- `{out_dir / 'compare' / 'nlq_budget'}`",
+            f"- `{out_dir / 'compare' / 'budget_recommend'}`",
             f"- `{out_dir / 'compare' / 'commands.sh'}`",
             f"- `{out_dir / 'compare' / 'snapshots'}`",
             "",
@@ -259,6 +273,12 @@ def _write_compare_readme(
             f"- table: `{out_dir / 'compare' / 'bye_budget' / 'compare' / 'tables' / 'table_budget_compare.md'}`",
             f"- curve: `{out_dir / 'compare' / 'bye_budget' / 'compare' / 'figures' / 'fig_bye_primary_vs_budget_seconds_compare.png'}`",
             f"- delta: `{out_dir / 'compare' / 'bye_budget' / 'compare' / 'figures' / 'fig_bye_primary_delta_vs_budget_seconds.png'}`",
+            "",
+            "## Budget Recommender",
+            "",
+            f"- stub table: `{out_dir / 'compare' / 'budget_recommend' / 'stub' / 'tables' / 'table_budget_recommend.md'}`",
+            f"- real table: `{out_dir / 'compare' / 'budget_recommend' / 'real' / 'tables' / 'table_budget_recommend.md'}`",
+            "- objective combines BYE and NLQ metrics with configurable weights and gate constraints.",
         ]
     )
     (out_dir / "compare" / "README.md").write_text("\n".join(lines), encoding="utf-8")
@@ -274,6 +294,11 @@ def main() -> int:
     compare_bye_budget_stub = compare_dir / "bye_budget" / "stub"
     compare_bye_budget_real = compare_dir / "bye_budget" / "real"
     compare_bye_budget_compare = compare_dir / "bye_budget" / "compare"
+    compare_nlq_budget_stub = compare_dir / "nlq_budget" / "stub"
+    compare_nlq_budget_real = compare_dir / "nlq_budget" / "real"
+    compare_budget_recommend_stub = compare_dir / "budget_recommend" / "stub"
+    compare_budget_recommend_real = compare_dir / "budget_recommend" / "real"
+    compare_budget_recommend_compare = compare_dir / "budget_recommend" / "compare"
     compare_snapshots = compare_dir / "snapshots"
     run_stub.mkdir(parents=True, exist_ok=True)
     run_real.mkdir(parents=True, exist_ok=True)
@@ -281,6 +306,11 @@ def main() -> int:
     compare_bye_budget_stub.mkdir(parents=True, exist_ok=True)
     compare_bye_budget_real.mkdir(parents=True, exist_ok=True)
     compare_bye_budget_compare.mkdir(parents=True, exist_ok=True)
+    compare_nlq_budget_stub.mkdir(parents=True, exist_ok=True)
+    compare_nlq_budget_real.mkdir(parents=True, exist_ok=True)
+    compare_budget_recommend_stub.mkdir(parents=True, exist_ok=True)
+    compare_budget_recommend_real.mkdir(parents=True, exist_ok=True)
+    compare_budget_recommend_compare.mkdir(parents=True, exist_ok=True)
     compare_snapshots.mkdir(parents=True, exist_ok=True)
     commands_file = compare_dir / "commands.sh"
     if not commands_file.exists():
@@ -474,6 +504,113 @@ def main() -> int:
             return rc
         bye_budget_cmds.append(bye_budget_compare_cmd)
 
+    nlq_budget_cmds: list[list[str]] = []
+    if args.with_nlq_budget_sweep:
+        nlq_sweep_script = ROOT / "scripts" / "sweep_nlq_budgets.py"
+        common = [
+            "--uids-file",
+            str(effective_uids_file) if effective_uids_file else "",
+            "--strict-uids",
+            "--budgets",
+            str(args.nlq_budgets),
+            "--mode",
+            str(args.nlq_mode),
+            "--seed",
+            "0",
+            "--top-k",
+            "6",
+            "--no-allow-gt-fallback",
+            "--hard-constraints",
+            "--safety-report",
+        ]
+        if args.nlq_eval_script:
+            common.extend(["--eval-script", str(args.nlq_eval_script)])
+
+        cmd_stub_nlq = [
+            sys.executable,
+            str(nlq_sweep_script),
+            "--json_dir",
+            str(run_stub / "json"),
+            "--index_dir",
+            str(run_stub / "cache"),
+            "--out_dir",
+            str(compare_nlq_budget_stub),
+            *common,
+        ]
+        cmd_real_nlq = [
+            sys.executable,
+            str(nlq_sweep_script),
+            "--json_dir",
+            str(run_real / "json"),
+            "--index_dir",
+            str(run_real / "cache"),
+            "--out_dir",
+            str(compare_nlq_budget_real),
+            *common,
+        ]
+        for cmd, lp in (
+            (cmd_stub_nlq, compare_dir / "nlq_budget_stub"),
+            (cmd_real_nlq, compare_dir / "nlq_budget_real"),
+        ):
+            rc = _run(cmd, cwd=ROOT, log_prefix=lp, commands_file=commands_file)
+            if rc != 0:
+                return rc
+            nlq_budget_cmds.append(cmd)
+
+    budget_recommend_cmds: list[list[str]] = []
+    if args.with_budget_recommend:
+        if not args.with_bye_budget_sweep or not args.with_nlq_budget_sweep:
+            print("error=--with-budget-recommend requires --with-bye-budget-sweep and --with-nlq-budget-sweep")
+            return 6
+        recommend_script = ROOT / "scripts" / "recommend_budget.py"
+        cmd_stub_reco = [
+            sys.executable,
+            str(recommend_script),
+            "--bye_dir",
+            str(compare_bye_budget_stub),
+            "--nlq_dir",
+            str(compare_nlq_budget_stub),
+            "--out_dir",
+            str(compare_budget_recommend_stub),
+            "--label",
+            "stub",
+            "--primary-bye-metric",
+            str(args.bye_primary_metric),
+            "--primary-nlq-metric",
+            "nlq_full_hit_at_k_strict",
+        ]
+        cmd_real_reco = [
+            sys.executable,
+            str(recommend_script),
+            "--bye_dir",
+            str(compare_bye_budget_real),
+            "--nlq_dir",
+            str(compare_nlq_budget_real),
+            "--out_dir",
+            str(compare_budget_recommend_real),
+            "--label",
+            "real",
+            "--primary-bye-metric",
+            str(args.bye_primary_metric),
+            "--primary-nlq-metric",
+            "nlq_full_hit_at_k_strict",
+        ]
+        if args.budget_weights_json:
+            cmd_stub_reco.extend(["--weights-json", str(args.budget_weights_json)])
+            cmd_real_reco.extend(["--weights-json", str(args.budget_weights_json)])
+        if args.budget_gates_json:
+            cmd_stub_reco.extend(["--gates-json", str(args.budget_gates_json)])
+            cmd_real_reco.extend(["--gates-json", str(args.budget_gates_json)])
+
+        for cmd, lp in (
+            (cmd_stub_reco, compare_dir / "budget_recommend_stub"),
+            (cmd_real_reco, compare_dir / "budget_recommend_real"),
+        ):
+            rc = _run(cmd, cwd=ROOT, log_prefix=lp, commands_file=commands_file)
+            if rc != 0:
+                return rc
+            budget_recommend_cmds.append(cmd)
+
     fig_cmds: list[list[str]] = []
     if args.with_figs:
         stub_cross = run_stub / "eval"
@@ -549,6 +686,8 @@ def main() -> int:
         cmd_real=cmd_real,
         cmd_bye_compare=cmd_bye_compare,
         cmd_bye_budget=bye_budget_cmds,
+        cmd_nlq_budget=nlq_budget_cmds,
+        cmd_budget_recommend=budget_recommend_cmds,
         fig_cmds=fig_cmds,
     )
 
@@ -565,6 +704,21 @@ def main() -> int:
                 print(f"budgets_matched={payload.get('budgets_matched')}")
             except Exception:
                 pass
+    if args.with_nlq_budget_sweep:
+        print(f"nlq_budget_stub_saved={compare_nlq_budget_stub}")
+        print(f"nlq_budget_real_saved={compare_nlq_budget_real}")
+    if args.with_budget_recommend:
+        print(f"budget_recommend_stub_saved={compare_budget_recommend_stub}")
+        print(f"budget_recommend_real_saved={compare_budget_recommend_real}")
+        for label, path in (("stub", compare_budget_recommend_stub), ("real", compare_budget_recommend_real)):
+            s = path / "recommend_summary.json"
+            if s.exists():
+                try:
+                    payload = json.loads(s.read_text(encoding="utf-8"))
+                    print(f"budgets_joined_{label}={payload.get('budgets_joined')}")
+                    print(f"top1_{label}={payload.get('top1_budget_key')}")
+                except Exception:
+                    pass
     return 0
 
 

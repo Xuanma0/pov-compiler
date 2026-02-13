@@ -55,6 +55,39 @@ def _write_perception_complete(run_dir: Path, uid: str) -> None:
     (pdir / "report.md").write_text("# ok", encoding="utf-8")
 
 
+def _write_fake_eval_script(path: Path) -> None:
+    lines = [
+        "import argparse, csv, json",
+        "from pathlib import Path",
+        "p=argparse.ArgumentParser()",
+        "p.add_argument('--json', required=True)",
+        "p.add_argument('--index', default='')",
+        "p.add_argument('--out_dir', required=True)",
+        "p.add_argument('--budget-max-total-s', type=float, default=60.0)",
+        "p.add_argument('--budget-max-tokens', type=int, default=200)",
+        "p.add_argument('--budget-max-decisions', type=int, default=12)",
+        "p.add_argument('--mode', default='hard_pseudo_nlq')",
+        "p.add_argument('--seed', type=int, default=0)",
+        "p.add_argument('--top-k', type=int, default=6)",
+        "p.add_argument('--allow-gt-fallback', action='store_true')",
+        "p.add_argument('--no-allow-gt-fallback', action='store_true')",
+        "p.add_argument('--hard-constraints', default='on')",
+        "p.add_argument('--no-safety-gate', action='store_true')",
+        "a=p.parse_args()",
+        "out=Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)",
+        "score=max(0.0, min(1.0, a.budget_max_total_s/100.0))",
+        "rows=[{'variant':'full','hit_at_k_strict':score,'hit_at_1_strict':score*0.8,'top1_in_distractor':max(0.0,0.6-score*0.4),'mrr':score*0.9}]",
+        "with (out/'nlq_results.csv').open('w', encoding='utf-8', newline='') as f:",
+        " w=csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); [w.writerow(r) for r in rows]",
+        "(out/'nlq_summary.csv').write_text('query_type,variant,hit_at_k_strict\\n', encoding='utf-8')",
+        "safety={'critical_fn_rate':max(0.0,0.5-score*0.3),'variant_stats':{'full':{'critical_fn_rate':max(0.0,0.5-score*0.3)}}}",
+        "(out/'safety_report.json').write_text(json.dumps(safety), encoding='utf-8')",
+        "(out/'nlq_report.md').write_text('# fake', encoding='utf-8')",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     root = tmp_path / "ego_root"
     root.mkdir(parents=True, exist_ok=True)
@@ -76,6 +109,8 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     _write_fake_tool(fake_bye / "Gateway" / "scripts" / "lint_run_package.py")
     _write_fake_tool(fake_bye / "report_run.py", writes_report=True)
     _write_fake_tool(fake_bye / "run_regression_suite.py")
+    fake_eval = tmp_path / "fake_eval_nlq.py"
+    _write_fake_eval_script(fake_eval)
 
     cmd = [
         sys.executable,
@@ -92,6 +127,12 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
         "--with-bye-budget-sweep",
         "--bye-budgets",
         "20/50/4,40/100/8",
+        "--with-nlq-budget-sweep",
+        "--nlq-budgets",
+        "20/50/4,40/100/8",
+        "--with-budget-recommend",
+        "--nlq-eval-script",
+        str(fake_eval),
         "--bye-root",
         str(fake_bye),
         "--bye-skip-regression",
@@ -118,6 +159,10 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "bye_budget" / "compare" / "tables" / "table_budget_compare.md").exists()
     assert (compare_dir / "bye_budget" / "compare" / "figures" / "fig_bye_primary_vs_budget_seconds_compare.png").exists()
     assert (compare_dir / "bye_budget" / "compare" / "figures" / "fig_bye_primary_delta_vs_budget_seconds.png").exists()
+    assert (compare_dir / "nlq_budget" / "stub" / "aggregate" / "metrics_by_budget.csv").exists()
+    assert (compare_dir / "nlq_budget" / "real" / "aggregate" / "metrics_by_budget.csv").exists()
+    assert (compare_dir / "budget_recommend" / "stub" / "tables" / "table_budget_recommend.csv").exists()
+    assert (compare_dir / "budget_recommend" / "real" / "tables" / "table_budget_recommend.csv").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
 

@@ -464,6 +464,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n", type=int, default=10, help="Query count knob")
     parser.add_argument("--seed", type=int, default=0, help="Query seed")
     parser.add_argument("--top-k", "--topk", dest="top_k", type=int, default=6, help="Query top_k")
+    parser.add_argument("--budget-max-total-s", type=float, default=None, help="Single-budget override max_total_s")
+    parser.add_argument("--budget-max-tokens", type=int, default=None, help="Single-budget override max_tokens")
+    parser.add_argument("--budget-max-decisions", type=int, default=None, help="Single-budget override max_decisions")
 
     parser.set_defaults(allow_gt_fallback=None)
     parser.add_argument("--allow-gt-fallback", dest="allow_gt_fallback", action="store_true")
@@ -533,6 +536,12 @@ def main() -> int:
         "max_tokens": [max(budgets_cfg.get("max_tokens", [200]))],
         "max_decisions": [max(budgets_cfg.get("max_decisions", [12]))],
     }
+    if args.budget_max_total_s is not None:
+        budgets["max_total_s"] = [float(args.budget_max_total_s)]
+    if args.budget_max_tokens is not None:
+        budgets["max_tokens"] = [int(args.budget_max_tokens)]
+    if args.budget_max_decisions is not None:
+        budgets["max_decisions"] = [int(args.budget_max_decisions)]
 
     allow_gt_fallback = _resolve_allow_gt_fallback(str(args.mode), args.allow_gt_fallback)
 

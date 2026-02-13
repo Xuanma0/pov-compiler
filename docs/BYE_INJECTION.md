@@ -112,3 +112,14 @@ Main compare artifacts:
 - `figures/fig_bye_primary_vs_budget_seconds_compare.(png/pdf)`
 - `figures/fig_bye_primary_delta_vs_budget_seconds.(png/pdf)`
 - `compare_summary.json`
+
+You can combine BYE and NLQ budget curves with a multi-objective recommender:
+
+```bash
+python scripts/recommend_budget.py \
+  --bye_dir data/outputs/<run>/compare/bye_budget/stub \
+  --nlq_dir data/outputs/<run>/compare/nlq_budget/stub \
+  --out_dir data/outputs/<run>/compare/budget_recommend/stub
+```
+
+This outputs ranked budgets (`table_budget_recommend.*`) with gate filtering and objective curves.

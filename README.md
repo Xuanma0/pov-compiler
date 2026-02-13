@@ -103,8 +103,10 @@ docs/
 | `scripts\export_bye_events.py` / `scripts\bye_regression_smoke.py` | BYE offline injection export and optional lint/report/regression loop | `--json/--pov_json --out_dir --bye_root --strict` | `events/events_v1.jsonl`, `run_package/`, `logs/`, `snapshot.json` |
 | `scripts\sweep_bye_budgets.py` | BYE metrics over budget points (strict UID matching by default) | `--pov-json-dir --uids-file --budgets --out-dir [--strict-uids]` | `aggregate/metrics_by_budget.*`, `figures/fig_bye_*`, `snapshot.json` |
 | `scripts\compare_bye_budget_sweeps.py` | Compare two BYE budget sweeps (A/B curve + delta) | `--a_dir/--a_csv --b_dir/--b_csv --out_dir --primary-metric` | `tables/table_budget_compare.*`, `figures/fig_bye_primary_*`, `compare_summary.json` |
+| `scripts\sweep_nlq_budgets.py` | NLQ hard/pseudo evaluation over explicit budget points (strict UID matching by default) | `--json_dir --index_dir --uids-file --budgets --out_dir` | `aggregate/metrics_by_budget.*`, `figures/fig_nlq_*`, `snapshot.json` |
+| `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
-| `scripts\run_ab_bye_compare.py` | Reproducible AB runner (stub vs real) + optional BYE budget sweep compare | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*` |
+| `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ budget sweeps and budget recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-budget-recommend` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/budget_recommend/*` |
 
 ## Output Directory Contract
 
@@ -217,7 +219,7 @@ D:\Ego4D_Dataset
 Run reproducible stub vs real on the same UID list (optional perception/NLQ/figs/BYE):
 
 ```text
-python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v12 --with-perception --stub-perception-backend stub --real-perception-backend real --with-eval --with-nlq --nlq-mode hard_pseudo_nlq --with-figs --with-bye --bye-root "<YOUR_BYE_ROOT>" --bye-skip-regression --with-bye-budget-sweep --bye-budgets "20/50/4,40/100/8,60/200/12" --bye-primary-metric qualityScore
+python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v12 --with-perception --stub-perception-backend stub --real-perception-backend real --with-eval --with-nlq --nlq-mode hard_pseudo_nlq --with-figs --with-bye --bye-root "<YOUR_BYE_ROOT>" --bye-skip-regression --with-bye-budget-sweep --bye-budgets "20/50/4,40/100/8,60/200/12" --bye-primary-metric qualityScore --with-nlq-budget-sweep --nlq-budgets "20/50/4,40/100/8,60/200/12" --with-budget-recommend
 ```
 
 Main artifacts:
@@ -226,4 +228,8 @@ Main artifacts:
 - `data/outputs/ab_v12/compare/bye/table_bye_compare.md`
 - `data/outputs/ab_v12/compare/bye_budget/compare/tables/table_budget_compare.md`
 - `data/outputs/ab_v12/compare/bye_budget/compare/figures/fig_bye_primary_vs_budget_seconds_compare.png`
+- `data/outputs/ab_v12/compare/nlq_budget/stub/aggregate/metrics_by_budget.csv`
+- `data/outputs/ab_v12/compare/nlq_budget/real/aggregate/metrics_by_budget.csv`
+- `data/outputs/ab_v12/compare/budget_recommend/stub/tables/table_budget_recommend.md`
+- `data/outputs/ab_v12/compare/budget_recommend/real/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/paper_figs_compare/`
