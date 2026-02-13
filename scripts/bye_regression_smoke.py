@@ -13,6 +13,7 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from pov_compiler.integrations.bye.budget_filter import Budget, apply_budget
 from pov_compiler.integrations.bye.entrypoints import EntryPointResolver
 from pov_compiler.integrations.bye.exporter import export_bye_events_from_output_dict, write_jsonl
 from pov_compiler.integrations.bye.metrics import parse_bye_report, save_bye_metrics
@@ -70,6 +71,15 @@ def parse_args() -> argparse.Namespace:
         default="events_v1,highlights,tokens,decisions",
         help="Sections to export to BYE events jsonl",
     )
+    parser.add_argument(
+        "--budget-mode",
+        choices=["none", "filter"],
+        default="none",
+        help="Budget filter mode for exported events. Any budget value auto-enables filter mode.",
+    )
+    parser.add_argument("--budget-max-total-s", type=float, default=None, help="Max kept context duration (seconds)")
+    parser.add_argument("--budget-max-tokens", type=int, default=None, help="Max kept pov.token events")
+    parser.add_argument("--budget-max-decisions", type=int, default=None, help="Max kept pov.decision events")
     parser.add_argument("--strict", action="store_true", help="Fail on missing BYE or failed step")
     return parser.parse_args()
 
@@ -179,10 +189,26 @@ def main() -> int:
 
     video_id = _infer_video_id(output_dict, pov_json_path, args.video_id)
     include = tuple([x.strip() for x in str(args.include).split(",") if x.strip()])
+    budget = Budget(
+        max_total_s=args.budget_max_total_s,
+        max_tokens=args.budget_max_tokens,
+        max_decisions=args.budget_max_decisions,
+    )
+    budget_requested = any(x is not None for x in (args.budget_max_total_s, args.budget_max_tokens, args.budget_max_decisions))
+    budget_mode = "filter" if args.budget_mode == "filter" or budget_requested else "none"
 
     events_dir = out_dir / "events"
     events_dir.mkdir(parents=True, exist_ok=True)
     exported_events = export_bye_events_from_output_dict(output_dict, video_id=video_id, include=include, sort=True)
+    budget_stats: dict[str, Any] = {
+        "mode": budget_mode,
+        "applied": False,
+        "before_total": len(exported_events),
+        "after_total": len(exported_events),
+    }
+    if budget_mode == "filter":
+        exported_events, stats = apply_budget(exported_events, budget, keep_base_events=True)
+        budget_stats = {"mode": "filter", "applied": True, **stats}
     events_jsonl_path = events_dir / "events_v1.jsonl"
     write_jsonl(exported_events, str(events_jsonl_path))
 
@@ -211,6 +237,7 @@ def main() -> int:
             "report_dir": str(out_dir / "report"),
         },
         "counts": {"events_total": int(len(exported_events))},
+        "budget": budget_stats,
         "bye": {
             "root": None,
             "entrypoints_resolved": {"lint": None, "report": None, "regression": None},
@@ -376,6 +403,9 @@ def main() -> int:
     snapshot_path = _write_snapshot(snapshot, out_dir)
     print(f"video_id={video_id}")
     print(f"events_total={len(exported_events)}")
+    if budget_stats.get("applied"):
+        print(f"budget_kept_duration_s={budget_stats.get('kept_duration_s', 0.0)}")
+        print(f"budget_compression_ratio={budget_stats.get('compression_ratio', 1.0)}")
     print(f"bye_root={bye_root}")
     print(f"saved_events={events_jsonl_path}")
     print(f"saved_snapshot={snapshot_path}")
@@ -390,4 +420,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

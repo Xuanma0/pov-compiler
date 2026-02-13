@@ -89,6 +89,9 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
         "--jobs",
         "1",
         "--with-bye",
+        "--with-bye-budget-sweep",
+        "--bye-budgets",
+        "20/50/4,40/100/8",
         "--bye-root",
         str(fake_bye),
         "--bye-skip-regression",
@@ -109,5 +112,7 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "bye" / "table_bye_compare.csv").exists()
     assert (compare_dir / "bye" / "table_bye_compare.md").exists()
     assert (compare_dir / "bye" / "compare_summary.json").exists()
+    assert (compare_dir / "bye_budget" / "stub" / "aggregate" / "metrics_by_budget.csv").exists()
+    assert (compare_dir / "bye_budget" / "real" / "aggregate" / "metrics_by_budget.csv").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()

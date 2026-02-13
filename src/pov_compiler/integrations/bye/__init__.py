@@ -1,3 +1,4 @@
+from pov_compiler.integrations.bye.budget_filter import Budget, apply_budget
 from pov_compiler.integrations.bye.entrypoints import EntryPointResolution, EntryPointResolver
 from pov_compiler.integrations.bye.exporter import export_bye_events_from_output_dict, write_jsonl
 from pov_compiler.integrations.bye.metrics import parse_bye_report, save_bye_metrics
@@ -11,8 +12,10 @@ from pov_compiler.integrations.bye.schema import ByeEventV1, validate_minimal
 
 __all__ = [
     "ByeEventV1",
+    "Budget",
     "EntryPointResolution",
     "EntryPointResolver",
+    "apply_budget",
     "build_run_package",
     "export_bye_events_from_output_dict",
     "find_bye_entrypoints",

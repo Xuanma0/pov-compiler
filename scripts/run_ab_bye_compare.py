@@ -44,6 +44,14 @@ def parse_args() -> argparse.Namespace:
     _parse_bool_with_neg(parser, "with-bye", default=False)
     parser.add_argument("--bye-root", default=None)
     _parse_bool_with_neg(parser, "bye-skip-regression", default=True)
+    bye_budget_group = parser.add_mutually_exclusive_group()
+    bye_budget_group.add_argument("--with-bye-budget-sweep", dest="with_bye_budget_sweep", action="store_true")
+    bye_budget_group.add_argument("--no-with-bye-budget-sweep", dest="with_bye_budget_sweep", action="store_false")
+    # Backward-compatible alias.
+    bye_budget_group.add_argument("--bye-budget-sweep", dest="with_bye_budget_sweep", action="store_true")
+    parser.set_defaults(with_bye_budget_sweep=False)
+    parser.add_argument("--bye-budgets", default="20/50/4,40/100/8,60/200/12")
+    parser.add_argument("--bye-primary-metric", default="qualityScore")
     parser.add_argument("--bye-video-mode", choices=["none", "copy", "link"], default="none")
     parser.add_argument("--bye-lint", default=None)
     parser.add_argument("--bye-report", default=None)
@@ -207,6 +215,7 @@ def _write_compare_readme(
     cmd_stub: list[str],
     cmd_real: list[str],
     cmd_bye_compare: list[str],
+    cmd_bye_budget: list[list[str]],
     fig_cmds: list[list[str]],
 ) -> None:
     lines = [
@@ -224,6 +233,8 @@ def _write_compare_readme(
         _render_cmd(cmd_real),
         _render_cmd(cmd_bye_compare),
     ]
+    for cmd in cmd_bye_budget:
+        lines.append(_render_cmd(cmd))
     for cmd in fig_cmds:
         lines.append(_render_cmd(cmd))
     lines.extend(
@@ -237,6 +248,7 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye' / 'table_bye_compare.csv'}`",
             f"- `{out_dir / 'compare' / 'bye' / 'table_bye_compare.md'}`",
             f"- `{out_dir / 'compare' / 'bye' / 'compare_summary.json'}`",
+            f"- `{out_dir / 'compare' / 'bye_budget'}`",
             f"- `{out_dir / 'compare' / 'commands.sh'}`",
             f"- `{out_dir / 'compare' / 'snapshots'}`",
         ]
@@ -251,10 +263,14 @@ def main() -> int:
     run_real = out_dir / "run_real"
     compare_dir = out_dir / "compare"
     compare_bye_dir = compare_dir / "bye"
+    compare_bye_budget_stub = compare_dir / "bye_budget" / "stub"
+    compare_bye_budget_real = compare_dir / "bye_budget" / "real"
     compare_snapshots = compare_dir / "snapshots"
     run_stub.mkdir(parents=True, exist_ok=True)
     run_real.mkdir(parents=True, exist_ok=True)
     compare_bye_dir.mkdir(parents=True, exist_ok=True)
+    compare_bye_budget_stub.mkdir(parents=True, exist_ok=True)
+    compare_bye_budget_real.mkdir(parents=True, exist_ok=True)
     compare_snapshots.mkdir(parents=True, exist_ok=True)
     commands_file = compare_dir / "commands.sh"
     if not commands_file.exists():
@@ -351,6 +367,56 @@ def main() -> int:
     if rc != 0:
         return rc
 
+    bye_budget_cmds: list[list[str]] = []
+    if args.with_bye_budget_sweep:
+        if not args.with_bye:
+            print("error=--with-bye-budget-sweep requires --with-bye")
+            return 4
+        if not bye_root and args.strict:
+            print("error=BYE budget sweep strict mode requires --bye-root or BYE_ROOT env")
+            return 4
+        sweep_script = ROOT / "scripts" / "sweep_bye_budgets.py"
+        common = [
+            "--uids-file",
+            str(args.uids_file),
+            "--budgets",
+            str(args.bye_budgets),
+            "--primary-metric",
+            str(args.bye_primary_metric),
+            "--formats",
+            "png,pdf",
+        ]
+        if bye_root:
+            common.extend(["--bye-root", str(bye_root)])
+        if args.bye_skip_regression:
+            common.append("--skip-regression")
+        cmd_stub_budgets = [
+            sys.executable,
+            str(sweep_script),
+            "--pov-json-dir",
+            str(run_stub / "json"),
+            "--out-dir",
+            str(compare_bye_budget_stub),
+            *common,
+        ]
+        cmd_real_budgets = [
+            sys.executable,
+            str(sweep_script),
+            "--pov-json-dir",
+            str(run_real / "json"),
+            "--out-dir",
+            str(compare_bye_budget_real),
+            *common,
+        ]
+        for cmd, lp in (
+            (cmd_stub_budgets, compare_dir / "bye_budget_stub"),
+            (cmd_real_budgets, compare_dir / "bye_budget_real"),
+        ):
+            rc = _run(cmd, cwd=ROOT, log_prefix=lp, commands_file=commands_file)
+            if rc != 0:
+                return rc
+            bye_budget_cmds.append(cmd)
+
     fig_cmds: list[list[str]] = []
     if args.with_figs:
         stub_cross = run_stub / "eval"
@@ -425,6 +491,7 @@ def main() -> int:
         cmd_stub=cmd_stub,
         cmd_real=cmd_real,
         cmd_bye_compare=cmd_bye_compare,
+        cmd_bye_budget=bye_budget_cmds,
         fig_cmds=fig_cmds,
     )
 
