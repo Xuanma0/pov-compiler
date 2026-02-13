@@ -32,6 +32,12 @@ data/cache/
 *.tar
 *.npz
 *.pth
+*.pt
+*.task
+*.onnx
+*.engine
+weights/
+assets/mediapipe/*.task
 
 # Editor
 .vscode/
