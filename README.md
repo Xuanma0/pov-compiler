@@ -209,3 +209,17 @@ D:\Ego4D_Dataset
 - `docs/REPRO.md`
 - `docs/FAQ.md`
 - `docs/BYE_INJECTION.md`
+
+## AB v1.2 Quick Command
+
+Run reproducible stub vs real on the same UID list (optional perception/NLQ/figs/BYE):
+
+```text
+python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v12 --with-perception --stub-perception-backend stub --real-perception-backend real --with-eval --with-nlq --nlq-mode hard_pseudo_nlq --with-figs --with-bye --bye-root "<YOUR_BYE_ROOT>" --bye-skip-regression
+```
+
+Main artifacts:
+- `data/outputs/ab_v12/run_stub/summary.csv`
+- `data/outputs/ab_v12/run_real/summary.csv`
+- `data/outputs/ab_v12/compare/bye/table_bye_compare.md`
+- `data/outputs/ab_v12/compare/paper_figs_compare/`

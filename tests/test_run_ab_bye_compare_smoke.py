@@ -47,6 +47,14 @@ def _write_pipeline_json(path: Path, video_id: str) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_perception_complete(run_dir: Path, uid: str) -> None:
+    pdir = run_dir / "perception" / uid
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "perception.json").write_text(json.dumps({"video_id": uid}), encoding="utf-8")
+    (pdir / "events_v0.json").write_text(json.dumps({"video_id": uid, "events_v0": []}), encoding="utf-8")
+    (pdir / "report.md").write_text("# ok", encoding="utf-8")
+
+
 def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     root = tmp_path / "ego_root"
     root.mkdir(parents=True, exist_ok=True)
@@ -62,6 +70,7 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
         (run_dir / "cache" / f"{uid}.index.npz").parent.mkdir(parents=True, exist_ok=True)
         (run_dir / "cache" / f"{uid}.index.npz").write_bytes(b"NPZ")
         (run_dir / "cache" / f"{uid}.index_meta.json").write_text("{}", encoding="utf-8")
+        _write_perception_complete(run_dir, uid)
 
     fake_bye = tmp_path / "fake_bye"
     _write_fake_tool(fake_bye / "Gateway" / "scripts" / "lint_run_package.py")
@@ -83,6 +92,11 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
         "--bye-root",
         str(fake_bye),
         "--bye-skip-regression",
+        "--with-perception",
+        "--stub-perception-backend",
+        "stub",
+        "--real-perception-backend",
+        "stub",
         "--min-size-bytes",
         "0",
         "--probe-candidates",
@@ -92,8 +106,8 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr or result.stdout
 
     compare_dir = out_dir / "compare"
-    assert (compare_dir / "table_bye_compare.csv").exists()
-    assert (compare_dir / "table_bye_compare.md").exists()
+    assert (compare_dir / "bye" / "table_bye_compare.csv").exists()
+    assert (compare_dir / "bye" / "table_bye_compare.md").exists()
+    assert (compare_dir / "bye" / "compare_summary.json").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
-
