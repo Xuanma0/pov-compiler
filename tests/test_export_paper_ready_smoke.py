@@ -246,6 +246,29 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_distractor_vs_budget.pdf").write_bytes(b"PDF")
     (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_chunks_by_level.png").write_bytes(b"PNG")
     (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_chunks_by_level.pdf").write_bytes(b"PDF")
+    # Optional component attribution compare input.
+    (compare_dir / "component_attr_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "component_attr_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "component_attr_cmp" / "tables" / "table_component_attribution.csv").write_text(
+        "setting,strict_value,critical_fn_rate,latency_p95_ms\nA,0.50,0.30,10.0\nD,0.62,0.24,11.0\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "component_attr_cmp" / "tables" / "table_component_attribution.md").write_text(
+        "# component attribution\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "component_attr_cmp" / "figures" / "fig_component_attribution_delta.png").write_bytes(b"PNG")
+    (compare_dir / "component_attr_cmp" / "figures" / "fig_component_attribution_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "component_attr_cmp" / "figures" / "fig_component_attribution_tradeoff.png").write_bytes(b"PNG")
+    (compare_dir / "component_attr_cmp" / "figures" / "fig_component_attribution_tradeoff.pdf").write_bytes(b"PDF")
+    (compare_dir / "component_attr_cmp" / "compare_summary.json").write_text(
+        json.dumps({"summary": {"delta_D_vs_A": 0.12}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "component_attr_cmp" / "snapshot.json").write_text(
+        json.dumps({"inputs": {"selected_uids": 2}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -271,6 +294,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "repo_policy_sweep"),
         "--repo-query-selection-sweep-dir",
         str(compare_dir / "repo_query_selection_sweep"),
+        "--component-attribution-dir",
+        str(compare_dir / "component_attr_cmp"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -323,6 +348,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_repo_query_selection_quality_vs_budget.png").exists()
     assert (out_dir / "figures" / "fig_repo_query_selection_distractor_vs_budget.png").exists()
     assert (out_dir / "figures" / "fig_repo_query_selection_chunks_by_level.png").exists()
+    assert (out_dir / "component_attribution" / "table_component_attribution.csv").exists()
+    assert (out_dir / "component_attribution" / "table_component_attribution.md").exists()
+    assert (out_dir / "figures" / "fig_component_attribution_delta.png").exists()
+    assert (out_dir / "figures" / "fig_component_attribution_tradeoff.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

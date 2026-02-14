@@ -36,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", default="hard_pseudo_nlq")
     parser.add_argument("--top-k", type=int, default=6)
     parser.add_argument("--policy", choices=["fixed", "adaptive"], default="fixed")
+    _parse_bool_with_neg(parser, "context-use-repo", default=False)
+    parser.add_argument("--repo-read-policy", default="budgeted_topk")
+    parser.add_argument("--repo-budget", default=None)
     parser.add_argument("--adaptive-gates-json", default=None)
     parser.add_argument("--adaptive-targets-json", default=None)
     _parse_bool_with_neg(parser, "strict-uids", default=True)
@@ -210,6 +213,9 @@ def _collect_uid_metric_rows(
     policy: str,
     adaptive_gates: dict[str, Any],
     adaptive_targets: dict[str, Any],
+    context_use_repo: bool,
+    repo_read_policy: str,
+    repo_budget: str | None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if policy == "adaptive":
@@ -222,6 +228,9 @@ def _collect_uid_metric_rows(
                 budget_policy="adaptive",
                 policy_gates=adaptive_gates,
                 policy_targets=adaptive_targets,
+                context_use_repo=bool(context_use_repo),
+                repo_read_policy=str(repo_read_policy),
+                repo_budget=str(repo_budget) if repo_budget else None,
                 allow_gt_fallback=False,
                 nlq_mode=str(mode),
                 mode="budgeted",
@@ -265,6 +274,9 @@ def _collect_uid_metric_rows(
                 budgets=[budget],
                 budget_policy="fixed",
                 fixed_budget=budget.key,
+                context_use_repo=bool(context_use_repo),
+                repo_read_policy=str(repo_read_policy),
+                repo_budget=str(repo_budget) if repo_budget else None,
                 allow_gt_fallback=False,
                 nlq_mode=str(mode),
                 mode="budgeted",
@@ -405,6 +417,9 @@ def main() -> int:
             policy=str(args.policy),
             adaptive_gates=adaptive_gates,
             adaptive_targets=adaptive_targets,
+            context_use_repo=bool(args.context_use_repo),
+            repo_read_policy=str(args.repo_read_policy),
+            repo_budget=str(args.repo_budget) if args.repo_budget else None,
         )
         per_uid_rows.extend(uid_rows)
         run_meta.extend(
@@ -435,6 +450,9 @@ def main() -> int:
             "num_uids": len(selected_uids),
             "runs_total": len(rows),
             "policy": str(args.policy),
+            "context_use_repo": bool(args.context_use_repo),
+            "repo_read_policy": str(args.repo_read_policy),
+            "repo_budget": str(args.repo_budget) if args.repo_budget else "",
         }
         metric_cols = [
             "hit@k_strict",
@@ -476,6 +494,9 @@ def main() -> int:
             "mode": str(args.mode),
             "top_k": int(args.top_k),
             "policy": str(args.policy),
+            "context_use_repo": bool(args.context_use_repo),
+            "repo_read_policy": str(args.repo_read_policy),
+            "repo_budget": str(args.repo_budget) if args.repo_budget else None,
             "adaptive_gates": adaptive_gates,
             "adaptive_targets": adaptive_targets,
             "strict_uids": bool(args.strict_uids),
@@ -496,6 +517,8 @@ def main() -> int:
     print(f"selection_mode={selection.get('selection_mode')}")
     print(f"selected_uids={len(selected_uids)}")
     print(f"budgets={len(budgets)}")
+    print(f"context_use_repo={str(bool(args.context_use_repo)).lower()}")
+    print(f"repo_read_policy={str(args.repo_read_policy)}")
     print(f"saved_metrics_csv={metrics_csv}")
     print(f"saved_metrics_md={metrics_md}")
     for fig in figure_paths:

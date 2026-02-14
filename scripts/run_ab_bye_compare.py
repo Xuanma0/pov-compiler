@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", required=True, help="Ego root")
     parser.add_argument("--uids-file", default=None, help="Optional UID list file for reproducible AB")
     parser.add_argument("--out_dir", required=True, help="Output root")
+    parser.add_argument("--run-label", default="", help="Optional run label for trace/snapshot naming")
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--n", type=int, default=None)
 
@@ -41,6 +42,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nlq-budgets", default="20/50/4,40/100/8,60/200/12")
     _parse_bool_with_neg(parser, "with-streaming-budget", default=True)
     parser.add_argument("--streaming-step-s", type=float, default=8.0)
+    _parse_bool_with_neg(parser, "with-repo", default=False)
+    parser.add_argument("--repo-read-policy", default="query_aware")
+    parser.add_argument("--repo-budget", default=None)
     _parse_bool_with_neg(parser, "with-figs", default=False)
     _parse_bool_with_neg(parser, "export-paper-ready", default=False)
     parser.add_argument("--paper-ready-format", choices=["md", "csv", "md+csv"], default="md+csv")
@@ -229,6 +233,7 @@ def _copy_snapshots(run_dir: Path, label: str, snapshots_root: Path) -> list[str
 def _write_compare_readme(
     out_dir: Path,
     *,
+    run_label: str,
     uids_file: Path | None,
     cmd_stub: list[str],
     cmd_real: list[str],
@@ -244,6 +249,7 @@ def _write_compare_readme(
     lines = [
         "# AB v1.2 Compare",
         "",
+        f"- run_label: `{run_label}`",
         f"- uids_file: `{uids_file}`",
         f"- run_stub_dir: `{out_dir / 'run_stub'}`",
         f"- run_real_dir: `{out_dir / 'run_real'}`",
@@ -624,6 +630,10 @@ def main() -> int:
             "--formats",
             "png,pdf",
         ]
+        common.append("--context-use-repo" if bool(args.with_repo) else "--no-context-use-repo")
+        common.extend(["--repo-read-policy", str(args.repo_read_policy)])
+        if args.repo_budget:
+            common.extend(["--repo-budget", str(args.repo_budget)])
         cmd_stub_stream = [
             sys.executable,
             str(streaming_sweep_script),
@@ -843,6 +853,7 @@ def main() -> int:
     _copy_snapshots(run_real, "real", compare_snapshots)
     _write_compare_readme(
         out_dir,
+        run_label=str(args.run_label),
         uids_file=effective_uids_file,
         cmd_stub=cmd_stub,
         cmd_real=cmd_real,
@@ -859,6 +870,9 @@ def main() -> int:
     print(f"saved_stub={run_stub}")
     print(f"saved_real={run_real}")
     print(f"saved_compare={compare_dir}")
+    print(f"run_label={str(args.run_label)}")
+    print(f"with_repo={str(bool(args.with_repo)).lower()}")
+    print(f"repo_read_policy={str(args.repo_read_policy)}")
     if args.with_bye_budget_sweep:
         print(f"bye_budget_stub_saved={compare_bye_budget_stub}")
         print(f"bye_budget_real_saved={compare_bye_budget_real}")

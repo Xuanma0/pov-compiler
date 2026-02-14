@@ -119,6 +119,7 @@ docs/
 | `scripts\sweep_repo_budgets.py` | RepoV0 legacy budget sweep | `--json --out_dir --budgets` | `aggregate/metrics_by_budget.*`, `figures/fig_repo_quality_vs_budget_seconds.*`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ/streaming budget sweeps, reranker sweep, and recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-reranker-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/reranker_sweep/*`, `compare/budget_recommend/*` |
+| `scripts\run_component_attribution.py` | Component Attribution Panel (A/B/C/D) for Repo vs Perception vs Streaming contribution under same UID/budget/query set | `--root --uids-file --out_dir --budgets --with-nlq --with-streaming-budget --with-perception` | `run_A/..run_D/`, `compare/tables/table_component_attribution.*`, `compare/figures/fig_component_attribution_*`, `compare_summary.json`, `snapshot.json` |
 
 ## Output Directory Contract
 
@@ -280,6 +281,25 @@ Key outputs:
 - `.../streaming_repo_compare_v118_demo/compare/figures/fig_streaming_repo_compare_safety_latency.png`
 - `data/outputs/ab_v12/compare/paper_ready/figures/fig_budget_primary_vs_seconds_panel.png`
 - `data/outputs/ab_v12/compare/paper_figs_compare/`
+
+## v1.19 Component Attribution Panel
+
+Run four fixed settings on the same UID list and budgets:
+
+- `A`: baseline (stub perception + non-repo)
+- `B`: `A + repo(query_aware)`
+- `C`: `A + real perception(strict)`
+- `D`: `A + repo + real perception(strict)`
+
+```text
+python scripts\run_component_attribution.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids_match_real_n6.txt --out_dir data\outputs\component_attr_v119_demo --jobs 1 --budgets "20/50/4,60/200/12" --with-nlq --nlq-mode hard_pseudo_nlq --with-perception --perception-fps 5 --perception-max-frames 300 --real-perception-backend real --real-perception-strict --stub-perception-backend stub --with-streaming-budget --streaming-step-s 8 --query "anchor=turn_head top_k=6" --query "decision=ATTENTION_TURN_HEAD top_k=6"
+```
+
+Key outputs:
+- `.../component_attr_v119_demo/compare/tables/table_component_attribution.csv`
+- `.../component_attr_v119_demo/compare/figures/fig_component_attribution_delta.png`
+- `.../component_attr_v119_demo/compare/figures/fig_component_attribution_tradeoff.png`
+- `.../component_attr_v119_demo/compare/compare_summary.json`
 
 ## Streaming Budget Policy (v1.6)
 

@@ -55,6 +55,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from sweep_repo_query_selection.py output",
     )
     parser.add_argument(
+        "--component-attribution-dir",
+        default=None,
+        help="Optional directory from run_component_attribution.py compare/ output",
+    )
+    parser.add_argument(
         "--reranker-sweep-dir",
         default=None,
         help="Optional directory from sweep_reranker.py output",
@@ -946,6 +951,52 @@ def main() -> int:
             except Exception:
                 pass
 
+    component_attribution: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "summary": {},
+    }
+    if args.component_attribution_dir:
+        ca_dir = Path(args.component_attribution_dir)
+        component_attribution["enabled"] = True
+        component_attribution["source_dir"] = str(ca_dir)
+        dst_root = out_dir / "component_attribution"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            ca_dir / "tables" / "table_component_attribution.csv",
+            ca_dir / "tables" / "table_component_attribution.md",
+            ca_dir / "compare_summary.json",
+            ca_dir / "snapshot.json",
+            ca_dir / "figures" / "fig_component_attribution_delta.png",
+            ca_dir / "figures" / "fig_component_attribution_delta.pdf",
+            ca_dir / "figures" / "fig_component_attribution_tradeoff.png",
+            ca_dir / "figures" / "fig_component_attribution_tradeoff.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        component_attribution["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        summary_src = ca_dir / "compare_summary.json"
+        if summary_src.exists():
+            try:
+                payload = json.loads(summary_src.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    component_attribution["summary"] = dict(payload.get("summary", payload))
+            except Exception:
+                pass
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -1040,6 +1091,17 @@ def main() -> int:
             )
         else:
             report_lines.append("- repo_query_selection_sweep: source provided but artifacts missing.")
+    if args.component_attribution_dir:
+        if component_attribution.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- component_attribution_dir: `{component_attribution.get('source_dir')}`",
+                    f"- component_attribution_files: `{component_attribution.get('copied_files')}`",
+                    f"- component_attribution_summary: `{json.dumps(component_attribution.get('summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- component_attribution: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -1080,6 +1142,7 @@ def main() -> int:
             "repo_query_selection_sweep_dir": str(args.repo_query_selection_sweep_dir)
             if args.repo_query_selection_sweep_dir
             else None,
+            "component_attribution_dir": str(args.component_attribution_dir) if args.component_attribution_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -1101,6 +1164,7 @@ def main() -> int:
             "reranker_sweep": reranker_sweep,
             "repo_policy_sweep": repo_policy_sweep,
             "repo_query_selection_sweep": repo_query_selection_sweep,
+            "component_attribution": component_attribution,
             "report_md": str(report_path),
         },
     }
