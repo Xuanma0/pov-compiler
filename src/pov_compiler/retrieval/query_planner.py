@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
@@ -24,27 +25,23 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 
 
 def _append(candidates: list[QueryCandidate], seen: set[str], query: str, reason: str, priority: int) -> None:
-    query = str(query).strip()
-    if not query or query in seen:
+    q = str(query).strip()
+    if not q or q in seen:
         return
-    candidates.append(QueryCandidate(query=query, reason=str(reason), priority=int(priority)))
-    seen.add(query)
+    candidates.append(QueryCandidate(query=q, reason=str(reason), priority=int(priority)))
+    seen.add(q)
 
 
 def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]]:
-    text = str(text_raw).lower()
+    text = str(text_raw or "").lower()
     constraints: dict[str, Any] = {}
     flags = {"anchor": False, "token": False, "decision": False, "time": False}
 
-    first_keywords = ["first", "earliest", "第一次", "最先", "最早"]
-    last_keywords = ["last", "latest", "最后一次", "最后", "最近一次"]
-    after_scene_keywords = [
-        "after scene change",
-        "after the scene changed",
-        "场景变化后",
-        "场景变化之后",
-        "之后",
-    ]
+    first_keywords = ["first", "earliest", "for the first time", "第一次", "最早", "绗竴娆"]
+    last_keywords = ["last", "latest", "for the last time", "最后一次", "最近一次", "鏈€鍚庝竴娆"]
+    place_keywords = ["place", "area", "location", "environment", "区域", "地点", "场景", "地段"]
+    after_scene_keywords = ["after scene change", "after the scene changed", "场景变化后", "场景变化之后"]
+
     turn_keywords = [
         "look around",
         "looking around",
@@ -59,18 +56,11 @@ def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]
         "转头",
         "扫视",
         "看一眼",
+        "寮犳湜",
+        "鍥炲ご",
+        "宸﹀彸",
     ]
-    stop_keywords = [
-        "stop",
-        "pause",
-        "paused",
-        "stopped",
-        "停下",
-        "停住",
-        "站住",
-        "暂停",
-        "观察",
-    ]
+    stop_keywords = ["stop", "pause", "paused", "stopped", "停下", "停住", "站住", "暂停", "观察", "鍋滀笅", "鍋滀綇"]
     scene_keywords = [
         "door",
         "elevator",
@@ -87,22 +77,50 @@ def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]
         "进入",
         "出去",
         "场景变化",
-        "新环境",
+        "闂",
+        "鐢垫",
     ]
-    still_keywords = ["still", "stationary", "not moving", "static", "stand still"]
-    moving_keywords = ["moving", "move", "walking", "running", "start moving"]
+    still_keywords = ["still", "stationary", "not moving", "static", "stand still", "静止", "不动", "闈欐"]
+    moving_keywords = ["moving", "move", "walking", "running", "start moving", "移动", "走动", "绉诲姩"]
     interaction_keywords = [
-        "touch", "grab", "hold", "handle object", "interact with", "interact directly with",
-        "pick up", "put down", "manipulate", "manipulating", "object interaction", "handling",
-        "use object", "handle item",
+        "touch",
+        "grab",
+        "hold",
+        "interact",
+        "interaction",
+        "object",
+        "handling",
+        "manipulate",
+        "pick up",
+        "put down",
+        "接触",
+        "拿着",
+        "操作",
+        "处理物体",
     ]
     decision_keywords = ["decision", "决策", "选择", "动作", "行为"]
-    time_keywords = ["time=", "when", "什么时候", "何时", "time window", "区间", "时间段"]
+    time_keywords = ["time=", "when", "什么时候", "何时", "time window", "时间段"]
+    object_vocab = [
+        "cup",
+        "phone",
+        "bottle",
+        "knife",
+        "laptop",
+        "book",
+        "key",
+        "wallet",
+        "bag",
+        "door",
+        "keyboard",
+    ]
 
     if _contains_any(text, first_keywords):
         constraints["which"] = "first"
     elif _contains_any(text, last_keywords):
         constraints["which"] = "last"
+
+    if _contains_any(text, place_keywords):
+        constraints["place"] = constraints.get("which", "any")
 
     if _contains_any(text, after_scene_keywords):
         constraints["after_scene_change"] = True
@@ -124,6 +142,8 @@ def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]
     elif _contains_any(text, interaction_keywords):
         constraints["event_label"] = "interaction-heavy"
         constraints["contact_min"] = 0.72
+        constraints["interaction_min"] = 0.35
+        flags["token"] = True
         flags["time"] = True
     elif _contains_any(text, still_keywords):
         constraints["token_type"] = "MOTION_STILL"
@@ -140,39 +160,42 @@ def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]
             elif constraints.get("anchor_type") == "stop_look":
                 constraints["decision_type"] = "ATTENTION_STOP_LOOK"
 
+    for name in object_vocab:
+        if f" {name}" in f" {text}" or f"{name} " in f"{text} ":
+            constraints.setdefault("interaction_object", name)
+            break
+
     if _contains_any(text, time_keywords):
         flags["time"] = True
 
     return constraints, flags
 
 
-def _infer_intent(constraints: dict[str, Any], flags: dict[str, bool], text_raw: str) -> Literal["anchor", "token", "decision", "time", "mixed"]:
-    if "anchor=" in text_raw:
+def _infer_intent(
+    constraints: dict[str, Any],
+    flags: dict[str, bool],
+    text_raw: str,
+) -> Literal["anchor", "token", "decision", "time", "mixed"]:
+    text = str(text_raw or "").lower()
+    if "anchor=" in text:
         flags["anchor"] = True
-    if "token=" in text_raw:
+    if "token=" in text:
         flags["token"] = True
-    if "decision=" in text_raw:
+    if "decision=" in text:
         flags["decision"] = True
-    if "time=" in text_raw:
+    if "time=" in text:
         flags["time"] = True
 
-    if constraints.get("decision_type") and not constraints.get("anchor_type"):
-        flags["decision"] = True
-    if constraints.get("token_type"):
-        flags["token"] = True
-    if constraints.get("event_label"):
-        flags["time"] = True
-    if constraints.get("anchor_type"):
-        flags["anchor"] = True
-
-    # Prefer concrete intent when constraints include multiple hints.
-    # Example: "after scene change ... look around" should still route as anchor intent.
     if constraints.get("anchor_type"):
         return "anchor"
     if constraints.get("decision_type") and flags.get("decision", False):
         return "decision"
     if constraints.get("token_type"):
         return "token"
+    if constraints.get("place") is not None:
+        return "anchor"
+    if constraints.get("interaction_object") or constraints.get("interaction_min") is not None:
+        return "mixed"
     if flags.get("decision", False):
         return "decision"
     if flags.get("token", False):
@@ -181,19 +204,54 @@ def _infer_intent(constraints: dict[str, Any], flags: dict[str, bool], text_raw:
         return "time"
     if flags.get("anchor", False):
         return "anchor"
-
-    active = [name for name, on in flags.items() if on]
-    if len(active) == 1:
-        return active[0]  # type: ignore[return-value]
     return "mixed"
 
 
 def plan(query_text: str) -> QueryPlan:
-    """Create weighted candidate structured queries with intent and constraints."""
-
     text_raw = str(query_text or "").strip()
     constraints, flags = _extract_constraints(text_raw)
-    intent = _infer_intent(constraints, flags, text_raw.lower())
+
+    try:
+        parts = shlex.split(text_raw)
+    except Exception:
+        parts = text_raw.split()
+    for part in parts:
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = str(key).strip().lower()
+        value = str(value).strip()
+        if not value:
+            continue
+        if key == "place" and value.lower() in {"first", "last", "any"}:
+            constraints["place"] = value.lower()
+        elif key in {"place_segment_id", "place_segment"}:
+            constraints["place_segment_id"] = value
+            constraints["place_segment_ids"] = [x.strip() for x in value.split(",") if x.strip()]
+        elif key == "interaction_object":
+            constraints["interaction_object"] = value.lower()
+        elif key == "interaction_min":
+            try:
+                constraints["interaction_min"] = float(value)
+            except Exception:
+                pass
+        elif key == "decision":
+            constraints["decision_type"] = value.upper()
+            flags["decision"] = True
+        elif key == "token":
+            values = [x.strip().upper() for x in value.split(",") if x.strip()]
+            if values:
+                constraints["token_type"] = values[0]
+                flags["token"] = True
+        elif key == "anchor":
+            values = [x.strip().lower() for x in value.split(",") if x.strip()]
+            if values:
+                constraints["anchor_type"] = values[0]
+                flags["anchor"] = True
+        elif key == "time":
+            flags["time"] = True
+
+    intent = _infer_intent(constraints, flags, text_raw)
 
     candidates: list[QueryCandidate] = []
     seen: set[str] = set()
@@ -213,6 +271,25 @@ def plan(query_text: str) -> QueryPlan:
     token_type = str(constraints.get("token_type", "")).upper()
     if token_type in {"SCENE_CHANGE", "MOTION_STILL", "MOTION_MOVING", "INTERACTION"}:
         _append(candidates, seen, f"token={token_type} top_k=8", f"token hint: {token_type}", 12)
+
+    if constraints.get("interaction_object"):
+        _append(
+            candidates,
+            seen,
+            f"interaction_object={str(constraints['interaction_object'])} top_k=8",
+            "interaction object hint",
+            11,
+        )
+    if constraints.get("interaction_min") is not None:
+        _append(
+            candidates,
+            seen,
+            f"interaction_min={float(constraints['interaction_min']):.2f} top_k=8",
+            "interaction threshold hint",
+            11,
+        )
+    if constraints.get("place") is not None:
+        _append(candidates, seen, f"place={str(constraints['place'])} top_k=8", "place hint", 11)
 
     event_label = str(constraints.get("event_label", "")).strip().lower()
     if event_label:
@@ -247,7 +324,7 @@ def plan(query_text: str) -> QueryPlan:
         constraints=constraints,
         debug={
             "query_text": text_raw,
-            "intent_flags": flags,
+            "intent_flags": dict(flags),
             "candidate_count": len(candidates),
         },
     )

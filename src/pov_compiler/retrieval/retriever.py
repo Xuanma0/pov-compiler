@@ -116,6 +116,58 @@ class Retriever:
             return 0.0
 
     @staticmethod
+    def _event_place_segment_id(event: Any) -> str:
+        value = getattr(event, "place_segment_id", None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return str(getattr(event, "meta", {}).get("place_segment_id", "")).strip()
+
+    @staticmethod
+    def _event_place_segment_conf(event: Any) -> float:
+        value = getattr(event, "place_segment_conf", None)
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(getattr(event, "meta", {}).get("place_segment_conf", 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _event_place_segment_reason(event: Any) -> str:
+        value = getattr(event, "place_segment_reason", None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return str(getattr(event, "meta", {}).get("place_segment_reason", "")).strip()
+
+    @staticmethod
+    def _event_interaction_primary_object(event: Any) -> str:
+        value = getattr(event, "interaction_primary_object", None)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+        sig = getattr(event, "interaction_signature", {}) if hasattr(event, "interaction_signature") else {}
+        if isinstance(sig, dict):
+            v2 = str(sig.get("active_object_top1", sig.get("active_object", ""))).strip().lower()
+            if v2:
+                return v2
+        return str(getattr(event, "meta", {}).get("interaction_primary_object", "")).strip().lower()
+
+    @staticmethod
+    def _event_interaction_score(event: Any) -> float:
+        value = getattr(event, "interaction_score", None)
+        if isinstance(value, (int, float)):
+            return float(value)
+        sig = getattr(event, "interaction_signature", {}) if hasattr(event, "interaction_signature") else {}
+        if isinstance(sig, dict):
+            try:
+                return float(sig.get("interaction_score", 0.0))
+            except Exception:
+                return 0.0
+        try:
+            return float(getattr(event, "meta", {}).get("interaction_score", 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
     def _event_anchor_types(event: Any) -> set[str]:
         if hasattr(event, "anchors"):
             return {str(anchor.type).lower() for anchor in getattr(event, "anchors", [])}
@@ -377,6 +429,68 @@ class Retriever:
             )
             reasons.append(f"contact_min={threshold:.3f}")
 
+        if parsed.place_segment_ids:
+            segment_ids = {str(x).strip() for x in parsed.place_segment_ids if str(x).strip()}
+            events_new = {event.id for event in event_pool if self._event_place_segment_id(event) in segment_ids}
+            highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
+            tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
+            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
+                current_events,
+                current_highlights,
+                current_tokens,
+                current_decisions,
+                events_new,
+                highlights_new,
+                tokens_new,
+                decisions_new,
+            )
+            reasons.append(f"place_segment_id={','.join(sorted(segment_ids))}")
+
+        if parsed.interaction_min is not None:
+            threshold = float(parsed.interaction_min)
+            events_new = {event.id for event in event_pool if self._event_interaction_score(event) >= threshold}
+            highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
+            tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
+            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
+                current_events,
+                current_highlights,
+                current_tokens,
+                current_decisions,
+                events_new,
+                highlights_new,
+                tokens_new,
+                decisions_new,
+            )
+            reasons.append(f"interaction_min={threshold:.3f}")
+
+        if parsed.interaction_object:
+            object_key = str(parsed.interaction_object).strip().lower()
+            events_new = {
+                event.id
+                for event in event_pool
+                if object_key
+                and (
+                    object_key in self._event_interaction_primary_object(event)
+                    or self._event_interaction_primary_object(event) in object_key
+                )
+            }
+            highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
+            tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
+            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
+                current_events,
+                current_highlights,
+                current_tokens,
+                current_decisions,
+                events_new,
+                highlights_new,
+                tokens_new,
+                decisions_new,
+            )
+            reasons.append(f"interaction_object={object_key}")
+
         if parsed.text:
             if self.index is None:
                 reasons.append("text query ignored: index not provided")
@@ -443,6 +557,35 @@ class Retriever:
                         decisions_new,
                     )
                     reasons.append(f"text search hits={len(hits)}")
+
+        if parsed.place in {"first", "last"}:
+            events_candidates = set(current_events if current_events is not None else {event.id for event in event_pool})
+            if events_candidates:
+                grouped: dict[str, list[Any]] = {}
+                for event in event_pool:
+                    if event.id not in events_candidates:
+                        continue
+                    seg_id = self._event_place_segment_id(event) or "__unknown__"
+                    grouped.setdefault(seg_id, []).append(event)
+                kept_events: set[str] = set()
+                for values in grouped.values():
+                    ordered = sorted(values, key=lambda ev: (float(ev.t0), float(ev.t1), str(ev.id)))
+                    pick = ordered[0] if parsed.place == "first" else ordered[-1]
+                    kept_events.add(str(pick.id))
+                highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in kept_events}
+                tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in kept_events}
+                decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in kept_events}
+                current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
+                    current_events,
+                    current_highlights,
+                    current_tokens,
+                    current_decisions,
+                    kept_events,
+                    highlights_new,
+                    tokens_new,
+                    decisions_new,
+                )
+                reasons.append(f"place={parsed.place}")
 
         if current_events is None and current_highlights is None and current_tokens is None and current_decisions is None:
             sorted_hls = sorted(self.output.highlights, key=lambda h: (h.conf, h.t1 - h.t0), reverse=True)
@@ -548,6 +691,7 @@ class Retriever:
             "debug": {
                 "reason": "; ".join(reasons),
                 "filters_applied": list(parsed.filters_applied),
+                "parse_warnings": list(parsed.parse_warnings),
                 "search_hits": search_hits_payload,
             },
         }
@@ -614,6 +758,7 @@ class Retriever:
             hl = highlight_map.get(hid)
             if hl is None:
                 continue
+            src_event = event_map.get(str(getattr(hl, "source_event", "")))
             token_types = sorted(
                 {
                     str(tok.type)
@@ -636,6 +781,11 @@ class Retriever:
                         "anchor_types": hl.meta.get("anchor_types", []),
                         "token_types": token_types,
                         "source_event": str(getattr(hl, "source_event", "")),
+                        "place_segment_id": self._event_place_segment_id(src_event) if src_event is not None else "",
+                        "place_segment_conf": self._event_place_segment_conf(src_event) if src_event is not None else 0.0,
+                        "place_segment_reason": self._event_place_segment_reason(src_event) if src_event is not None else "",
+                        "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
+                        "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
                     },
                 )
             )
@@ -645,6 +795,7 @@ class Retriever:
             tok = token_map.get(tid)
             if tok is None:
                 continue
+            src_event = event_map.get(str(getattr(tok, "source_event", "")))
             base = text_score_lookup.get(("token", tid), _rank_score(idx, len(selected_tokens)))
             hits.append(
                 Hit(
@@ -658,6 +809,11 @@ class Retriever:
                         "conf": float(getattr(tok, "conf", 0.0)),
                         "token_type": str(getattr(tok, "type", "")),
                         "source_event": str(getattr(tok, "source_event", "")),
+                        "place_segment_id": self._event_place_segment_id(src_event) if src_event is not None else "",
+                        "place_segment_conf": self._event_place_segment_conf(src_event) if src_event is not None else 0.0,
+                        "place_segment_reason": self._event_place_segment_reason(src_event) if src_event is not None else "",
+                        "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
+                        "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
                     },
                 )
             )
@@ -667,6 +823,7 @@ class Retriever:
             dp = decision_map.get(did)
             if dp is None:
                 continue
+            src_event = event_map.get(str(getattr(dp, "source_event", "")))
             trigger = dict(getattr(dp, "trigger", {}) or {})
             action = dict(getattr(dp, "action", {}) or {})
             outcome = dict(getattr(dp, "outcome", {}) or {})
@@ -705,6 +862,11 @@ class Retriever:
                         "outcome_type": str(outcome.get("type", "")),
                         "evidence_token_count": int(len(evidence_ids)),
                         "evidence_coverage": float(min(1.0, max(0.0, len(evidence_ids) / 5.0))),
+                        "place_segment_id": self._event_place_segment_id(src_event) if src_event is not None else "",
+                        "place_segment_conf": self._event_place_segment_conf(src_event) if src_event is not None else 0.0,
+                        "place_segment_reason": self._event_place_segment_reason(src_event) if src_event is not None else "",
+                        "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
+                        "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
                     },
                 )
             )
@@ -728,6 +890,11 @@ class Retriever:
                         "contact_peak": self._event_contact_peak(event),
                         "label": self._event_label(event),
                         "layer": str(getattr(event, "meta", {}).get("layer", "events_v1" if hasattr(event, "label") else "")),
+                        "place_segment_id": self._event_place_segment_id(event),
+                        "place_segment_conf": self._event_place_segment_conf(event),
+                        "place_segment_reason": self._event_place_segment_reason(event),
+                        "interaction_primary_object": self._event_interaction_primary_object(event),
+                        "interaction_score": self._event_interaction_score(event),
                     },
                 )
             )

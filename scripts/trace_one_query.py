@@ -58,6 +58,38 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- filtered_hits_after: {int(ctrace.get('filtered_hits_after', 0))}")
     lines.append(f"- used_fallback: {str(bool(ctrace.get('used_fallback', False))).lower()}")
     lines.append("")
+    lines.append("## Place Segment")
+    lines.append("")
+    place_dist = trace.get("place_segment_distribution", [])
+    if isinstance(place_dist, list) and place_dist:
+        lines.append("| place_segment_id | count |")
+        lines.append("|---|---:|")
+        for item in place_dist:
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"| {item.get('place_segment_id', '')} | {int(item.get('count', 0))} |")
+    else:
+        lines.append("- place_segment_distribution: []")
+    lines.append("")
+
+    lines.append("## Interaction TopK")
+    lines.append("")
+    interaction_rows = trace.get("interaction_topk", [])
+    if isinstance(interaction_rows, list) and interaction_rows:
+        lines.append("| rank | kind | id | interaction_score | interaction_primary_object | place_segment_id |")
+        lines.append("|---:|---|---|---:|---|---|")
+        for item in interaction_rows:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"| {int(item.get('rank', 0))} | {item.get('kind', '')} | {item.get('id', '')} | "
+                f"{float(item.get('interaction_score', 0.0)):.4f} | {item.get('interaction_primary_object', '')} | "
+                f"{item.get('place_segment_id', '')} |"
+            )
+    else:
+        lines.append("- interaction_topk: []")
+    lines.append("")
+
     lines.append("## Top Hits")
     lines.append("")
     lines.append(

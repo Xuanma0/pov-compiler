@@ -110,6 +110,7 @@ docs/
 | `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive/safety_latency/safety_latency_intervention`) with strict+safety metrics and switch traces | `--json --out_dir --budgets --policy [--fixed-budget|--recommend-dir|--latency-cap-ms|--intervention-cfg]` | `steps.csv`, `queries.csv`, `figures/fig_policy_*`, `report.md`, `snapshot.json` |
 | `scripts\run_streaming_policy_compare.py` | One-click baseline vs intervention streaming compare harness (`safety_latency` vs `safety_latency_intervention`) | `--json --out_dir --budgets --query ... --max-trials` | `run_a/*`, `run_b/*`, `compare/tables/table_streaming_policy_compare.*`, `compare/figures/fig_streaming_policy_compare_*`, `compare_summary.json`, `snapshot.json` |
 | `scripts\sweep_streaming_interventions.py` | Random/grid sweep over intervention config to optimize strict+safety+latency objective | `--json --out_dir --budgets --trials --base-cfg --query ...` | `results_sweep.csv`, `best_config.yaml`, `best_report.md`, `figures/fig_objective_vs_latency*`, `snapshot.json` |
+| `scripts\place_interaction_smoke.py` | AMEGO-style place-segment and interaction-signature smoke summary (`events_v1` focus) | `--json --out_dir [--n --seed]` | `place_segments.json`, `interaction_summary.csv`, `report.md`, `snapshot.json` |
 | `scripts\repo_smoke.py` | RepoV0 write/read/dedup smoke on one JSON (`events_v1/highlights/tokens/decisions -> chunks`) | `--json --out_dir [--query] --strategy --max-repo-chunks` | `repo_chunks.jsonl`, `repo_selected.jsonl`, `report.md`, `snapshot.json` |
 | `scripts\sweep_repo_budgets.py` | RepoV0 budget sweep for `repo_only` + `events_plus_repo` context variants | `--json --out_dir --budgets --repo-strategy` | `aggregate/metrics_by_budget.*`, `figures/fig_repo_quality_vs_budget_seconds.*`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
@@ -183,6 +184,7 @@ D:\Ego4D_Dataset
 - Hard constraints + relax fallback
 - Strict NLQ metrics + distractor-aware evaluation
 - Perception v0 (stub + real) and events_v0
+- Place segment + interaction signature promoted to `events_v1` first-class fields
 - Cross-variant eval + fixed queries
 - Paper figures/tables + compare mode (`real vs stub`) + snapshot metadata
 - Reranker sweep and debugging tools
@@ -204,6 +206,10 @@ D:\Ego4D_Dataset
   - `scripts/trace_one_query.py` outputs plan/constraints/filtered counts/score breakdown/top-k hits/evidence spans
 - Contact-driven hard pseudo NLQ extension:
   - added interaction-like query family (`hard_pseudo_contact`) to better expose events_v1/perception differences
+- AMEGO-style v1.14 extension:
+  - added `hard_pseudo_place` and `hard_pseudo_interaction` families
+  - retrieval/query constraints now support `place=*`, `place_segment_id=*`, `interaction_min=*`, `interaction_object=*`
+  - trace includes place-segment hit distribution and interaction top-k diagnostics
 
 ## Roadmap (Next Suggested Steps)
 
@@ -363,4 +369,18 @@ Budget sweep (proxy quality/coverage):
 
 ```text
 python scripts\sweep_repo_budgets.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\repo_budget_demo --budgets "20/50/4,40/100/8,60/200/12"
+```
+
+## Place + Interaction IR (v1.14)
+
+Trace with place/interaction constraints:
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --index data\outputs\ego4d_ab_real_n6\cache\<uid> --query "place=first interaction_min=0.30 interaction_object=door top_k=6" --out_dir data\outputs\trace_v114
+```
+
+Smoke summary:
+
+```text
+python scripts\place_interaction_smoke.py --json data\outputs\ego4d_ab_real_n6\json --out_dir data\outputs\place_interaction_smoke_demo --n 1 --seed 0
 ```

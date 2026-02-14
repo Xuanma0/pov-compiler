@@ -21,7 +21,15 @@ from pov_compiler.utils.media import get_duration_bucket
 
 
 _TOPK_PATTERN = re.compile(r"(?:^|\s)top_k=\d+(?:\s|$)")
-_CONSTRAINT_KEYS = ("after_scene_change", "first_last", "type_match")
+_CONSTRAINT_KEYS = (
+    "after_scene_change",
+    "first_last",
+    "type_match",
+    "interaction_object",
+    "interaction_min",
+    "place_first_last",
+    "place_segment_id",
+)
 
 
 def _span_iou(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -84,6 +92,13 @@ def _constraint_present_flags(plan_constraints: dict[str, Any]) -> dict[str, boo
         "first_last": str(constraints.get("which", "")).lower() in {"first", "last"},
         "type_match": any(
             bool(str(constraints.get(key, "")).strip()) for key in ("anchor_type", "token_type", "decision_type")
+        ),
+        "interaction_object": bool(str(constraints.get("interaction_object", "")).strip()),
+        "interaction_min": constraints.get("interaction_min", None) is not None,
+        "place_first_last": str(constraints.get("place", "")).lower() in {"first", "last"},
+        "place_segment_id": bool(
+            constraints.get("place_segment_id")
+            or constraints.get("place_segment_ids")
         ),
     }
 
@@ -354,15 +369,6 @@ def evaluate_nlq_samples(
                     "filtered_hits_after": int(cresult.filtered_after),
                     "used_fallback": bool(cresult.used_fallback),
                     "relaxed_first_constraint": relaxed_first,
-                    "present_after_scene_change": bool(present_flags["after_scene_change"]),
-                    "present_first_last": bool(present_flags["first_last"]),
-                    "present_type_match": bool(present_flags["type_match"]),
-                    "filtered_after_scene_change": bool(filtered_flags["after_scene_change"]),
-                    "filtered_first_last": bool(filtered_flags["first_last"]),
-                    "filtered_type_match": bool(filtered_flags["type_match"]),
-                    "relaxed_after_scene_change": bool(relaxed_flags["after_scene_change"]),
-                    "relaxed_first_last": bool(relaxed_flags["first_last"]),
-                    "relaxed_type_match": bool(relaxed_flags["type_match"]),
                     "top1_kind": top1_kind,
                     "top1_source_query": top1_source_query,
                     "rerank_cfg_name": cfg_name,
@@ -396,6 +402,21 @@ def evaluate_nlq_samples(
                         f"reranked={len(reranked_hits)}; fallback={str(bool(cresult.used_fallback)).lower()}"
                     ),
                 }
+                for key in _CONSTRAINT_KEYS:
+                    row[f"present_{key}"] = bool(present_flags.get(key, False))
+                    row[f"filtered_{key}"] = bool(filtered_flags.get(key, False))
+                    row[f"relaxed_{key}"] = bool(relaxed_flags.get(key, False))
+
+                top1_meta = dict(reranked_hits[0].get("meta", {})) if reranked_hits else {}
+                gt_place = str(sample.meta.get("gt_place_segment_id", "")).strip()
+                pred_place = str(top1_meta.get("place_segment_id", "")).strip()
+                row["top1_place_segment_mismatch"] = float(
+                    1.0 if gt_place and pred_place and gt_place != pred_place else 0.0
+                )
+                gt_obj = str(sample.meta.get("interaction_object", sample.meta.get("active_object_top1", ""))).strip().lower()
+                pred_obj = str(top1_meta.get("interaction_primary_object", "")).strip().lower()
+                row["top1_interaction_object_match"] = float(1.0 if gt_obj and pred_obj and gt_obj == pred_obj else 0.0)
+
                 row.update(base)
                 local_rows.append(row)
                 per_query_rows.append(dict(row))
@@ -423,6 +444,12 @@ def evaluate_nlq_samples(
                     "top1_kind_token_rate": _kind_rate(local_rows, "token"),
                     "top1_kind_decision_rate": _kind_rate(local_rows, "decision"),
                     "top1_kind_event_rate": _kind_rate(local_rows, "event"),
+                    "top1_place_segment_mismatch_rate": _mean(
+                        [float(r.get("top1_place_segment_mismatch", 0.0)) for r in local_rows]
+                    ),
+                    "top1_interaction_object_match_rate": _mean(
+                        [float(r.get("top1_interaction_object_match", 0.0)) for r in local_rows]
+                    ),
                     "mrr": _mean([float(r["mrr"]) for r in local_rows]),
                     **base,
                     **local_constraint_stats,
@@ -473,6 +500,12 @@ def evaluate_nlq_samples(
                         "top1_kind_token_rate": _kind_rate(rows, "token"),
                         "top1_kind_decision_rate": _kind_rate(rows, "decision"),
                         "top1_kind_event_rate": _kind_rate(rows, "event"),
+                        "top1_place_segment_mismatch_rate": _mean(
+                            [float(r.get("top1_place_segment_mismatch", 0.0)) for r in rows]
+                        ),
+                        "top1_interaction_object_match_rate": _mean(
+                            [float(r.get("top1_interaction_object_match", 0.0)) for r in rows]
+                        ),
                         "mrr": _mean([float(r["mrr"]) for r in rows]),
                         "hit_at_k_event": _mean([float(r["hit_at_k_event"]) for r in rows]),
                         "mrr_event": _mean([float(r["mrr_event"]) for r in rows]),

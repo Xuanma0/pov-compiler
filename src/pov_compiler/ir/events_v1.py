@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,229 @@ def _as_output(output_json: str | Path | dict[str, Any] | Output) -> Output:
 
 def _overlap(a0: float, a1: float, b0: float, b1: float) -> bool:
     return max(float(a0), float(b0)) <= min(float(a1), float(b1))
+
+
+def _duration_from_output(output: Output) -> float:
+    duration_s = float(output.meta.get("duration_s", 0.0) or 0.0)
+    if duration_s > 0.0:
+        return duration_s
+    all_t: list[float] = []
+    for ev in list(output.events) + list(output.events_v0):
+        all_t.append(float(ev.t1))
+    for hl in output.highlights:
+        all_t.append(float(hl.t1))
+    for tok in output.token_codec.tokens:
+        all_t.append(float(tok.t1))
+    for dp in output.decision_points:
+        all_t.append(float(dp.t1))
+    return max(all_t) if all_t else 0.0
+
+
+def _extract_time_and_boundary(output: Output) -> tuple[list[float], list[float]]:
+    debug = output.debug if isinstance(output.debug, dict) else {}
+    signals = debug.get("signals", {}) if isinstance(debug, dict) else {}
+    if not isinstance(signals, dict):
+        return [], []
+    times_raw = signals.get("time", [])
+    score_raw = signals.get("boundary_score", [])
+    if not isinstance(times_raw, list) or not isinstance(score_raw, list):
+        return [], []
+    n = min(len(times_raw), len(score_raw))
+    if n <= 0:
+        return [], []
+    times = [float(x) for x in times_raw[:n]]
+    scores = [float(x) for x in score_raw[:n]]
+    return times, scores
+
+
+def build_place_segments_v0(
+    output: Output,
+    *,
+    boundary_thresh: float = 0.65,
+    min_segment_s: float = 2.0,
+) -> list[dict[str, Any]]:
+    duration_s = _duration_from_output(output)
+    if duration_s <= 0.0:
+        return []
+
+    boundaries: list[tuple[float, float, str]] = []
+    for token in output.token_codec.tokens:
+        if str(token.type).upper() != "SCENE_CHANGE":
+            continue
+        t = 0.5 * (float(token.t0) + float(token.t1))
+        boundaries.append((max(0.0, min(duration_s, t)), 0.8, "scene_change"))
+
+    times, scores = _extract_time_and_boundary(output)
+    for idx, score in enumerate(scores):
+        if float(score) < float(boundary_thresh):
+            continue
+        prev_val = scores[idx - 1] if idx > 0 else score
+        next_val = scores[idx + 1] if idx + 1 < len(scores) else score
+        if float(score) < float(prev_val) or float(score) < float(next_val):
+            continue
+        boundaries.append((max(0.0, min(duration_s, float(times[idx]))), min(1.0, max(0.0, float(score))), "visual_change"))
+
+    boundaries.sort(key=lambda x: (float(x[0]), -float(x[1]), str(x[2])))
+    dedup: list[tuple[float, float, str]] = []
+    for t, conf, reason in boundaries:
+        if t <= 0.0 or t >= duration_s:
+            continue
+        if dedup and abs(float(dedup[-1][0]) - float(t)) < 0.2:
+            if float(conf) > float(dedup[-1][1]):
+                dedup[-1] = (float(t), float(conf), str(reason))
+            continue
+        dedup.append((float(t), float(conf), str(reason)))
+
+    segments: list[dict[str, Any]] = []
+    prev_t = 0.0
+    prev_conf = 0.5
+    prev_reason = "heuristic_merge"
+    raw: list[tuple[float, float, float, str]] = []
+    for t, conf, reason in dedup:
+        if t <= prev_t:
+            continue
+        raw.append((float(prev_t), float(t), float(conf), str(reason)))
+        prev_t = float(t)
+        prev_conf = float(conf)
+        prev_reason = str(reason)
+    if prev_t < duration_s:
+        raw.append((float(prev_t), float(duration_s), float(prev_conf), str(prev_reason)))
+    if not raw:
+        raw.append((0.0, float(duration_s), 0.5, "heuristic_merge"))
+
+    merged: list[tuple[float, float, float, str]] = []
+    for t0, t1, conf, reason in raw:
+        if not merged:
+            merged.append((t0, t1, conf, reason))
+            continue
+        prev0, prev1, prev_conf_val, prev_reason_val = merged[-1]
+        if (t1 - t0) < float(min_segment_s):
+            merged[-1] = (prev0, t1, min(1.0, max(prev_conf_val, conf)), "heuristic_merge")
+            continue
+        merged.append((t0, t1, conf, reason))
+
+    out: list[dict[str, Any]] = []
+    for idx, (t0, t1, conf, reason) in enumerate(merged, start=1):
+        out.append(
+            {
+                "id": f"place_{idx:04d}",
+                "t0": float(t0),
+                "t1": float(t1),
+                "conf": float(max(0.0, min(1.0, conf))),
+                "reason": str(reason) if str(reason) else "heuristic_merge",
+            }
+        )
+    return out
+
+
+def aggregate_interaction_signature(
+    frames: list[dict[str, Any]],
+    *,
+    t0: float,
+    t1: float,
+) -> dict[str, Any]:
+    t0f = float(t0)
+    t1f = float(t1)
+    if t1f < t0f:
+        t0f, t1f = t1f, t0f
+    selected = []
+    for frame in frames:
+        if not isinstance(frame, dict):
+            continue
+        try:
+            t = float(frame.get("t", -1.0))
+        except Exception:
+            continue
+        if t0f <= t <= t1f:
+            selected.append(frame)
+
+    total = len(selected)
+    active_flags: list[bool] = []
+    active_scores: list[float] = []
+    object_counts: dict[str, int] = defaultdict(int)
+    for frame in selected:
+        contact = frame.get("contact", {})
+        if not isinstance(contact, dict):
+            contact = {}
+        active = contact.get("active")
+        if isinstance(active, dict):
+            label = str(active.get("label", "")).strip().lower()
+            object_id = str(active.get("object_id", "")).strip().lower()
+            key = label or object_id or ""
+            if key:
+                object_counts[key] += 1
+            try:
+                score = float(active.get("score", contact.get("active_score", 0.0)) or 0.0)
+            except Exception:
+                score = 0.0
+            active_scores.append(max(0.0, min(1.0, score)))
+            active_flags.append(True)
+        else:
+            try:
+                score = float(contact.get("active_score", 0.0) or 0.0)
+            except Exception:
+                score = 0.0
+            if score > 1e-6:
+                active_scores.append(max(0.0, min(1.0, score)))
+                active_flags.append(True)
+            else:
+                active_flags.append(False)
+
+    active_frames = int(sum(1 for x in active_flags if x))
+    contact_rate = float(active_frames / max(1, total))
+    bursts = 0
+    prev = False
+    for flag in active_flags:
+        if flag and not prev:
+            bursts += 1
+        prev = bool(flag)
+    avg_active_score = float(sum(active_scores) / max(1, len(active_scores))) if active_scores else 0.0
+    active_object_top1 = ""
+    if object_counts:
+        active_object_top1 = sorted(object_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[0][0]
+    interaction_score = float(
+        max(
+            0.0,
+            min(
+                1.0,
+                (0.55 * contact_rate) + (0.30 * min(1.0, float(bursts) / 3.0)) + (0.15 * avg_active_score),
+            ),
+        )
+    )
+    return {
+        "active_object_top1": str(active_object_top1),
+        "active_object": str(active_object_top1),
+        "active_object_counts": dict(sorted(object_counts.items())),
+        "contact_burst_count": int(bursts),
+        "contact_bursts": int(bursts),
+        "contact_rate": float(contact_rate),
+        "active_frames": int(active_frames),
+        "total_frames": int(total),
+        "avg_active_score": float(avg_active_score),
+        "interaction_score": float(interaction_score),
+    }
+
+
+def _event_place_info(
+    *,
+    t0: float,
+    t1: float,
+    place_segments: list[dict[str, Any]],
+) -> tuple[str | None, float | None, str | None]:
+    if not place_segments:
+        return None, None, None
+    best: dict[str, Any] | None = None
+    best_overlap = -1.0
+    for segment in place_segments:
+        s0 = float(segment.get("t0", 0.0))
+        s1 = float(segment.get("t1", 0.0))
+        inter = max(0.0, min(float(t1), s1) - max(float(t0), s0))
+        if inter > best_overlap:
+            best = segment
+            best_overlap = inter
+    if best is None:
+        return None, None, None
+    return str(best.get("id", "")) or None, float(best.get("conf", 0.0)), str(best.get("reason", "")) or None
 
 
 def _pick_label(event: Event, *, layer: str) -> str:
@@ -224,6 +448,7 @@ def convert_output_to_events_v1(
     perception_frames = output.perception.get("frames", []) if isinstance(output.perception, dict) else []
     if not isinstance(perception_frames, list):
         perception_frames = []
+    place_segments = build_place_segments_v0(output)
 
     seen_ids: set[str] = set()
     events_v1: list[EventV1] = []
@@ -270,6 +495,14 @@ def convert_output_to_events_v1(
 
         ev_evidence.sort(key=lambda x: (float(x.t0), float(x.t1), str(x.type), str(x.id)))
         label = _pick_label(event, layer=layer)
+        place_segment_id, place_segment_conf, place_segment_reason = _event_place_info(
+            t0=t0,
+            t1=t1,
+            place_segments=place_segments,
+        )
+        interaction_signature = aggregate_interaction_signature(perception_frames, t0=t0, t1=t1)
+        interaction_primary_object = str(interaction_signature.get("active_object_top1", ""))
+        interaction_score = float(interaction_signature.get("interaction_score", 0.0))
 
         hints: set[str] = set()
         anchor_types = {str(anchor.type) for anchor in event.anchors}
@@ -284,6 +517,10 @@ def convert_output_to_events_v1(
                 action_type = str(evd.source.get("action_type", "")).strip()
                 if action_type:
                     hints.add(f"decision={action_type}")
+        if place_segment_id:
+            hints.add(f"place_segment_id={place_segment_id}")
+        if interaction_primary_object:
+            hints.add(f"interaction_object={interaction_primary_object}")
 
         duration = max(1e-6, t1 - t0)
         contact_peak = max((float(e.conf) for e in ev_evidence if e.type == "contact"), default=0.0)
@@ -302,6 +539,12 @@ def convert_output_to_events_v1(
                 "evidence_density": evidence_density,
                 "contact_peak": contact_peak,
             },
+            place_segment_id=place_segment_id,
+            place_segment_conf=place_segment_conf,
+            place_segment_reason=place_segment_reason,
+            interaction_signature=interaction_signature,
+            interaction_primary_object=interaction_primary_object,
+            interaction_score=interaction_score,
             meta={
                 "layer": layer,
                 "source_event_id": str(event.id),
@@ -310,8 +553,19 @@ def convert_output_to_events_v1(
                 "tokens_count": sum(1 for e in ev_evidence if e.type == "token"),
                 "decisions_count": sum(1 for e in ev_evidence if e.type == "decision"),
                 "contacts_count": sum(1 for e in ev_evidence if e.type == "contact"),
+                "place_segments_count": len(place_segments),
+                "place_segment_id": place_segment_id,
+                "interaction_primary_object": interaction_primary_object,
+                "interaction_score": interaction_score,
             },
         )
+        for evd in ev.evidence:
+            evd.place_segment_id = place_segment_id
+            evd.place_segment_conf = place_segment_conf
+            evd.place_segment_reason = place_segment_reason
+            evd.interaction_signature = dict(interaction_signature)
+            evd.interaction_primary_object = interaction_primary_object
+            evd.interaction_score = interaction_score
         events_v1.append(_with_retrieval_stub(ev, rerank_cfg_hash))
 
     events_v1.sort(key=lambda x: (float(x.t0), float(x.t1), str(x.id)))

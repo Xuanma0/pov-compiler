@@ -15,12 +15,21 @@ class HardConstraintConfig:
     enable_after_scene_change: bool = True
     enable_first_last: bool = True
     enable_type_match: bool = False
+    enable_interaction: bool = True
+    enable_place: bool = True
     relax_on_empty: bool = True
     relax_order: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.relax_order is None:
-            self.relax_order = ["after_scene_change", "first_last", "type_match"]
+            self.relax_order = [
+                "after_scene_change",
+                "interaction_object",
+                "interaction_min",
+                "place_first_last",
+                "type_match",
+                "first_last",
+            ]
         self.relax_order = [str(x) for x in self.relax_order]
 
     def to_dict(self) -> dict[str, Any]:
@@ -28,6 +37,8 @@ class HardConstraintConfig:
             "enable_after_scene_change": bool(self.enable_after_scene_change),
             "enable_first_last": bool(self.enable_first_last),
             "enable_type_match": bool(self.enable_type_match),
+            "enable_interaction": bool(self.enable_interaction),
+            "enable_place": bool(self.enable_place),
             "relax_on_empty": bool(self.relax_on_empty),
             "relax_order": list(self.relax_order),
         }
@@ -39,8 +50,15 @@ class HardConstraintConfig:
             enable_after_scene_change=bool(payload.get("enable_after_scene_change", True)),
             enable_first_last=bool(payload.get("enable_first_last", True)),
             enable_type_match=bool(payload.get("enable_type_match", False)),
+            enable_interaction=bool(payload.get("enable_interaction", True)),
+            enable_place=bool(payload.get("enable_place", True)),
             relax_on_empty=bool(payload.get("relax_on_empty", True)),
-            relax_order=list(payload.get("relax_order", ["after_scene_change", "first_last", "type_match"])),
+            relax_order=list(
+                payload.get(
+                    "relax_order",
+                    ["after_scene_change", "interaction_object", "interaction_min", "place_first_last", "type_match", "first_last"],
+                )
+            ),
         )
 
     @classmethod
@@ -125,6 +143,37 @@ def _type_match(hit: Hit, constraints: dict[str, Any]) -> bool:
     return True
 
 
+def _match_interaction_object(hit: Hit, target: str) -> bool:
+    value = str(hit.get("meta", {}).get("interaction_primary_object", "")).strip().lower()
+    tgt = str(target).strip().lower()
+    if not tgt:
+        return True
+    if not value:
+        return False
+    return tgt in value or value in tgt
+
+
+def _match_interaction_min(hit: Hit, threshold: float) -> bool:
+    try:
+        score = float(hit.get("meta", {}).get("interaction_score", 0.0))
+    except Exception:
+        score = 0.0
+    return float(score) >= float(threshold)
+
+
+def _apply_place_first_last(hits: list[Hit], which: str) -> list[Hit]:
+    grouped: dict[str, list[Hit]] = {}
+    for hit in hits:
+        seg = str(hit.get("meta", {}).get("place_segment_id", "")).strip() or "__unknown__"
+        grouped.setdefault(seg, []).append(hit)
+    out: list[Hit] = []
+    for items in grouped.values():
+        ordered = sorted(items, key=lambda x: (float(x["t0"]), float(x["t1"]), str(x["id"])))
+        out.append(ordered[0] if which == "first" else ordered[-1])
+    out.sort(key=lambda x: (float(x["t0"]), float(x["t1"]), str(x["kind"]), str(x["id"])))
+    return out
+
+
 def _apply_once(
     hits: list[Hit],
     plan: QueryPlan,
@@ -142,6 +191,21 @@ def _apply_once(
             working = [h for h in working if float(h["t1"]) >= float(scene_t)]
             applied.append("after_scene_change")
 
+    if "interaction_object" in enabled and bool(cfg.enable_interaction):
+        target_obj = str(constraints.get("interaction_object", "")).strip().lower()
+        if target_obj:
+            working = [h for h in working if _match_interaction_object(h, target_obj)]
+            applied.append("interaction_object")
+
+    if "interaction_min" in enabled and bool(cfg.enable_interaction):
+        if constraints.get("interaction_min", None) is not None:
+            try:
+                threshold = float(constraints.get("interaction_min"))
+            except Exception:
+                threshold = 0.0
+            working = [h for h in working if _match_interaction_min(h, threshold)]
+            applied.append("interaction_min")
+
     if "type_match" in enabled and bool(cfg.enable_type_match):
         if any(k in constraints for k in ("anchor_type", "token_type", "decision_type")):
             working = [h for h in working if _type_match(h, constraints)]
@@ -153,6 +217,24 @@ def _apply_once(
             ordered = sorted(working, key=lambda x: (float(x["t0"]), float(x["t1"]), str(x["id"])))
             working = [ordered[0] if which == "first" else ordered[-1]]
             applied.append("first_last")
+
+    if "place_first_last" in enabled and cfg.enable_place:
+        which_place = str(constraints.get("place", "")).lower()
+        if which_place in {"first", "last"} and working:
+            working = _apply_place_first_last(working, which_place)
+            applied.append("place_first_last")
+
+    if "place_segment_id" in enabled and cfg.enable_place:
+        raw_ids = constraints.get("place_segment_ids", constraints.get("place_segment_id", []))
+        if isinstance(raw_ids, str):
+            target_ids = {x.strip() for x in raw_ids.split(",") if x.strip()}
+        elif isinstance(raw_ids, list):
+            target_ids = {str(x).strip() for x in raw_ids if str(x).strip()}
+        else:
+            target_ids = set()
+        if target_ids:
+            working = [h for h in working if str(h.get("meta", {}).get("place_segment_id", "")).strip() in target_ids]
+            applied.append("place_segment_id")
 
     return working, applied
 
@@ -180,10 +262,15 @@ def apply_constraints_detailed(
         enabled.add("first_last")
     if bool(resolved.enable_type_match):
         enabled.add("type_match")
+    if bool(resolved.enable_interaction):
+        enabled.add("interaction_object")
+        enabled.add("interaction_min")
+    if bool(resolved.enable_place):
+        enabled.add("place_first_last")
+        enabled.add("place_segment_id")
 
     filtered, applied = _apply_once(hits, query_plan, resolved, enabled, output)
     relaxed: list[str] = []
-    used_fallback = False
 
     if filtered:
         return ConstraintApplyResult(
@@ -223,13 +310,11 @@ def apply_constraints_detailed(
                 filtered_after=len(filtered_try),
             )
 
-    # Fully relaxed fallback to original hits if everything became empty.
-    used_fallback = True
     return ConstraintApplyResult(
         hits=list(hits),
         applied=[],
         relaxed=relaxed,
-        used_fallback=used_fallback,
+        used_fallback=True,
         filtered_before=before,
         filtered_after=len(hits),
     )

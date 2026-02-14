@@ -287,6 +287,22 @@ def load_hard_pseudo_nlq(
         "When did I interact directly with an object nearby?",
         "When was I manipulating an object up close?",
     ]
+    place_first_templates = [
+        "In this place, when was the first relevant moment?",
+        "After entering this area, when was the first key moment?",
+    ]
+    place_last_templates = [
+        "In this place, when was the last relevant moment?",
+        "Near the end of this area, when was the final key moment?",
+    ]
+    interaction_object_templates = [
+        "When did I interact with the {obj} directly?",
+        "When was I handling the {obj} with my hands?",
+    ]
+    interaction_generic_templates = [
+        "When was I actively interacting with an object?",
+        "When did I handle something with my hands?",
+    ]
 
     hl_turn: list[Any] = []
     hl_stop: list[Any] = []
@@ -592,6 +608,106 @@ def load_hard_pseudo_nlq(
                     "source_kind": "event_v1",
                     "event_v1_id": str(ev.id),
                     "event_label": str(getattr(ev, "label", "")),
+                },
+            )
+        )
+
+    # hard_pseudo_place: place-first/place-last style disambiguation.
+    place_groups: dict[str, list[Any]] = {}
+    for ev in output.events_v1:
+        place_id = str(getattr(ev, "place_segment_id", "") or "").strip()
+        if not place_id:
+            continue
+        place_groups.setdefault(place_id, []).append(ev)
+    for values in place_groups.values():
+        values.sort(key=lambda x: (float(x.t0), float(x.t1), str(x.id)))
+
+    place_budget = max(1, int(n_highlight // 3))
+    place_ids = sorted(place_groups.keys())
+    place_picks = _sample_indices(len(place_ids), place_budget, rng)
+    for idx in place_picks:
+        pid = place_ids[idx]
+        group = place_groups.get(pid, [])
+        if not group:
+            continue
+        choose_first = bool(rng.integers(0, 2) == 0)
+        target = group[0] if choose_first else group[-1]
+        gt = (float(target.t0), float(target.t1))
+        template = str(rng.choice(place_first_templates if choose_first else place_last_templates))
+        query = f"{template} place={'first' if choose_first else 'last'}"
+        pool = [(float(ev.t0), float(ev.t1)) for evs in place_groups.values() for ev in evs]
+        distractors = _pick_distractors(
+            gt_span=gt,
+            pool=pool,
+            rng=rng,
+            min_gap_s=max(2.0, float(distractor_min_gap_s) * 0.5),
+            max_count=int(max_distractors),
+        )
+        if not distractors:
+            continue
+        samples.append(
+            NLQSample(
+                qid=f"hnlq_{len(samples) + 1:06d}",
+                query=query,
+                query_type="hard_pseudo_place",
+                gt_span=gt,
+                top_k=int(top_k),
+                distractors=distractors,
+                meta={
+                    "source_kind": "event_v1",
+                    "event_v1_id": str(target.id),
+                    "gt_place_segment_id": str(pid),
+                    "place": "first" if choose_first else "last",
+                },
+            )
+        )
+
+    # hard_pseudo_interaction: object/contact focused.
+    interaction_events = sorted(
+        list(output.events_v1),
+        key=lambda ev: (
+            float(getattr(ev, "interaction_score", 0.0) or 0.0),
+            float(ev.t1) - float(ev.t0),
+        ),
+        reverse=True,
+    )
+    interaction_budget = max(1, int(n_highlight // 3))
+    for idx in _sample_indices(len(interaction_events), interaction_budget, rng):
+        ev = interaction_events[idx]
+        gt = (float(ev.t0), float(ev.t1))
+        obj = str(getattr(ev, "interaction_primary_object", "") or "").strip().lower()
+        query = (
+            str(rng.choice(interaction_object_templates)).format(obj=obj)
+            if obj
+            else str(rng.choice(interaction_generic_templates))
+        )
+        if obj:
+            query = f"{query} interaction_object={obj}"
+        query = f"{query} interaction_min=0.30"
+        pool = [(float(x.t0), float(x.t1)) for x in output.events_v1]
+        distractors = _pick_distractors(
+            gt_span=gt,
+            pool=pool,
+            rng=rng,
+            min_gap_s=max(2.0, float(distractor_min_gap_s) * 0.4),
+            max_count=int(max_distractors),
+        )
+        if not distractors:
+            continue
+        samples.append(
+            NLQSample(
+                qid=f"hnlq_{len(samples) + 1:06d}",
+                query=query,
+                query_type="hard_pseudo_interaction",
+                gt_span=gt,
+                top_k=int(top_k),
+                distractors=distractors,
+                meta={
+                    "source_kind": "event_v1",
+                    "event_v1_id": str(ev.id),
+                    "interaction_object": obj,
+                    "interaction_score": float(getattr(ev, "interaction_score", 0.0) or 0.0),
+                    "gt_place_segment_id": str(getattr(ev, "place_segment_id", "") or ""),
                 },
             )
         )

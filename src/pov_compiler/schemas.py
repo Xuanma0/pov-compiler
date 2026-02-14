@@ -136,6 +136,12 @@ class Evidence(BaseModel):
     source: dict[str, Any] = Field(default_factory=dict)
     retrieval_hit: RetrievalHit | None = None
     constraint_trace: ConstraintTrace | None = None
+    place_segment_id: str | None = None
+    place_segment_conf: float | None = None
+    place_segment_reason: str | None = None
+    interaction_signature: dict[str, Any] = Field(default_factory=dict)
+    interaction_primary_object: str | None = None
+    interaction_score: float | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -148,6 +154,12 @@ class EventV1(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     retrieval_hints: list[str] = Field(default_factory=list)
     scores: dict[str, float] = Field(default_factory=dict)
+    place_segment_id: str | None = None
+    place_segment_conf: float | None = None
+    place_segment_reason: str | None = None
+    interaction_signature: dict[str, Any] = Field(default_factory=dict)
+    interaction_primary_object: str | None = None
+    interaction_score: float | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
 
 

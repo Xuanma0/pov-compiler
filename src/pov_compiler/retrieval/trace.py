@@ -122,6 +122,36 @@ def trace_query(
             }
         )
 
+    place_counts: dict[str, int] = {}
+    interaction_rows: list[dict[str, Any]] = []
+    for hit in hit_rows[: max(1, int(top_k))]:
+        sb = dict(hit.get("score_breakdown", {}))
+        place_id = str(sb.get("place_segment_id", hit.get("score_breakdown", {}).get("place_segment_id", "")))
+        # source place/object fields are stored in hit meta via explain_scores payload.
+        meta = {}
+        for rh in reranked_hits:
+            if str(rh.get("id", "")) == str(hit.get("id", "")) and str(rh.get("kind", "")) == str(hit.get("kind", "")):
+                meta = dict(rh.get("meta", {}))
+                break
+        place_id = str(meta.get("place_segment_id", place_id)).strip()
+        if place_id:
+            place_counts[place_id] = int(place_counts.get(place_id, 0)) + 1
+        interaction_rows.append(
+            {
+                "rank": int(hit.get("rank", 0)),
+                "kind": str(hit.get("kind", "")),
+                "id": str(hit.get("id", "")),
+                "interaction_score": float(meta.get("interaction_score", 0.0) or 0.0),
+                "interaction_primary_object": str(meta.get("interaction_primary_object", "")),
+                "place_segment_id": place_id,
+            }
+        )
+
+    place_distribution = [
+        {"place_segment_id": key, "count": int(value)}
+        for key, value in sorted(place_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
+    ]
+
     return {
         "video_id": output.video_id,
         "query": str(query),
@@ -140,5 +170,7 @@ def trace_query(
         },
         "rerank_cfg_hash": str(weights.short_hash()),
         "top1_kind": str(hit_rows[0]["kind"]) if hit_rows else "",
+        "place_segment_distribution": place_distribution,
+        "interaction_topk": interaction_rows,
         "hits": hit_rows,
     }
