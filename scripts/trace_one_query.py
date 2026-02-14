@@ -112,7 +112,25 @@ def _render_markdown(trace: dict[str, Any]) -> str:
         lines.append("## Derived Constraints")
         lines.append("")
         derived = chain.get("derived_constraints", {}) if isinstance(chain, dict) else {}
-        lines.append(f"- `{json.dumps(derived, ensure_ascii=False, sort_keys=True)}`")
+        lines.append(f"- raw: `{json.dumps(derived, ensure_ascii=False, sort_keys=True)}`")
+        d_time = derived.get("time", {}) if isinstance(derived, dict) else {}
+        d_place = derived.get("place", {}) if isinstance(derived, dict) else {}
+        d_object = derived.get("object", {}) if isinstance(derived, dict) else {}
+        lines.append("")
+        lines.append("| type | value | mode | source | enabled |")
+        lines.append("|---|---|---|---|---:|")
+        lines.append(
+            f"| time | {json.dumps({'t_min_s': d_time.get('t_min_s'), 't_max_s': d_time.get('t_max_s')}, ensure_ascii=False)} | "
+            f"{d_time.get('mode', '')} | {d_time.get('source', '')} | {int(bool(d_time.get('enabled', False)))} |"
+        )
+        lines.append(
+            f"| place | {d_place.get('value', '')} | {d_place.get('mode', '')} | {d_place.get('source', '')} | "
+            f"{int(bool(d_place.get('enabled', False)))} |"
+        )
+        lines.append(
+            f"| object | {d_object.get('value', '')} | {d_object.get('mode', '')} | {d_object.get('source', '')} | "
+            f"{int(bool(d_object.get('enabled', False)))} |"
+        )
         lines.append("")
         lines.append("## Chain Step 2")
         lines.append("")
@@ -309,6 +327,7 @@ def main() -> int:
             "step2_filtered_hits_before="
             f"{int(step2.get('filtered_hits_before', 0))} step2_filtered_hits_after={int(step2.get('filtered_hits_after', 0))}"
         )
+        print(f"step2_applied_constraints={step2.get('applied_constraints', [])}")
         print(f"step1_top1_kind={step1.get('top1_kind', '')} step2_top1_kind={step2.get('top1_kind', '')}")
     print(f"parsed_constraints={trace.get('plan', {}).get('constraints', {})}")
     print(f"applied_constraints={trace.get('constraint_trace', {}).get('applied_constraints', [])}")

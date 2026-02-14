@@ -75,10 +75,15 @@ def trace_query(
                     t1=float(step1_top.get("t1", 0.0)),
                     score=float(step1_top.get("score", 0.0)),
                     source_query=step1_query,
-                    meta={},
+                    meta=dict(step1_top.get("meta", {})) if isinstance(step1_top.get("meta", {}), dict) else {},
                 ),
                 rel=str(chain_query.rel),
                 window_s=float(chain_query.window_s),
+                derive=str(getattr(chain_query, "derive", "time_only")),
+                place_mode=str(getattr(chain_query, "place_mode", "soft")),
+                object_mode=str(getattr(chain_query, "object_mode", "soft")),
+                time_mode=str(getattr(chain_query, "time_mode", "hard")),
+                output=output,
             )
             step2_query_derived = retriever._merge_step2_query(  # type: ignore[attr-defined]
                 step2_query,
@@ -108,6 +113,10 @@ def trace_query(
             "chain_rel": str(chain_query.rel),
             "window_s": float(chain_query.window_s),
             "top1_only": bool(chain_query.top1_only),
+            "chain_derive": str(getattr(chain_query, "derive", "time_only")),
+            "chain_place_mode": str(getattr(chain_query, "place_mode", "soft")),
+            "chain_object_mode": str(getattr(chain_query, "object_mode", "soft")),
+            "chain_time_mode": str(getattr(chain_query, "time_mode", "hard")),
             "plan_debug": dict(chain_plan.debug) if chain_plan is not None else {},
             "step1": {
                 "query": step1_query,

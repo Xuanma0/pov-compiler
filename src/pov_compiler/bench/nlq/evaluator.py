@@ -12,6 +12,7 @@ from pov_compiler.eval.budget_sweep import apply_budget
 from pov_compiler.eval.eval_cross_variant import build_budget_grid
 from pov_compiler.eval.metrics import compute_consistency, compute_coverage, compute_efficiency
 from pov_compiler.retrieval.constraints import HardConstraintConfig, apply_constraints_detailed
+from pov_compiler.retrieval.query_parser import parse_query_chain
 from pov_compiler.retrieval.query_planner import QueryCandidate, QueryPlan, plan as plan_query
 from pov_compiler.retrieval.reranker import Hit, rerank
 from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
@@ -30,6 +31,9 @@ _CONSTRAINT_KEYS = (
     "interaction_min",
     "place_first_last",
     "place_segment_id",
+    "chain_time_range",
+    "chain_place_match",
+    "chain_object_match",
 )
 
 
@@ -88,7 +92,7 @@ def _constraint_rate(rows: list[dict[str, Any]], field: str, name: str) -> float
 
 def _constraint_present_flags(plan_constraints: dict[str, Any]) -> dict[str, bool]:
     constraints = dict(plan_constraints)
-    return {
+    out = {
         "after_scene_change": bool(constraints.get("after_scene_change", False)),
         "first_last": str(constraints.get("which", "")).lower() in {"first", "last"},
         "type_match": any(
@@ -109,7 +113,25 @@ def _constraint_present_flags(plan_constraints: dict[str, Any]) -> dict[str, boo
             constraints.get("place_segment_id")
             or constraints.get("place_segment_ids")
         ),
+        "chain_time_range": (
+            str(constraints.get("chain_time_mode", "hard")).strip().lower() != "off"
+            and (
+                constraints.get("chain_time_min_s", None) is not None
+                or constraints.get("chain_time_max_s", None) is not None
+            )
+        ),
+        "chain_place_match": (
+            str(constraints.get("chain_place_mode", "soft")).strip().lower() != "off"
+            and bool(str(constraints.get("chain_place_value", "")).strip())
+        ),
+        "chain_object_match": (
+            str(constraints.get("chain_object_mode", "soft")).strip().lower() != "off"
+            and bool(str(constraints.get("chain_object_value", "")).strip())
+        ),
     }
+    for key in _CONSTRAINT_KEYS:
+        out.setdefault(key, False)
+    return out
 
 
 def _constraint_stats_from_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
@@ -212,10 +234,28 @@ def _force_top_k(query: str, top_k: int) -> str:
 def _build_plan(sample: NLQSample, allow_gt_fallback: bool) -> QueryPlan:
     if " then " in str(sample.query).lower():
         q = _force_top_k(str(sample.query), int(sample.top_k))
+        chain = parse_query_chain(q)
+        constraints: dict[str, Any] = {}
+        if chain is not None and chain.steps:
+            step2 = chain.steps[-1].parsed
+            if step2.chain_time_mode is not None:
+                constraints["chain_time_mode"] = str(step2.chain_time_mode)
+            if step2.chain_time_min_s is not None:
+                constraints["chain_time_min_s"] = float(step2.chain_time_min_s)
+            if step2.chain_time_max_s is not None:
+                constraints["chain_time_max_s"] = float(step2.chain_time_max_s)
+            if step2.chain_place_mode:
+                constraints["chain_place_mode"] = str(step2.chain_place_mode)
+            if step2.chain_place_value:
+                constraints["chain_place_value"] = str(step2.chain_place_value)
+            if step2.chain_object_mode:
+                constraints["chain_object_mode"] = str(step2.chain_object_mode)
+            if step2.chain_object_value:
+                constraints["chain_object_value"] = str(step2.chain_object_value)
         return QueryPlan(
             intent="mixed",
             candidates=[QueryCandidate(query=q, reason="chain_query", priority=0)],
-            constraints={},
+            constraints=constraints,
             debug={"chain_query": True, "candidate_count": 1},
         )
 
@@ -337,11 +377,11 @@ def evaluate_nlq_samples(
                 did_filter_any = int(cresult.filtered_after) < int(cresult.filtered_before)
                 relaxed_first = str(cresult.relaxed[0]) if cresult.relaxed else ""
                 filtered_flags = {
-                    key: bool(present_flags[key] and did_filter_any and key in [str(x) for x in cresult.applied])
+                    key: bool(present_flags.get(key, False) and did_filter_any and key in [str(x) for x in cresult.applied])
                     for key in _CONSTRAINT_KEYS
                 }
                 relaxed_flags = {
-                    key: bool(present_flags[key] and relaxed_first == key)
+                    key: bool(present_flags.get(key, False) and relaxed_first == key)
                     for key in _CONSTRAINT_KEYS
                 }
                 if chosen_query:
@@ -425,6 +465,7 @@ def evaluate_nlq_samples(
                     row["chain_combo"] = str(chain_meta.get("combo", ""))
                     row["chain_step1_type"] = str(chain_meta.get("step1_type", ""))
                     row["chain_step2_type"] = str(chain_meta.get("step2_type", ""))
+                    row["chain_derive"] = str(chain_meta.get("derive", ""))
                 for key in _CONSTRAINT_KEYS:
                     row[f"present_{key}"] = bool(present_flags.get(key, False))
                     row[f"filtered_{key}"] = bool(filtered_flags.get(key, False))
@@ -446,6 +487,10 @@ def evaluate_nlq_samples(
                 step2_before = float(step2_info.get("filtered_hits_before", 0.0) or 0.0)
                 step2_after = float(step2_info.get("filtered_hits_after", 0.0) or 0.0)
                 chain_filtered_ratio_step2 = float((step2_before - step2_after) / step2_before) if step2_before > 0.0 else 0.0
+                derived_constraints = chain_payload.get("derived_constraints", {}) if isinstance(chain_payload, dict) else {}
+                d_time = dict(derived_constraints.get("time", {})) if isinstance(derived_constraints, dict) else {}
+                d_place = dict(derived_constraints.get("place", {})) if isinstance(derived_constraints, dict) else {}
+                d_object = dict(derived_constraints.get("object", {})) if isinstance(derived_constraints, dict) else {}
                 chain_success = (
                     1.0
                     if (
@@ -457,6 +502,28 @@ def evaluate_nlq_samples(
                     )
                     else 0.0
                 )
+                chain_derived_time_used = 1.0 if bool(d_time.get("enabled", False)) else 0.0
+                chain_derived_place_used = 1.0 if bool(d_place.get("enabled", False)) else 0.0
+                chain_derived_object_used = 1.0 if bool(d_object.get("enabled", False)) else 0.0
+                chain_derived_nonempty = (
+                    1.0 if (chain_derived_time_used > 0.0 or chain_derived_place_used > 0.0 or chain_derived_object_used > 0.0) else 0.0
+                )
+                chain_fail_reason = "other"
+                if chain_step1_has_hit <= 0.0:
+                    chain_fail_reason = "step1_no_hit"
+                elif chain_step2_has_hit <= 0.0:
+                    if step2_before > 0.0 and step2_after <= 0.0:
+                        chain_fail_reason = "constraints_over_filtered"
+                    else:
+                        chain_fail_reason = "step2_no_hit"
+                elif top1_in_distractor >= 0.5:
+                    chain_fail_reason = "retrieval_distractor"
+                elif len(pred_spans) <= 0:
+                    chain_fail_reason = "evidence_missing"
+                elif chain_success > 0.0:
+                    chain_fail_reason = "success"
+                elif "budget" in str(row.get("reason", "")).lower():
+                    chain_fail_reason = "budget_insufficient"
                 gt_place = str(sample.meta.get("gt_place_segment_id", "")).strip()
                 pred_place = str(top1_meta.get("place_segment_id", "")).strip()
                 row["top1_place_segment_mismatch"] = float(
@@ -469,6 +536,11 @@ def evaluate_nlq_samples(
                 row["chain_step2_has_hit"] = float(chain_step2_has_hit)
                 row["chain_success"] = float(chain_success)
                 row["chain_filtered_ratio_step2"] = float(chain_filtered_ratio_step2)
+                row["chain_fail_reason"] = str(chain_fail_reason)
+                row["chain_derived_time_used"] = float(chain_derived_time_used)
+                row["chain_derived_place_used"] = float(chain_derived_place_used)
+                row["chain_derived_object_used"] = float(chain_derived_object_used)
+                row["chain_derived_nonempty"] = float(chain_derived_nonempty)
 
                 row.update(base)
                 local_rows.append(row)
@@ -508,6 +580,28 @@ def evaluate_nlq_samples(
                     "chain_success_rate": _mean([float(r.get("chain_success", 0.0)) for r in local_rows]),
                     "chain_filtered_ratio_step2": _mean(
                         [float(r.get("chain_filtered_ratio_step2", 0.0)) for r in local_rows]
+                    ),
+                    "chain_derived_time_used_rate": _mean([float(r.get("chain_derived_time_used", 0.0)) for r in local_rows]),
+                    "chain_derived_place_used_rate": _mean([float(r.get("chain_derived_place_used", 0.0)) for r in local_rows]),
+                    "chain_derived_object_used_rate": _mean([float(r.get("chain_derived_object_used", 0.0)) for r in local_rows]),
+                    "chain_derived_nonempty_rate": _mean([float(r.get("chain_derived_nonempty", 0.0)) for r in local_rows]),
+                    "chain_fail_step1_no_hit_rate": _mean(
+                        [1.0 if str(r.get("chain_fail_reason", "")) == "step1_no_hit" else 0.0 for r in local_rows]
+                    ),
+                    "chain_fail_step2_no_hit_rate": _mean(
+                        [1.0 if str(r.get("chain_fail_reason", "")) == "step2_no_hit" else 0.0 for r in local_rows]
+                    ),
+                    "chain_fail_constraints_over_filtered_rate": _mean(
+                        [1.0 if str(r.get("chain_fail_reason", "")) == "constraints_over_filtered" else 0.0 for r in local_rows]
+                    ),
+                    "chain_fail_retrieval_distractor_rate": _mean(
+                        [1.0 if str(r.get("chain_fail_reason", "")) == "retrieval_distractor" else 0.0 for r in local_rows]
+                    ),
+                    "chain_fail_evidence_missing_rate": _mean(
+                        [1.0 if str(r.get("chain_fail_reason", "")) == "evidence_missing" else 0.0 for r in local_rows]
+                    ),
+                    "chain_fail_budget_insufficient_rate": _mean(
+                        [1.0 if str(r.get("chain_fail_reason", "")) == "budget_insufficient" else 0.0 for r in local_rows]
                     ),
                     "mrr": _mean([float(r["mrr"]) for r in local_rows]),
                     **base,
@@ -570,6 +664,28 @@ def evaluate_nlq_samples(
                         "chain_success_rate": _mean([float(r.get("chain_success", 0.0)) for r in rows]),
                         "chain_filtered_ratio_step2": _mean(
                             [float(r.get("chain_filtered_ratio_step2", 0.0)) for r in rows]
+                        ),
+                        "chain_derived_time_used_rate": _mean([float(r.get("chain_derived_time_used", 0.0)) for r in rows]),
+                        "chain_derived_place_used_rate": _mean([float(r.get("chain_derived_place_used", 0.0)) for r in rows]),
+                        "chain_derived_object_used_rate": _mean([float(r.get("chain_derived_object_used", 0.0)) for r in rows]),
+                        "chain_derived_nonempty_rate": _mean([float(r.get("chain_derived_nonempty", 0.0)) for r in rows]),
+                        "chain_fail_step1_no_hit_rate": _mean(
+                            [1.0 if str(r.get("chain_fail_reason", "")) == "step1_no_hit" else 0.0 for r in rows]
+                        ),
+                        "chain_fail_step2_no_hit_rate": _mean(
+                            [1.0 if str(r.get("chain_fail_reason", "")) == "step2_no_hit" else 0.0 for r in rows]
+                        ),
+                        "chain_fail_constraints_over_filtered_rate": _mean(
+                            [1.0 if str(r.get("chain_fail_reason", "")) == "constraints_over_filtered" else 0.0 for r in rows]
+                        ),
+                        "chain_fail_retrieval_distractor_rate": _mean(
+                            [1.0 if str(r.get("chain_fail_reason", "")) == "retrieval_distractor" else 0.0 for r in rows]
+                        ),
+                        "chain_fail_evidence_missing_rate": _mean(
+                            [1.0 if str(r.get("chain_fail_reason", "")) == "evidence_missing" else 0.0 for r in rows]
+                        ),
+                        "chain_fail_budget_insufficient_rate": _mean(
+                            [1.0 if str(r.get("chain_fail_reason", "")) == "budget_insufficient" else 0.0 for r in rows]
                         ),
                         "mrr": _mean([float(r["mrr"]) for r in rows]),
                         "hit_at_k_event": _mean([float(r["hit_at_k_event"]) for r in rows]),

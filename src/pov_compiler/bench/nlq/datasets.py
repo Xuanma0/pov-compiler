@@ -834,17 +834,59 @@ def load_hard_pseudo_chain(
     for values in by_type.values():
         values.sort(key=lambda x: (float(x.gt_span[0]), float(x.gt_span[1]), str(x.qid)))
 
-    combos: list[tuple[str, list[str], list[str]]] = [
-        ("place_or_interaction_to_lost_object", ["hard_pseudo_place", "hard_pseudo_interaction"], ["hard_pseudo_lost_object"]),
-        ("anchor_to_decision", ["hard_pseudo_anchor"], ["hard_pseudo_decision"]),
-        ("decision_to_token", ["hard_pseudo_decision"], ["hard_pseudo_token"]),
+    combos: list[dict[str, Any]] = [
+        {
+            "name": "place_or_interaction_to_lost_object",
+            "step1": ["hard_pseudo_place", "hard_pseudo_interaction"],
+            "step2": ["hard_pseudo_lost_object"],
+            "derive": "time+place+object",
+            "place_mode": "hard",
+            "object_mode": "soft",
+            "time_mode": "hard",
+        },
+        {
+            "name": "anchor_to_decision",
+            "step1": ["hard_pseudo_anchor"],
+            "step2": ["hard_pseudo_decision"],
+            "derive": "time_only",
+            "place_mode": "off",
+            "object_mode": "off",
+            "time_mode": "hard",
+        },
+        {
+            "name": "decision_to_token",
+            "step1": ["hard_pseudo_decision"],
+            "step2": ["hard_pseudo_token"],
+            "derive": "time_only",
+            "place_mode": "off",
+            "object_mode": "off",
+            "time_mode": "hard",
+        },
+        {
+            "name": "place_interaction_to_scene_change",
+            "step1": ["hard_pseudo_place", "hard_pseudo_interaction"],
+            "step2": ["hard_pseudo_token"],
+            "derive": "time+place",
+            "place_mode": "hard",
+            "object_mode": "off",
+            "time_mode": "hard",
+            "force_step2": "token=SCENE_CHANGE which=first top_k={top_k}",
+        },
     ]
 
     out: list[NLQSample] = []
     budget_per_combo = max(1, int(max(1, n_chain) // max(1, len(combos))))
     rel = "after"
     window_s = 30.0
-    for combo_name, step1_types, step2_types in combos:
+    for combo_cfg in combos:
+        combo_name = str(combo_cfg.get("name", "chain_combo"))
+        step1_types = [str(x) for x in combo_cfg.get("step1", [])]
+        step2_types = [str(x) for x in combo_cfg.get("step2", [])]
+        derive = str(combo_cfg.get("derive", "time_only"))
+        place_mode = str(combo_cfg.get("place_mode", "soft"))
+        object_mode = str(combo_cfg.get("object_mode", "soft"))
+        time_mode = str(combo_cfg.get("time_mode", "hard"))
+        force_step2 = str(combo_cfg.get("force_step2", "")).strip()
         step1_pool = [s for t in step1_types for s in by_type.get(t, [])]
         step2_pool = [s for t in step2_types for s in by_type.get(t, [])]
         if not step1_pool or not step2_pool:
@@ -855,7 +897,12 @@ def load_hard_pseudo_chain(
         for i in range(min(len(idx1), len(idx2))):
             s1 = step1_pool[idx1[i]]
             s2 = step2_pool[idx2[i]]
-            query = f"{str(s1.query).strip()} then {str(s2.query).strip()} chain_rel={rel} chain_window_s={window_s:.1f} chain_top1_only=true"
+            step2_query = force_step2.format(top_k=int(top_k)) if force_step2 else str(s2.query).strip()
+            query = (
+                f"{str(s1.query).strip()} then {step2_query} "
+                f"chain_rel={rel} chain_window_s={window_s:.1f} chain_top1_only=true "
+                f"chain_derive={derive} chain_place_mode={place_mode} chain_object_mode={object_mode} chain_time_mode={time_mode}"
+            )
             meta = {
                 "source_kind": "chain",
                 "chain_meta": {
@@ -864,6 +911,10 @@ def load_hard_pseudo_chain(
                     "step2_type": str(s2.query_type),
                     "rel": str(rel),
                     "window_s": float(window_s),
+                    "derive": str(derive),
+                    "place_mode": str(place_mode),
+                    "object_mode": str(object_mode),
+                    "time_mode": str(time_mode),
                 },
                 "step1_meta": dict(s1.meta),
                 "step2_meta": dict(s2.meta),

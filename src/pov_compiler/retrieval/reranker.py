@@ -294,6 +294,23 @@ def score_hit_components(
     if decision_type:
         match_score += _match_decision_constraint(hit, str(decision_type), weights)
 
+    place_match_bonus = 0.0
+    chain_place_mode = str(constraints.get("chain_place_mode", "")).strip().lower()
+    chain_place_value = str(constraints.get("chain_place_value", "")).strip()
+    if chain_place_mode == "soft" and chain_place_value:
+        hit_place = str(meta.get("place_segment_id", "")).strip()
+        if hit_place and hit_place == chain_place_value:
+            place_match_bonus = float(weights.bonus_token_highlight_overlap)
+
+    object_match_bonus = 0.0
+    chain_object_mode = str(constraints.get("chain_object_mode", "")).strip().lower()
+    chain_object_value = str(constraints.get("chain_object_value", "")).strip().lower()
+    if chain_object_mode == "soft" and chain_object_value:
+        hit_object = str(meta.get("interaction_primary_object", meta.get("object_name", ""))).strip().lower()
+        if hit_object and (chain_object_value in hit_object or hit_object in chain_object_value):
+            object_match_bonus = float(weights.bonus_token_highlight_overlap)
+    match_score += float(place_match_bonus + object_match_bonus)
+
     first_last_bonus = 0.0
     which = str(constraints.get("which", "")).lower()
     if which in {"first", "last"} and first_last and kind in first_last:
@@ -353,6 +370,8 @@ def score_hit_components(
         "conf_bonus": float(conf_bonus),
         "boundary_bonus": float(boundary_bonus),
         "priority_bonus": float(priority_bonus),
+        "place_match_bonus": float(place_match_bonus),
+        "object_match_bonus": float(object_match_bonus),
         "trigger_match": float(decision_features["trigger_match"]),
         "action_match": float(decision_features["action_match"]),
         "constraint_match": float(decision_features["constraint_match"]),
@@ -424,6 +443,8 @@ def rerank(
                 "conf_bonus": float(parts["conf_bonus"]),
                 "boundary_bonus": float(parts["boundary_bonus"]),
                 "priority_bonus": float(parts["priority_bonus"]),
+                "place_match_bonus": float(parts.get("place_match_bonus", 0.0)),
+                "object_match_bonus": float(parts.get("object_match_bonus", 0.0)),
                 "trigger_match": float(parts["trigger_match"]),
                 "action_match": float(parts["action_match"]),
                 "constraint_match": float(parts["constraint_match"]),

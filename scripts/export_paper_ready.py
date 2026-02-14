@@ -1104,8 +1104,14 @@ def main() -> int:
         to_copy = [
             ch_dir / "table_chain_summary.csv",
             ch_dir / "table_chain_summary.md",
+            ch_dir / "table_chain_failure_attribution.csv",
+            ch_dir / "table_chain_failure_attribution.md",
             ch_dir / "fig_chain_success_vs_budget_seconds.png",
             ch_dir / "fig_chain_success_vs_budget_seconds.pdf",
+            ch_dir / "fig_chain_failure_attribution_vs_budget_seconds.png",
+            ch_dir / "fig_chain_failure_attribution_vs_budget_seconds.pdf",
+            ch_dir / "fig_chain_success_vs_derive.png",
+            ch_dir / "fig_chain_success_vs_derive.pdf",
         ]
         copied: list[str] = []
         for src in to_copy:

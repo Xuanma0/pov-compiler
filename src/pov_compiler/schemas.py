@@ -87,6 +87,8 @@ class ScoreBreakdown(BaseModel):
     conf_bonus: float = 0.0
     boundary_bonus: float = 0.0
     priority_bonus: float = 0.0
+    place_match_bonus: float = 0.0
+    object_match_bonus: float = 0.0
     trigger_match: float = 0.0
     action_match: float = 0.0
     constraint_match: float = 0.0

@@ -275,6 +275,20 @@ class Retriever:
             out["prefer_contact"] = bool(parsed.prefer_contact)
         if parsed.need_object_match:
             out["need_object_match"] = bool(parsed.need_object_match)
+        if parsed.chain_time_min_s is not None:
+            out["chain_time_min_s"] = float(parsed.chain_time_min_s)
+        if parsed.chain_time_max_s is not None:
+            out["chain_time_max_s"] = float(parsed.chain_time_max_s)
+        if parsed.chain_time_mode:
+            out["chain_time_mode"] = str(parsed.chain_time_mode)
+        if parsed.chain_place_value:
+            out["chain_place_value"] = str(parsed.chain_place_value)
+        if parsed.chain_place_mode:
+            out["chain_place_mode"] = str(parsed.chain_place_mode)
+        if parsed.chain_object_value:
+            out["chain_object_value"] = str(parsed.chain_object_value)
+        if parsed.chain_object_mode:
+            out["chain_object_mode"] = str(parsed.chain_object_mode)
         return out
 
     @staticmethod
@@ -300,6 +314,11 @@ class Retriever:
         *,
         rel: str,
         window_s: float,
+        derive: str = "time_only",
+        place_mode: str = "soft",
+        object_mode: str = "soft",
+        time_mode: str = "hard",
+        output: Output | None = None,
     ) -> dict[str, Any]:
         rel_norm = str(rel).strip().lower()
         t0 = float(hit["t0"])
@@ -316,6 +335,43 @@ class Retriever:
             t_min_s = max(0.0, float(t1))
             t_max_s = float("inf")
         meta = dict(hit.get("meta", {}))
+        place_value = str(meta.get("place_segment_id", "")).strip()
+        object_value = str(meta.get("interaction_primary_object", "")).strip().lower()
+        if (not object_value) and output is not None:
+            center_ms = int(round((0.5 * (t0 + t1)) * 1000.0))
+            nearest_name = ""
+            nearest_dist: int | None = None
+            for item in list(getattr(output, "object_memory_v0", []) or []):
+                name = str(getattr(item, "object_name", "")).strip().lower()
+                if not name:
+                    continue
+                ts = getattr(item, "last_contact_t_ms", None)
+                if ts is None:
+                    ts = getattr(item, "last_seen_t_ms", None)
+                if ts is None:
+                    continue
+                try:
+                    dist = abs(int(ts) - int(center_ms))
+                except Exception:
+                    continue
+                if nearest_dist is None or dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_name = name
+            object_value = nearest_name
+        derive_norm = str(derive or "time_only").strip().lower().replace(" ", "")
+        if derive_norm not in {"time_only", "time+place", "time+object", "time+place+object"}:
+            derive_norm = "time_only"
+        place_mode_norm = str(place_mode or "soft").strip().lower()
+        if place_mode_norm not in {"soft", "hard", "off"}:
+            place_mode_norm = "soft"
+        object_mode_norm = str(object_mode or "soft").strip().lower()
+        if object_mode_norm not in {"soft", "hard", "off"}:
+            object_mode_norm = "soft"
+        time_mode_norm = str(time_mode or "hard").strip().lower()
+        if time_mode_norm not in {"hard", "off"}:
+            time_mode_norm = "hard"
+        use_place = derive_norm in {"time+place", "time+place+object"}
+        use_object = derive_norm in {"time+object", "time+place+object"}
         return {
             "rel": rel_norm,
             "t_min_s": float(t_min_s),
@@ -324,8 +380,28 @@ class Retriever:
             "from_hit_id": str(hit["id"]),
             "from_hit_t0": float(t0),
             "from_hit_t1": float(t1),
-            "place_segment_id": str(meta.get("place_segment_id", "")).strip(),
-            "interaction_primary_object": str(meta.get("interaction_primary_object", "")).strip().lower(),
+            "place_segment_id": str(place_value),
+            "interaction_primary_object": str(object_value),
+            "derive": str(derive_norm),
+            "time": {
+                "enabled": bool(time_mode_norm != "off"),
+                "mode": str(time_mode_norm),
+                "source": "step1_top1",
+                "t_min_s": float(t_min_s),
+                "t_max_s": None if not np.isfinite(t_max_s) else float(t_max_s),
+            },
+            "place": {
+                "enabled": bool(use_place and place_mode_norm != "off" and bool(place_value)),
+                "mode": str(place_mode_norm),
+                "source": "step1_top1_meta",
+                "value": str(place_value),
+            },
+            "object": {
+                "enabled": bool(use_object and object_mode_norm != "off" and bool(object_value)),
+                "mode": str(object_mode_norm),
+                "source": "step1_top1_meta_or_object_memory",
+                "value": str(object_value),
+            },
         }
 
     def _merge_step2_query(self, step2_query: str, derived: dict[str, Any], *, default_top_k: int) -> str:
@@ -349,14 +425,46 @@ class Retriever:
                 "chain_rel",
                 "chain_window_s",
                 "chain_top1_only",
+                "chain_derive",
+                "chain_place_mode",
+                "chain_object_mode",
+                "chain_time_mode",
+                "chain_time_min_s",
+                "chain_time_max_s",
+                "chain_place_value",
+                "chain_object_value",
             },
         )
         parts = [cleaned] if cleaned else []
-        parts.append(f"time={float(t_min):.3f}-{float(t_max):.3f}")
+        d_time = dict(derived.get("time", {})) if isinstance(derived.get("time", {}), dict) else {}
+        d_place = dict(derived.get("place", {})) if isinstance(derived.get("place", {}), dict) else {}
+        d_object = dict(derived.get("object", {})) if isinstance(derived.get("object", {}), dict) else {}
+        if bool(d_time.get("enabled", True)):
+            parts.append(f"time={float(t_min):.3f}-{float(t_max):.3f}")
+            parts.append(f"chain_time_mode={str(d_time.get('mode', 'hard'))}")
+            parts.append(f"chain_time_min_s={float(t_min):.3f}")
+            if np.isfinite(float(t_max)):
+                parts.append(f"chain_time_max_s={float(t_max):.3f}")
+        else:
+            parts.append("chain_time_mode=off")
 
-        place_id = str(derived.get("place_segment_id", "")).strip()
-        if place_id and not parsed.place_segment_ids:
-            parts.append(f"place_segment_id={place_id}")
+        if bool(d_place.get("enabled", False)):
+            place_id = str(d_place.get("value", "")).strip()
+            if place_id:
+                parts.append(f"chain_place_value={place_id}")
+                parts.append(f"chain_place_mode={str(d_place.get('mode', 'soft'))}")
+        elif str(d_place.get("mode", "")).strip():
+            parts.append(f"chain_place_mode={str(d_place.get('mode', 'off'))}")
+
+        if bool(d_object.get("enabled", False)):
+            object_name = str(d_object.get("value", "")).strip().lower()
+            if object_name:
+                parts.append(f"chain_object_value={object_name}")
+                parts.append(f"chain_object_mode={str(d_object.get('mode', 'soft'))}")
+        elif str(d_object.get("mode", "")).strip():
+            parts.append(f"chain_object_mode={str(d_object.get('mode', 'off'))}")
+
+        parts.append(f"chain_derive={str(derived.get('derive', 'time_only'))}")
         top_k = int(parsed.top_k if parsed.top_k is not None else int(default_top_k))
         if "top_k=" not in " ".join(parts).lower():
             parts.append(f"top_k={max(1, top_k)}")
@@ -896,6 +1004,10 @@ class Retriever:
                         "chain_rel": str(chain.rel),
                         "window_s": float(chain.window_s),
                         "top1_only": bool(chain.top1_only),
+                        "chain_derive": str(getattr(chain, "derive", "time_only")),
+                        "chain_place_mode": str(getattr(chain, "place_mode", "soft")),
+                        "chain_object_mode": str(getattr(chain, "object_mode", "soft")),
+                        "chain_time_mode": str(getattr(chain, "time_mode", "hard")),
                         "step1": {
                             "query": step1_query,
                             "parsed_constraints": self._parsed_constraints(step1.parsed),
@@ -918,7 +1030,16 @@ class Retriever:
                 },
             }
 
-        derived = self._derive_constraints_from_hit(step1_top, rel=str(chain.rel), window_s=float(chain.window_s))
+        derived = self._derive_constraints_from_hit(
+            step1_top,
+            rel=str(chain.rel),
+            window_s=float(chain.window_s),
+            derive=str(getattr(chain, "derive", "time_only")),
+            place_mode=str(getattr(chain, "place_mode", "soft")),
+            object_mode=str(getattr(chain, "object_mode", "soft")),
+            time_mode=str(getattr(chain, "time_mode", "hard")),
+            output=self.output,
+        )
         step2_query_derived = self._merge_step2_query(step2_query, derived, default_top_k=int(top_k))
         step2_plain = self.retrieve(step2_query)
         step2_result = self.retrieve(step2_query_derived)
@@ -937,6 +1058,10 @@ class Retriever:
             "chain_rel": str(chain.rel),
             "window_s": float(chain.window_s),
             "top1_only": bool(chain.top1_only),
+            "chain_derive": str(getattr(chain, "derive", "time_only")),
+            "chain_place_mode": str(getattr(chain, "place_mode", "soft")),
+            "chain_object_mode": str(getattr(chain, "object_mode", "soft")),
+            "chain_time_mode": str(getattr(chain, "time_mode", "hard")),
             "step1": {
                 "query": step1_query,
                 "parsed_constraints": self._parsed_constraints(step1.parsed),

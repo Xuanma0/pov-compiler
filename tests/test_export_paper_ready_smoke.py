@@ -295,8 +295,17 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (compare_dir / "chain_nlq" / "table_chain_summary.md").write_text("# chain\n", encoding="utf-8")
+    (compare_dir / "chain_nlq" / "table_chain_failure_attribution.csv").write_text(
+        "variant,chain_derive,budget_max_total_s,chain_fail_step1_no_hit_rate\nfull,time+place,20,0.1\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_nlq" / "table_chain_failure_attribution.md").write_text("# chain failure\n", encoding="utf-8")
     (compare_dir / "chain_nlq" / "fig_chain_success_vs_budget_seconds.png").write_bytes(b"PNG")
     (compare_dir / "chain_nlq" / "fig_chain_success_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_nlq" / "fig_chain_failure_attribution_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "chain_nlq" / "fig_chain_failure_attribution_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_nlq" / "fig_chain_success_vs_derive.png").write_bytes(b"PNG")
+    (compare_dir / "chain_nlq" / "fig_chain_success_vs_derive.pdf").write_bytes(b"PDF")
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -390,7 +399,11 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_bye_latency_delta.png").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_summary.csv").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_summary.md").exists()
+    assert (out_dir / "chain_nlq_panel" / "table_chain_failure_attribution.csv").exists()
+    assert (out_dir / "chain_nlq_panel" / "table_chain_failure_attribution.md").exists()
     assert (out_dir / "figures" / "fig_chain_success_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_chain_failure_attribution_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_chain_success_vs_derive.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

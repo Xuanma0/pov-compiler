@@ -35,6 +35,14 @@ class ParsedQuery:
     chain_rel: str | None = None
     chain_window_s: float | None = None
     chain_top1_only: bool | None = None
+    chain_derive: str | None = None
+    chain_place_mode: str | None = None
+    chain_object_mode: str | None = None
+    chain_time_mode: str | None = None
+    chain_time_min_s: float | None = None
+    chain_time_max_s: float | None = None
+    chain_place_value: str | None = None
+    chain_object_value: str | None = None
 
 
 @dataclass
@@ -49,6 +57,10 @@ class QueryChain:
     rel: str = "after"
     window_s: float = 30.0
     top1_only: bool = True
+    derive: str = "time_only"
+    place_mode: str = "soft"
+    object_mode: str = "soft"
+    time_mode: str = "hard"
 
 
 _TIME_PATTERN = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*-\s*([0-9]+(?:\.[0-9]+)?)\s*$")
@@ -232,6 +244,55 @@ def parse_query(query: str) -> ParsedQuery:
             else:
                 parsed.chain_top1_only = bool(b)
                 parsed.filters_applied.append("chain_top1_only")
+        elif key == "chain_derive":
+            derive = str(value).strip().lower().replace(" ", "")
+            allowed = {"time_only", "time+place", "time+object", "time+place+object"}
+            if derive in allowed:
+                parsed.chain_derive = derive
+                parsed.filters_applied.append("chain_derive")
+            else:
+                _warn(parsed, f"invalid_chain_derive={value}")
+        elif key == "chain_place_mode":
+            mode = str(value).strip().lower()
+            if mode in {"soft", "hard", "off"}:
+                parsed.chain_place_mode = mode
+                parsed.filters_applied.append("chain_place_mode")
+            else:
+                _warn(parsed, f"invalid_chain_place_mode={value}")
+        elif key == "chain_object_mode":
+            mode = str(value).strip().lower()
+            if mode in {"soft", "hard", "off"}:
+                parsed.chain_object_mode = mode
+                parsed.filters_applied.append("chain_object_mode")
+            else:
+                _warn(parsed, f"invalid_chain_object_mode={value}")
+        elif key == "chain_time_mode":
+            mode = str(value).strip().lower()
+            if mode in {"hard", "off"}:
+                parsed.chain_time_mode = mode
+                parsed.filters_applied.append("chain_time_mode")
+            else:
+                _warn(parsed, f"invalid_chain_time_mode={value}")
+        elif key == "chain_time_min_s":
+            try:
+                parsed.chain_time_min_s = float(value)
+                parsed.filters_applied.append("chain_time_min_s")
+            except Exception:
+                _warn(parsed, f"invalid_chain_time_min_s={value}")
+        elif key == "chain_time_max_s":
+            try:
+                parsed.chain_time_max_s = float(value)
+                parsed.filters_applied.append("chain_time_max_s")
+            except Exception:
+                _warn(parsed, f"invalid_chain_time_max_s={value}")
+        elif key == "chain_place_value":
+            parsed.chain_place_value = str(value).strip()
+            if parsed.chain_place_value:
+                parsed.filters_applied.append("chain_place_value")
+        elif key == "chain_object_value":
+            parsed.chain_object_value = str(value).strip().lower()
+            if parsed.chain_object_value:
+                parsed.filters_applied.append("chain_object_value")
 
     return parsed
 
@@ -259,10 +320,26 @@ def parse_query_chain(query: str) -> QueryChain | None:
     top1_only = parsed2.chain_top1_only if parsed2.chain_top1_only is not None else parsed1.chain_top1_only
     if top1_only is None:
         top1_only = True
+    derive = str(parsed2.chain_derive or parsed1.chain_derive or "time_only").strip().lower().replace(" ", "")
+    if derive not in {"time_only", "time+place", "time+object", "time+place+object"}:
+        derive = "time_only"
+    place_mode = str(parsed2.chain_place_mode or parsed1.chain_place_mode or "soft").strip().lower()
+    if place_mode not in {"soft", "hard", "off"}:
+        place_mode = "soft"
+    object_mode = str(parsed2.chain_object_mode or parsed1.chain_object_mode or "soft").strip().lower()
+    if object_mode not in {"soft", "hard", "off"}:
+        object_mode = "soft"
+    time_mode = str(parsed2.chain_time_mode or parsed1.chain_time_mode or "hard").strip().lower()
+    if time_mode not in {"hard", "off"}:
+        time_mode = "hard"
 
     return QueryChain(
         steps=[QueryStep(raw=step1, parsed=parsed1), QueryStep(raw=step2, parsed=parsed2)],
         rel=str(rel),
         window_s=float(window),
         top1_only=bool(top1_only),
+        derive=str(derive),
+        place_mode=str(place_mode),
+        object_mode=str(object_mode),
+        time_mode=str(time_mode),
     )

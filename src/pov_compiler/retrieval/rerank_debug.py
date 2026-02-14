@@ -46,6 +46,8 @@ def explain_scores(
                 "conf_bonus": float(parts["conf_bonus"]),
                 "boundary_bonus": float(parts["boundary_bonus"]),
                 "priority_bonus": float(parts["priority_bonus"]),
+                "place_match_bonus": float(parts.get("place_match_bonus", 0.0)),
+                "object_match_bonus": float(parts.get("object_match_bonus", 0.0)),
                 "trigger_match": float(parts["trigger_match"]),
                 "action_match": float(parts["action_match"]),
                 "constraint_match": float(parts["constraint_match"]),

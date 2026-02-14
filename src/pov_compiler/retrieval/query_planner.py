@@ -26,6 +26,10 @@ class ChainPlan:
     chain_rel: str
     window_s: float
     top1_only: bool
+    derive: str = "time_only"
+    place_mode: str = "soft"
+    object_mode: str = "soft"
+    time_mode: str = "hard"
     steps: list[QueryPlan] = field(default_factory=list)
     debug: dict[str, Any] = field(default_factory=dict)
 
@@ -296,6 +300,36 @@ def plan(query_text: str) -> QueryPlan:
                 flags["anchor"] = True
         elif key == "time":
             flags["time"] = True
+        elif key == "chain_time_min_s":
+            try:
+                constraints["chain_time_min_s"] = float(value)
+            except Exception:
+                pass
+        elif key == "chain_time_max_s":
+            try:
+                constraints["chain_time_max_s"] = float(value)
+            except Exception:
+                pass
+        elif key == "chain_time_mode":
+            mode = value.lower().strip()
+            if mode in {"hard", "off"}:
+                constraints["chain_time_mode"] = mode
+        elif key == "chain_place_value":
+            pv = value.strip()
+            if pv:
+                constraints["chain_place_value"] = pv
+        elif key == "chain_place_mode":
+            mode = value.lower().strip()
+            if mode in {"soft", "hard", "off"}:
+                constraints["chain_place_mode"] = mode
+        elif key == "chain_object_value":
+            ov = value.strip().lower()
+            if ov:
+                constraints["chain_object_value"] = ov
+        elif key == "chain_object_mode":
+            mode = value.lower().strip()
+            if mode in {"soft", "hard", "off"}:
+                constraints["chain_object_mode"] = mode
 
     if explicit_object_query:
         # Explicit object-memory queries should not be hijacked by generic scene keywords like "door".
@@ -408,10 +442,14 @@ def plan_chain(query_text: str) -> ChainPlan | None:
         chain_rel=str(chain.rel),
         window_s=float(chain.window_s),
         top1_only=bool(chain.top1_only),
+        derive=str(chain.derive),
+        place_mode=str(chain.place_mode),
+        object_mode=str(chain.object_mode),
+        time_mode=str(chain.time_mode),
         steps=step_plans,
         debug={
             "chain_query": str(query_text),
             "step_count": len(step_plans),
-            "derived_strategy": "step1_top1_to_step2_constraints",
+            "derived_strategy": "step1_top1_to_step2_constraints_v2",
         },
     )

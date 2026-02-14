@@ -520,3 +520,17 @@ Optional paper-ready integration:
 ```text
 python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v17_demo\compare --out_dir data\outputs\ab_v17_demo\compare\paper_ready --lost-object-panel-dir data\outputs\ab_v17_demo\compare\nlq_budget\real\aggregate
 ```
+
+### Chain Query v2 (derived constraints + attribution)
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\trace_chain_v124_demo --query "place=first interaction_object=door interaction_min=0.30 then token=SCENE_CHANGE which=first top_k=6 chain_derive=time+place+object chain_place_mode=hard chain_object_mode=soft"
+python scripts\eval_nlq.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --index data\outputs\ego4d_ab_real_n6\cache\<uid> --out_dir data\outputs\nlq_chain_v124_demo --mode hard_pseudo_chain --n 6 --seed 0 --top-k 6
+```
+
+Chain mode now emits:
+- `table_chain_summary.(csv/md)`
+- `table_chain_failure_attribution.(csv/md)`
+- `fig_chain_success_vs_budget_seconds.(png/pdf)`
+- `fig_chain_failure_attribution_vs_budget_seconds.(png/pdf)`
+- `fig_chain_success_vs_derive.(png/pdf)`

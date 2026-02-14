@@ -18,6 +18,7 @@ class HardConstraintConfig:
     enable_interaction: bool = True
     enable_object_match: bool = True
     enable_place: bool = True
+    enable_chain_derived: bool = True
     relax_on_empty: bool = True
     relax_order: list[str] = None  # type: ignore[assignment]
 
@@ -25,6 +26,9 @@ class HardConstraintConfig:
         if self.relax_order is None:
             self.relax_order = [
                 "after_scene_change",
+                "chain_object_match",
+                "chain_place_match",
+                "chain_time_range",
                 "interaction_object",
                 "object_match",
                 "interaction_min",
@@ -42,6 +46,7 @@ class HardConstraintConfig:
             "enable_interaction": bool(self.enable_interaction),
             "enable_object_match": bool(self.enable_object_match),
             "enable_place": bool(self.enable_place),
+            "enable_chain_derived": bool(self.enable_chain_derived),
             "relax_on_empty": bool(self.relax_on_empty),
             "relax_order": list(self.relax_order),
         }
@@ -56,11 +61,23 @@ class HardConstraintConfig:
             enable_interaction=bool(payload.get("enable_interaction", True)),
             enable_object_match=bool(payload.get("enable_object_match", True)),
             enable_place=bool(payload.get("enable_place", True)),
+            enable_chain_derived=bool(payload.get("enable_chain_derived", True)),
             relax_on_empty=bool(payload.get("relax_on_empty", True)),
             relax_order=list(
                 payload.get(
                     "relax_order",
-                    ["after_scene_change", "object_match", "interaction_object", "interaction_min", "place_first_last", "type_match", "first_last"],
+                    [
+                        "after_scene_change",
+                        "chain_object_match",
+                        "chain_place_match",
+                        "chain_time_range",
+                        "object_match",
+                        "interaction_object",
+                        "interaction_min",
+                        "place_first_last",
+                        "type_match",
+                        "first_last",
+                    ],
                 )
             ),
         )
@@ -213,6 +230,26 @@ def _match_interaction_min(hit: Hit, threshold: float) -> bool:
     return float(score) >= float(threshold)
 
 
+def _match_place_segment(hit: Hit, target: str) -> bool:
+    tgt = str(target).strip()
+    if not tgt:
+        return True
+    value = str(hit.get("meta", {}).get("place_segment_id", "")).strip()
+    if not value:
+        return False
+    return value == tgt
+
+
+def _match_chain_time(hit: Hit, t_min_s: float | None, t_max_s: float | None) -> bool:
+    t0 = float(hit["t0"])
+    t1 = float(hit["t1"])
+    if t_min_s is not None and t1 < float(t_min_s):
+        return False
+    if t_max_s is not None and t0 > float(t_max_s):
+        return False
+    return True
+
+
 def _apply_place_first_last(hits: list[Hit], which: str) -> list[Hit]:
     grouped: dict[str, list[Hit]] = {}
     for hit in hits:
@@ -271,6 +308,70 @@ def _apply_once(
                 lambda xs: [h for h in xs if float(h["t1"]) >= float(scene_t)],
                 {"scene_t": float(scene_t)},
             )
+
+    if "chain_time_range" in enabled and bool(cfg.enable_chain_derived):
+        time_mode = str(constraints.get("chain_time_mode", "")).strip().lower()
+        if time_mode in {"hard", "off"}:
+            t_min_raw = constraints.get("chain_time_min_s", None)
+            t_max_raw = constraints.get("chain_time_max_s", None)
+            t_min = float(t_min_raw) if isinstance(t_min_raw, (int, float)) else None
+            t_max = float(t_max_raw) if isinstance(t_max_raw, (int, float)) else None
+            if time_mode == "hard":
+                _run_step(
+                    "chain_time_range",
+                    True,
+                    lambda xs: [h for h in xs if _match_chain_time(h, t_min, t_max)],
+                    {
+                        "mode": "hard",
+                        "t_min_s": t_min,
+                        "t_max_s": t_max,
+                    },
+                )
+            else:
+                _run_step(
+                    "chain_time_range",
+                    True,
+                    lambda xs: list(xs),
+                    {"mode": "off", "t_min_s": t_min, "t_max_s": t_max},
+                )
+
+    if "chain_place_match" in enabled and bool(cfg.enable_chain_derived and cfg.enable_place):
+        place_mode = str(constraints.get("chain_place_mode", "")).strip().lower()
+        place_value = str(constraints.get("chain_place_value", "")).strip()
+        if place_mode in {"hard", "soft", "off"} and place_value:
+            if place_mode == "hard":
+                _run_step(
+                    "chain_place_match",
+                    True,
+                    lambda xs: [h for h in xs if _match_place_segment(h, place_value)],
+                    {"mode": "hard", "place_segment_id": place_value},
+                )
+            else:
+                _run_step(
+                    "chain_place_match",
+                    True,
+                    lambda xs: list(xs),
+                    {"mode": place_mode, "place_segment_id": place_value},
+                )
+
+    if "chain_object_match" in enabled and bool(cfg.enable_chain_derived and cfg.enable_object_match):
+        obj_mode = str(constraints.get("chain_object_mode", "")).strip().lower()
+        obj_value = str(constraints.get("chain_object_value", "")).strip().lower()
+        if obj_mode in {"hard", "soft", "off"} and obj_value:
+            if obj_mode == "hard":
+                _run_step(
+                    "chain_object_match",
+                    True,
+                    lambda xs: [h for h in xs if _match_object_name(h, obj_value)],
+                    {"mode": "hard", "object_name": obj_value},
+                )
+            else:
+                _run_step(
+                    "chain_object_match",
+                    True,
+                    lambda xs: list(xs),
+                    {"mode": obj_mode, "object_name": obj_value},
+                )
 
     if "interaction_object" in enabled and bool(cfg.enable_interaction):
         target_obj = str(constraints.get("interaction_object", "")).strip().lower()
@@ -398,6 +499,10 @@ def apply_constraints_detailed(
     if bool(resolved.enable_place):
         enabled.add("place_first_last")
         enabled.add("place_segment_id")
+    if bool(resolved.enable_chain_derived):
+        enabled.add("chain_time_range")
+        enabled.add("chain_place_match")
+        enabled.add("chain_object_match")
 
     filtered, applied, steps = _apply_once(hits, query_plan, resolved, enabled, output)
     relaxed: list[str] = []
