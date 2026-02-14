@@ -39,6 +39,19 @@ class BudgetSelection:
     status: str = "ok"
     reason: str = ""
     metrics: dict[str, Any] = field(default_factory=dict)
+    action: str = ""
+    action_reason: str = ""
+    trial_records: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    if out != out:
+        return None
+    return out
 
 
 class FixedBudgetPolicy:
@@ -71,6 +84,19 @@ class FixedBudgetPolicy:
             status=status,
             reason=reason,
             metrics=metrics,
+            action="accept",
+            action_reason=reason,
+            trial_records=[
+                {
+                    "trial_index": 1,
+                    "budget_key": budget.key,
+                    "budget_seconds": budget.seconds,
+                    "action": "accept",
+                    "action_reason": reason,
+                    "status": status,
+                    "metrics": dict(metrics),
+                }
+            ],
         )
 
 
@@ -153,6 +179,19 @@ class RecommendedBudgetPolicy:
             status=status,
             reason=reason,
             metrics=metrics,
+            action="accept",
+            action_reason=reason,
+            trial_records=[
+                {
+                    "trial_index": 1,
+                    "budget_key": budget.key,
+                    "budget_seconds": budget.seconds,
+                    "action": "accept",
+                    "action_reason": reason,
+                    "status": status,
+                    "metrics": dict(metrics),
+                }
+            ],
         )
 
 
@@ -171,16 +210,6 @@ class AdaptiveMinBudgetPolicy:
         self.gates = dict(gates or {})
         self.targets = dict(targets or {})
         self.allow_missing = bool(allow_missing)
-
-    @staticmethod
-    def _to_float(value: Any) -> float | None:
-        try:
-            out = float(value)
-        except Exception:
-            return None
-        if out != out:
-            return None
-        return out
 
     def _eval_op(self, lhs: float | None, op: str, rhs: float) -> bool:
         if lhs is None:
@@ -202,20 +231,20 @@ class AdaptiveMinBudgetPolicy:
             if not isinstance(cfg, dict):
                 continue
             op = str(cfg.get("op", "<="))
-            rhs = self._to_float(cfg.get("value"))
+            rhs = _to_float(cfg.get("value"))
             if rhs is None:
                 continue
-            lhs = self._to_float(metrics.get(str(key)))
+            lhs = _to_float(metrics.get(str(key)))
             if not self._eval_op(lhs, op, rhs):
                 return False, f"gate_fail:{key}{op}{rhs}"
         for key, cfg in self.targets.items():
             if not isinstance(cfg, dict):
                 continue
             op = str(cfg.get("op", ">="))
-            rhs = self._to_float(cfg.get("value"))
+            rhs = _to_float(cfg.get("value"))
             if rhs is None:
                 continue
-            lhs = self._to_float(metrics.get(str(key)))
+            lhs = _to_float(metrics.get(str(key)))
             if not self._eval_op(lhs, op, rhs):
                 return False, f"target_fail:{key}{op}{rhs}"
         return True, "passed"
@@ -231,6 +260,7 @@ class AdaptiveMinBudgetPolicy:
         last_budget = budgets[-1]
         last_metrics: dict[str, Any] = {}
         last_reason = ""
+        trial_records: list[dict[str, Any]] = []
 
         for budget in self.budgets_sorted:
             metrics = evaluate_budget(budget)
@@ -239,6 +269,17 @@ class AdaptiveMinBudgetPolicy:
             last_budget = budget
             last_metrics = metrics
             last_reason = reason
+            trial_records.append(
+                {
+                    "trial_index": len(tried),
+                    "budget_key": budget.key,
+                    "budget_seconds": budget.seconds,
+                    "action": "accept" if passed else "continue",
+                    "action_reason": reason,
+                    "status": "ok" if passed else "target_pending",
+                    "metrics": dict(metrics),
+                }
+            )
             if passed:
                 return BudgetSelection(
                     chosen_budget_key=budget.key,
@@ -248,6 +289,9 @@ class AdaptiveMinBudgetPolicy:
                     status="ok",
                     reason="adaptive_min_budget_passed",
                     metrics=metrics,
+                    action="accept",
+                    action_reason=reason,
+                    trial_records=trial_records,
                 )
 
         return BudgetSelection(
@@ -258,6 +302,188 @@ class AdaptiveMinBudgetPolicy:
             status="no_budget_passed",
             reason=last_reason or "adaptive_no_budget_passed",
             metrics=last_metrics,
+            action="give_up_max_trials",
+            action_reason=last_reason or "adaptive_no_budget_passed",
+            trial_records=trial_records,
+        )
+
+
+class SafetyLatencyBudgetPolicy:
+    name = "safety_latency"
+
+    def __init__(
+        self,
+        *,
+        budgets: list[BudgetSpec],
+        latency_cap_ms: float,
+        max_trials_per_query: int = 3,
+        prefer_lower_budget: bool = True,
+        escalate_on_reasons: list[str] | None = None,
+        deescalate_on_latency: bool = True,
+        stop_on_non_budget_failure: bool = True,
+        recommend_budget_key: str | None = None,
+    ):
+        self.budgets = sorted(list(budgets), key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
+        self.latency_cap_ms = float(latency_cap_ms)
+        self.max_trials_per_query = max(1, int(max_trials_per_query))
+        self.prefer_lower_budget = bool(prefer_lower_budget)
+        reasons = [str(x).strip().lower() for x in (escalate_on_reasons or ["budget_insufficient"]) if str(x).strip()]
+        self.escalate_on_reasons = reasons or ["budget_insufficient"]
+        self.deescalate_on_latency = bool(deescalate_on_latency)
+        self.stop_on_non_budget_failure = bool(stop_on_non_budget_failure)
+        self.recommend_budget_key = str(recommend_budget_key).strip() if recommend_budget_key else ""
+
+    def _start_index(self) -> int:
+        if self.prefer_lower_budget:
+            return 0
+        if self.recommend_budget_key:
+            for i, b in enumerate(self.budgets):
+                if b.key == self.recommend_budget_key:
+                    return i
+        return max(0, int(len(self.budgets) // 2))
+
+    def _latency_from_metrics(self, metrics: dict[str, Any]) -> float:
+        for key in ("latency_e2e_ms", "query_e2e_ms", "e2e_ms", "latency_ms"):
+            val = _to_float(metrics.get(key))
+            if val is not None:
+                return float(val)
+        return 0.0
+
+    def _strict_hit(self, metrics: dict[str, Any]) -> bool:
+        for key in ("strict_hit_at_k", "hit_at_k_strict"):
+            val = _to_float(metrics.get(key))
+            if val is not None:
+                return float(val) > 0.0
+        return False
+
+    def _safety_critical(self, metrics: dict[str, Any]) -> tuple[bool, str]:
+        is_critical = _to_float(metrics.get("safety_is_critical_fn"))
+        if is_critical is None:
+            # fallback: strict miss treated as critical
+            is_critical = 0.0 if self._strict_hit(metrics) else 1.0
+        reason = str(metrics.get("safety_reason", "")).strip().lower()
+        return bool(float(is_critical) > 0.0), reason
+
+    def select(
+        self,
+        *,
+        budgets: list[BudgetSpec],
+        evaluate_budget: Callable[[BudgetSpec], dict[str, Any]],
+        query_context: dict[str, Any] | None = None,
+    ) -> BudgetSelection:
+        available = sorted(list(budgets), key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
+        if not available:
+            raise ValueError("budgets is empty")
+        # keep current available list instead of constructor if caller overrides
+        self.budgets = available
+        idx = self._start_index()
+        tried: list[str] = []
+        trial_records: list[dict[str, Any]] = []
+        status = "ok"
+        reason = "accept"
+        final_action = "accept"
+        final_action_reason = "strict_hit_latency_ok"
+        chosen_budget = available[idx]
+        chosen_metrics: dict[str, Any] = {}
+
+        for trial_idx in range(1, self.max_trials_per_query + 1):
+            budget = available[idx]
+            metrics = evaluate_budget(budget)
+            tried.append(budget.key)
+            chosen_budget = budget
+            chosen_metrics = dict(metrics)
+
+            latency_ms = self._latency_from_metrics(metrics)
+            strict_hit = self._strict_hit(metrics)
+            safety_is, safety_reason = self._safety_critical(metrics)
+            action = "accept"
+            action_reason = "strict_hit_latency_ok"
+            should_continue = False
+
+            if latency_ms > self.latency_cap_ms and self.deescalate_on_latency:
+                if idx > 0:
+                    action = "deescalate_latency"
+                    action_reason = f"latency_e2e_ms>{self.latency_cap_ms:.3f}"
+                    idx -= 1
+                    should_continue = True
+                else:
+                    action = "give_up_latency_floor"
+                    action_reason = f"latency_e2e_ms>{self.latency_cap_ms:.3f} at_min_budget"
+                    status = "rejected_by_latency"
+                    reason = action_reason
+            elif safety_is and safety_reason in self.escalate_on_reasons:
+                if idx < len(available) - 1:
+                    action = f"escalate_safety_{safety_reason or 'critical'}"
+                    action_reason = "safety_critical_fn"
+                    idx += 1
+                    should_continue = True
+                else:
+                    action = "give_up_max_budget"
+                    action_reason = "safety_critical_fn_at_max_budget"
+                    status = "no_budget_passed"
+                    reason = action_reason
+            elif strict_hit and latency_ms <= self.latency_cap_ms:
+                action = "accept"
+                action_reason = "strict_hit_latency_ok"
+                status = "ok"
+                reason = action_reason
+            elif (not strict_hit) and self.stop_on_non_budget_failure and (
+                (not safety_is) or (safety_reason not in self.escalate_on_reasons)
+            ):
+                action = "stop_non_budget_failure"
+                action_reason = f"safety_reason={safety_reason or 'unknown'}"
+                status = "rejected_by_safety"
+                reason = action_reason
+            else:
+                if (
+                    not self.stop_on_non_budget_failure
+                    and trial_idx < self.max_trials_per_query
+                    and idx < len(available) - 1
+                ):
+                    action = "escalate_search"
+                    action_reason = "strict_miss_search_next_budget"
+                    idx += 1
+                    should_continue = True
+                else:
+                    action = "give_up_max_trials"
+                    action_reason = "max_trials_reached"
+                    status = "no_budget_passed"
+                    reason = action_reason
+
+            trial_records.append(
+                {
+                    "trial_index": int(trial_idx),
+                    "budget_key": budget.key,
+                    "budget_seconds": budget.seconds,
+                    "action": action,
+                    "action_reason": action_reason,
+                    "status": status if not should_continue else "continue",
+                    "metrics": dict(metrics),
+                }
+            )
+            final_action = action
+            final_action_reason = action_reason
+
+            if should_continue:
+                continue
+            break
+        else:
+            status = "no_budget_passed"
+            reason = "max_trials_reached"
+            final_action = "give_up_max_trials"
+            final_action_reason = reason
+
+        return BudgetSelection(
+            chosen_budget_key=chosen_budget.key,
+            chosen_budget_seconds=chosen_budget.seconds,
+            trials_count=len(trial_records),
+            tried_budget_keys=tried,
+            status=status,
+            reason=reason,
+            metrics=chosen_metrics,
+            action=final_action,
+            action_reason=final_action_reason,
+            trial_records=trial_records,
         )
 
 

@@ -119,3 +119,56 @@ def test_streaming_budget_smoke_fixed_policy(tmp_path: Path) -> None:
     headers = (out_dir / "queries.csv").read_text(encoding="utf-8").splitlines()[0]
     assert "chosen_budget_key" in headers
     assert "trials_count" in headers
+
+
+def test_streaming_budget_smoke_safety_latency_policy(tmp_path: Path) -> None:
+    repo_root = ROOT
+    json_path = tmp_path / "demo.json"
+    out_dir = tmp_path / "out_safety_latency"
+    payload = _build_output().model_dump()
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    cmd = [
+        sys.executable,
+        str(repo_root / "scripts" / "streaming_budget_smoke.py"),
+        "--json",
+        str(json_path),
+        "--out_dir",
+        str(out_dir),
+        "--step-s",
+        "8",
+        "--budgets",
+        "20/50/4,40/100/8,60/200/12",
+        "--policy",
+        "safety_latency",
+        "--latency-cap-ms",
+        "5",
+        "--max-trials-per-query",
+        "3",
+        "--query",
+        "anchor=turn_head top_k=6",
+        "--query",
+        "decision=ATTENTION_TURN_HEAD top_k=6",
+    ]
+    proc = subprocess.run(cmd, cwd=str(repo_root), capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "policy=safety_latency" in proc.stdout
+
+    headers = (out_dir / "queries.csv").read_text(encoding="utf-8").splitlines()[0]
+    for col in (
+        "policy_name",
+        "trial_index",
+        "action",
+        "safety_reason",
+        "latency_e2e_ms",
+        "final_trial",
+    ):
+        assert col in headers
+
+    for fig in (
+        "fig_policy_budget_over_queries.png",
+        "fig_policy_budget_over_queries.pdf",
+        "fig_policy_safety_vs_latency.png",
+        "fig_policy_safety_vs_latency.pdf",
+    ):
+        assert (out_dir / "figures" / fig).exists()

@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_nlq
+from pov_compiler.bench.nlq.safety import classify_failure_reason
 from pov_compiler.eval.budget_sweep import apply_budget
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
@@ -26,6 +27,7 @@ from pov_compiler.streaming.budget_policy import (
     BudgetSpec,
     FixedBudgetPolicy,
     RecommendedBudgetPolicy,
+    SafetyLatencyBudgetPolicy,
 )
 
 
@@ -280,6 +282,53 @@ def _evaluate_sample_once(
     }
 
 
+def _samples_from_queries(output: Output, queries: list[str], top_k: int) -> list[NLQSample]:
+    out: list[NLQSample] = []
+    highlights = list(output.highlights)
+    events = list(output.events_v1) if output.events_v1 else list(output.events)
+    for idx, query in enumerate(queries, start=1):
+        q = str(query).strip()
+        if not q:
+            continue
+        if highlights:
+            h = highlights[(idx - 1) % len(highlights)]
+            gt_span = (float(h.t0), float(h.t1))
+        elif events:
+            e = events[(idx - 1) % len(events)]
+            gt_span = (float(e.t0), float(e.t1))
+        else:
+            gt_span = (0.0, 0.2)
+        out.append(
+            NLQSample(
+                qid=f"user_q_{idx:04d}",
+                query=q,
+                query_type="user_query",
+                gt_span=gt_span,
+                top_k=max(1, int(top_k)),
+                distractors=[],
+                meta={"source": "cli_query"},
+            )
+        )
+    return out
+
+
+def _derive_safety_for_trial(metrics: dict[str, Any], budget: BudgetSpec) -> tuple[int, str]:
+    strict_hit = float(metrics.get("hit_at_k_strict", 0.0) or 0.0) > 0.0
+    if strict_hit:
+        return 0, ""
+    row = {
+        "filtered_hits_before": int(metrics.get("filtered_hits_before", 0) or 0),
+        "filtered_hits_after": int(metrics.get("filtered_hits_after", 0) or 0),
+        "candidate_count": int(metrics.get("filtered_hits_after", 0) or 0),
+        "top1_in_distractor": float(metrics.get("top1_in_distractor_rate", 0.0) or 0.0),
+        "budget_max_total_s": float(budget.max_total_s),
+        "budget_max_tokens": int(budget.max_tokens),
+        "budget_max_decisions": int(budget.max_decisions),
+    }
+    reason = str(classify_failure_reason(row))
+    return 1, reason
+
+
 @dataclass
 class StreamingConfig:
     step_s: float = 5.0
@@ -301,6 +350,12 @@ class StreamingConfig:
     nlq_n_highlight: int = 10
     nlq_n_token: int = 10
     nlq_n_decision: int = 10
+    latency_cap_ms: float = 25.0
+    max_trials_per_query: int = 3
+    prefer_lower_budget: bool = True
+    escalate_on_reasons: list[str] | None = None
+    deescalate_on_latency: bool = True
+    stop_on_non_budget_failure: bool = True
     mode: str = "basic"
 
 
@@ -469,6 +524,16 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
     policy_name = str(cfg.budget_policy or "fixed").strip().lower()
     if policy_name == "recommend":
         policy = RecommendedBudgetPolicy(cfg.recommend_dir or "")
+    elif policy_name == "safety_latency":
+        policy = SafetyLatencyBudgetPolicy(
+            budgets=budgets_sorted,
+            latency_cap_ms=float(cfg.latency_cap_ms),
+            max_trials_per_query=int(cfg.max_trials_per_query),
+            prefer_lower_budget=bool(cfg.prefer_lower_budget),
+            escalate_on_reasons=list(cfg.escalate_on_reasons or ["budget_insufficient"]),
+            deescalate_on_latency=bool(cfg.deescalate_on_latency),
+            stop_on_non_budget_failure=bool(cfg.stop_on_non_budget_failure),
+        )
     elif policy_name == "adaptive":
         default_gates = {
             "top1_in_distractor_rate": {"op": "<=", "value": 0.20},
@@ -495,7 +560,9 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
     step_points = _make_step_points(duration_s, step_s)
 
     samples_all: list[NLQSample]
-    if str(cfg.nlq_mode).strip().lower() == "hard_pseudo_nlq":
+    if cfg.queries:
+        samples_all = _samples_from_queries(output, list(cfg.queries), top_k=max(1, int(cfg.top_k)))
+    elif str(cfg.nlq_mode).strip().lower() == "hard_pseudo_nlq":
         samples_all = load_hard_pseudo_nlq(
             output,
             seed=int(cfg.nlq_seed),
@@ -554,6 +621,7 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         for sample in eligible_samples:
             query_started = time.perf_counter()
             trial_cache: dict[str, dict[str, Any]] = {}
+            trial_records: list[dict[str, Any]] = []
 
             def _eval_budget(budget: BudgetSpec) -> dict[str, Any]:
                 key = budget.key
@@ -579,8 +647,16 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     rerank_cfg=rerank_cfg,
                     allow_gt_fallback=bool(cfg.allow_gt_fallback),
                 )
-                retrieval_ms = float((time.perf_counter() - eval_start) * 1000.0)
+                eval_ms = float((time.perf_counter() - eval_start) * 1000.0)
+                retrieval_ms = float(metrics.get("retrieval_ms", eval_ms))
                 metrics["retrieval_ms"] = retrieval_ms
+                metrics["latency_retrieval_ms"] = retrieval_ms
+                metrics["latency_e2e_ms"] = eval_ms
+                safety_is, safety_reason = _derive_safety_for_trial(metrics, budget)
+                metrics["safety_is_critical_fn"] = int(safety_is)
+                metrics["safety_reason"] = safety_reason
+                metrics["strict_hit_at_k"] = float(metrics.get("hit_at_k_strict", 0.0))
+                metrics["strict_hit_at_1"] = float(metrics.get("hit_at_1_strict", 0.0))
                 trial_cache[key] = dict(metrics)
                 return dict(metrics)
 
@@ -591,45 +667,91 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
             )
             selected_metrics = dict(selection.metrics)
             q_e2e_ms = float((time.perf_counter() - query_started) * 1000.0)
+            selected_metrics["query_total_e2e_ms"] = q_e2e_ms
+
+            if selection.trial_records:
+                trial_records = [dict(x) for x in selection.trial_records]
+            else:
+                for i, key in enumerate(selection.tried_budget_keys, start=1):
+                    spec = next((b for b in budgets_sorted if b.key == key), None)
+                    if spec is None:
+                        continue
+                    trial_records.append(
+                        {
+                            "trial_index": int(i),
+                            "budget_key": spec.key,
+                            "budget_seconds": float(spec.seconds),
+                            "action": "continue" if i < len(selection.tried_budget_keys) else (selection.action or "accept"),
+                            "action_reason": selection.reason,
+                            "status": selection.status,
+                            "metrics": dict(trial_cache.get(spec.key, selected_metrics)),
+                        }
+                    )
+            final_trial_idx = int(len(trial_records)) if trial_records else 1
 
             retrieval_ms = float(selected_metrics.get("retrieval_ms", 0.0))
             all_retrieval_lat_ms.append(retrieval_ms)
             all_query_e2e_ms.append(q_e2e_ms)
             all_trials.append(int(selection.trials_count))
-
-            row = {
-                "step_idx": int(step_idx),
-                "t0_s": float(prev_t),
-                "t1_s": float(end_t),
-                "query_id": str(sample.qid),
-                "query_type": str(sample.query_type),
-                "query_text": str(sample.query),
-                "gt_t0": float(sample.gt_span[0]),
-                "gt_t1": float(sample.gt_span[1]),
-                "chosen_budget_key": str(selection.chosen_budget_key),
-                "chosen_budget_seconds": float(selection.chosen_budget_seconds),
-                "trials_count": int(selection.trials_count),
-                "status": str(selection.status),
-                "reason": str(selection.reason),
-                "tried_budget_keys": json.dumps(selection.tried_budget_keys, ensure_ascii=False),
-                "hit_at_k_strict": float(selected_metrics.get("hit_at_k_strict", 0.0)),
-                "hit_at_1_strict": float(selected_metrics.get("hit_at_1_strict", 0.0)),
-                "top1_in_distractor_rate": float(selected_metrics.get("top1_in_distractor_rate", 0.0)),
-                "fp_rate": float(selected_metrics.get("fp_rate", 0.0)),
-                "mrr": float(selected_metrics.get("mrr", 0.0)),
-                "top1_kind": str(selected_metrics.get("top1_kind", "")),
-                "top1_source_query": str(selected_metrics.get("top1_source_query", "")),
-                "chosen_plan_intent": str(selected_metrics.get("chosen_plan_intent", "")),
-                "retrieval_ms": retrieval_ms,
-                "e2e_ms": q_e2e_ms,
-            }
-            step_query_rows.append(row)
-            query_rows.append(dict(row))
+            for trial in trial_records:
+                trial_index = int(trial.get("trial_index", 0) or 0)
+                trial_metrics = dict(trial.get("metrics", {}))
+                bkey = str(trial.get("budget_key", selection.chosen_budget_key))
+                bspec = next((b for b in budgets_sorted if b.key == bkey), None)
+                bsec = float(trial.get("budget_seconds", bspec.seconds if bspec else selection.chosen_budget_seconds))
+                btok = int(bspec.max_tokens if bspec else 0)
+                bdec = int(bspec.max_decisions if bspec else 0)
+                row = {
+                    "step_idx": int(step_idx),
+                    "t0_s": float(prev_t),
+                    "t1_s": float(end_t),
+                    "query_id": str(sample.qid),
+                    "query_type": str(sample.query_type),
+                    "query_text": str(sample.query),
+                    "gt_t0": float(sample.gt_span[0]),
+                    "gt_t1": float(sample.gt_span[1]),
+                    "policy_name": str(policy_name),
+                    "budget_seconds": bsec,
+                    "budget_tokens": btok,
+                    "budget_decisions": bdec,
+                    "budget_key": bkey,
+                    "chosen_budget_key": str(selection.chosen_budget_key),
+                    "chosen_budget_seconds": float(selection.chosen_budget_seconds),
+                    "trial_index": trial_index,
+                    "trial_count_for_query": int(selection.trials_count),
+                    "trials_count": int(selection.trials_count),
+                    "status": str(selection.status),
+                    "reason": str(selection.reason),
+                    "tried_budget_keys": json.dumps(selection.tried_budget_keys, ensure_ascii=False),
+                    "action": str(trial.get("action", "accept")),
+                    "action_reason": str(trial.get("action_reason", selection.reason)),
+                    "strict_hit_at_k": float(trial_metrics.get("strict_hit_at_k", trial_metrics.get("hit_at_k_strict", 0.0))),
+                    "strict_hit_at_1": float(trial_metrics.get("strict_hit_at_1", trial_metrics.get("hit_at_1_strict", 0.0))),
+                    "hit_at_k_strict": float(trial_metrics.get("hit_at_k_strict", 0.0)),
+                    "hit_at_1_strict": float(trial_metrics.get("hit_at_1_strict", 0.0)),
+                    "top1_in_distractor_rate": float(trial_metrics.get("top1_in_distractor_rate", 0.0)),
+                    "fp_rate": float(trial_metrics.get("fp_rate", 0.0)),
+                    "mrr": float(trial_metrics.get("mrr", 0.0)),
+                    "top1_kind": str(trial_metrics.get("top1_kind", "")),
+                    "top1_source_query": str(trial_metrics.get("top1_source_query", "")),
+                    "chosen_plan_intent": str(trial_metrics.get("chosen_plan_intent", "")),
+                    "safety_is_critical_fn": int(trial_metrics.get("safety_is_critical_fn", 0)),
+                    "safety_reason": str(trial_metrics.get("safety_reason", "")),
+                    "latency_retrieval_ms": float(trial_metrics.get("latency_retrieval_ms", trial_metrics.get("retrieval_ms", 0.0))),
+                    "latency_e2e_ms": float(trial_metrics.get("latency_e2e_ms", trial_metrics.get("query_total_e2e_ms", 0.0))),
+                    "retrieval_ms": float(trial_metrics.get("retrieval_ms", 0.0)),
+                    "e2e_ms": float(trial_metrics.get("latency_e2e_ms", 0.0)),
+                    "final_trial": 1 if trial_index == final_trial_idx else 0,
+                }
+                step_query_rows.append(row)
+                query_rows.append(dict(row))
 
         step_elapsed = max(1e-9, float(time.perf_counter() - step_start))
         step_e2e_ms = float(step_elapsed * 1000.0)
         all_step_e2e_ms.append(step_e2e_ms)
         qps = float(len(step_query_rows) / step_elapsed) if step_query_rows else 0.0
+        final_rows = [x for x in step_query_rows if int(x.get("final_trial", 0)) == 1]
+        metric_rows = final_rows if final_rows else step_query_rows
         step_rows.append(
             {
                 "step_idx": int(step_idx),
@@ -639,21 +761,28 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                 "index_size": int(event_index.size),
                 "events_v1_added": int(added_this_step),
                 "events_v1_indexed": int(len(indexed_ids)),
-                "queries": int(len(step_query_rows)),
-                "retrieval_latency_p50_ms": _percentile([float(x["retrieval_ms"]) for x in step_query_rows], 50.0),
-                "retrieval_latency_p95_ms": _percentile([float(x["retrieval_ms"]) for x in step_query_rows], 95.0),
-                "query_e2e_p50_ms": _percentile([float(x["e2e_ms"]) for x in step_query_rows], 50.0),
-                "query_e2e_p95_ms": _percentile([float(x["e2e_ms"]) for x in step_query_rows], 95.0),
+                "queries": int(len(final_rows)),
+                "retrieval_latency_p50_ms": _percentile([float(x["latency_retrieval_ms"]) for x in step_query_rows], 50.0),
+                "retrieval_latency_p95_ms": _percentile([float(x["latency_retrieval_ms"]) for x in step_query_rows], 95.0),
+                "query_e2e_p50_ms": _percentile([float(x["latency_e2e_ms"]) for x in step_query_rows], 50.0),
+                "query_e2e_p95_ms": _percentile([float(x["latency_e2e_ms"]) for x in step_query_rows], 95.0),
+                "latency_e2e_p50_ms": _percentile([float(x["latency_e2e_ms"]) for x in step_query_rows], 50.0),
+                "latency_e2e_p95_ms": _percentile([float(x["latency_e2e_ms"]) for x in step_query_rows], 95.0),
                 "e2e_ms": float(step_e2e_ms),
                 "throughput_qps": float(qps),
                 "policy_name": str(policy_name),
                 "chosen_budget_key_mode": str(policy_name),
-                "avg_trials_per_query": _mean([float(x["trials_count"]) for x in step_query_rows]),
-                "hit_at_k_strict": _mean([float(x["hit_at_k_strict"]) for x in step_query_rows]),
-                "hit_at_1_strict": _mean([float(x["hit_at_1_strict"]) for x in step_query_rows]),
-                "top1_in_distractor_rate": _mean([float(x["top1_in_distractor_rate"]) for x in step_query_rows]),
-                "fp_rate": _mean([float(x["fp_rate"]) for x in step_query_rows]),
-                "mrr": _mean([float(x["mrr"]) for x in step_query_rows]),
+                "avg_trials_per_query": _mean([float(x["trial_count_for_query"]) for x in final_rows]),
+                "avg_trials_per_query_step": _mean([float(x["trial_count_for_query"]) for x in final_rows]),
+                "hit_at_k_strict": _mean([float(x["hit_at_k_strict"]) for x in metric_rows]),
+                "hit_at_1_strict": _mean([float(x["hit_at_1_strict"]) for x in metric_rows]),
+                "top1_in_distractor_rate": _mean([float(x["top1_in_distractor_rate"]) for x in metric_rows]),
+                "fp_rate": _mean([float(x["fp_rate"]) for x in metric_rows]),
+                "mrr": _mean([float(x["mrr"]) for x in metric_rows]),
+                "safety_critical_fn_rate_step": _mean([float(x["safety_is_critical_fn"]) for x in metric_rows]),
+                "safety_budget_insufficient_rate_step": _mean(
+                    [1.0 if str(x.get("safety_reason", "")) == "budget_insufficient" else 0.0 for x in metric_rows]
+                ),
             }
         )
         progressive_rows.append(
@@ -669,11 +798,20 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         )
         prev_t = float(end_t)
 
+    final_query_rows = [r for r in query_rows if int(r.get("final_trial", 0)) == 1]
+    metric_rows = final_query_rows if final_query_rows else query_rows
+    action_counts: dict[str, int] = {}
+    for row in query_rows:
+        action = str(row.get("action", "")).strip()
+        if not action:
+            continue
+        action_counts[action] = action_counts.get(action, 0) + 1
     summary = {
         "video_id": str(output.video_id),
         "duration_s": float(duration_s),
         "steps": int(len(step_rows)),
-        "queries_total": int(len(query_rows)),
+        "queries_total": int(len(final_query_rows)),
+        "query_trials_total": int(len(query_rows)),
         "events_v1_total": int(len(output.events_v1)),
         "events_v1_indexed": int(len(indexed_ids)),
         "retrieval_latency_p50_ms": _percentile(all_retrieval_lat_ms, 50.0),
@@ -687,12 +825,24 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         else 0.0,
         "policy_name": str(policy_name),
         "avg_trials_per_query": _mean([float(x) for x in all_trials]),
-        "hit_at_k_strict": _mean([float(r.get("hit_at_k_strict", 0.0)) for r in query_rows]),
-        "hit_at_1_strict": _mean([float(r.get("hit_at_1_strict", 0.0)) for r in query_rows]),
-        "top1_in_distractor_rate": _mean([float(r.get("top1_in_distractor_rate", 0.0)) for r in query_rows]),
-        "fp_rate": _mean([float(r.get("fp_rate", 0.0)) for r in query_rows]),
-        "mrr": _mean([float(r.get("mrr", 0.0)) for r in query_rows]),
+        "hit_at_k_strict": _mean([float(r.get("hit_at_k_strict", 0.0)) for r in metric_rows]),
+        "hit_at_1_strict": _mean([float(r.get("hit_at_1_strict", 0.0)) for r in metric_rows]),
+        "top1_in_distractor_rate": _mean([float(r.get("top1_in_distractor_rate", 0.0)) for r in metric_rows]),
+        "fp_rate": _mean([float(r.get("fp_rate", 0.0)) for r in metric_rows]),
+        "mrr": _mean([float(r.get("mrr", 0.0)) for r in metric_rows]),
+        "safety_critical_fn_rate": _mean([float(r.get("safety_is_critical_fn", 0.0)) for r in metric_rows]),
+        "safety_budget_insufficient_rate": _mean(
+            [1.0 if str(r.get("safety_reason", "")) == "budget_insufficient" else 0.0 for r in metric_rows]
+        ),
+        "num_escalate": int(sum(v for k, v in action_counts.items() if str(k).startswith("escalate_"))),
+        "num_deescalate": int(sum(v for k, v in action_counts.items() if str(k).startswith("deescalate_"))),
+        "num_accept": int(action_counts.get("accept", 0)),
+        "num_give_up": int(sum(v for k, v in action_counts.items() if str(k).startswith("give_up"))),
         "budgets": [b.key for b in budgets_sorted],
+        "latency_cap_ms": float(cfg.latency_cap_ms),
+        "max_trials_per_query": int(cfg.max_trials_per_query),
+        "escalate_on_reasons": list(cfg.escalate_on_reasons or ["budget_insufficient"]),
+        "policy_action_counts": action_counts,
     }
     return {"summary": summary, "step_rows": step_rows, "query_rows": query_rows, "progressive_rows": progressive_rows}
 

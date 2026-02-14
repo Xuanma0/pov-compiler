@@ -107,7 +107,7 @@ docs/
 | `scripts\sweep_streaming_budgets.py` | Streaming online simulation budget sweep (fixed/adaptive) | `--json_dir --uids-file --budgets --out_dir --policy` | `aggregate/metrics_by_budget.*`, `figures/fig_streaming_quality_*`, `snapshot.json` |
 | `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
 | `scripts\export_paper_ready.py` | Unified BYE/NLQ/Streaming budget panel export (paper-ready tables/figures) | `--compare_dir --out_dir --label_a --label_b` | `tables/table_budget_panel*`, `figures/fig_budget_*`, `report.md`, `snapshot.json` |
-| `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive`) with strict query metrics | `--json --out_dir --budgets --budget-policy [--fixed-budget|--recommend-dir]` | `steps.csv`, `queries.csv`, `report.md`, `snapshot.json` |
+| `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive/safety_latency`) with strict+safety metrics and switch traces | `--json --out_dir --budgets --policy [--fixed-budget|--recommend-dir|--latency-cap-ms]` | `steps.csv`, `queries.csv`, `figures/fig_policy_*`, `report.md`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ budget sweeps and budget recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-budget-recommend` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/budget_recommend/*` |
 
@@ -266,3 +266,19 @@ Adaptive minimum budget:
 ```text
 python scripts\streaming_budget_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_budget_adaptive --step-s 8 --budgets "20/50/4,40/100/8,60/200/12" --budget-policy adaptive
 ```
+
+## Streaming Safety+Latency Policy (v1.9)
+
+Safety-latency constrained online policy (latency cap + strict+safety objective):
+
+```text
+python scripts\streaming_budget_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_budget_v19 --step-s 8 --budgets "20/50/4,40/100/8,60/200/12" --policy safety_latency --latency-cap-ms 5 --max-trials-per-query 3 --query "anchor=turn_head top_k=6" --query "decision=ATTENTION_TURN_HEAD top_k=6"
+```
+
+Key outputs:
+- `data/outputs/streaming_budget_v19/steps.csv`
+- `data/outputs/streaming_budget_v19/queries.csv` (trial-level `action/safety_reason/final_trial`)
+- `data/outputs/streaming_budget_v19/figures/fig_policy_budget_over_queries.png`
+- `data/outputs/streaming_budget_v19/figures/fig_policy_safety_vs_latency.png`
+- `data/outputs/streaming_budget_v19/report.md`
+- `data/outputs/streaming_budget_v19/snapshot.json`

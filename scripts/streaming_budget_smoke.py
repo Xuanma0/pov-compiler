@@ -72,6 +72,14 @@ def _write_report(path: Path, payload: dict[str, Any], policy_gates: dict[str, A
     lines.append(f"- e2e_latency_p95_ms: {float(summary.get('e2e_latency_p95_ms', 0.0)):.3f}")
     lines.append(f"- hit_at_k_strict: {float(summary.get('hit_at_k_strict', 0.0)):.4f}")
     lines.append(f"- top1_in_distractor_rate: {float(summary.get('top1_in_distractor_rate', 0.0)):.4f}")
+    lines.append(f"- safety_critical_fn_rate: {float(summary.get('safety_critical_fn_rate', 0.0)):.4f}")
+    lines.append(f"- safety_budget_insufficient_rate: {float(summary.get('safety_budget_insufficient_rate', 0.0)):.4f}")
+    lines.append(f"- latency_cap_ms: {float(summary.get('latency_cap_ms', 0.0)):.3f}")
+    lines.append(f"- max_trials_per_query: {int(summary.get('max_trials_per_query', 0))}")
+    lines.append(f"- num_escalate: {int(summary.get('num_escalate', 0))}")
+    lines.append(f"- num_deescalate: {int(summary.get('num_deescalate', 0))}")
+    lines.append(f"- num_accept: {int(summary.get('num_accept', 0))}")
+    lines.append(f"- num_give_up: {int(summary.get('num_give_up', 0))}")
     lines.append(
         "- e2e_includes: step slicing + events_v1 incremental update + index update + policy trials + retrieval + rerank + metrics + write"
     )
@@ -99,18 +107,106 @@ def _write_report(path: Path, payload: dict[str, Any], policy_gates: dict[str, A
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _make_figures(out_dir: Path, query_rows: list[dict[str, Any]], formats: list[str]) -> list[str]:
+    import matplotlib.pyplot as plt
+
+    out_fig = out_dir / "figures"
+    out_fig.mkdir(parents=True, exist_ok=True)
+    rows = sorted(
+        list(query_rows),
+        key=lambda r: (
+            int(r.get("step_idx", 0)),
+            str(r.get("query_id", "")),
+            int(r.get("trial_index", 0)),
+        ),
+    )
+    final_rows = [r for r in rows if int(r.get("final_trial", 0)) == 1]
+    plot_rows = final_rows if final_rows else rows
+    x = list(range(1, len(plot_rows) + 1))
+    y_budget = [float(r.get("budget_seconds", r.get("chosen_budget_seconds", 0.0)) or 0.0) for r in plot_rows]
+    all_paths: list[str] = []
+
+    p1 = out_fig / "fig_policy_budget_over_queries"
+    plt.figure(figsize=(8.2, 4.4))
+    plt.plot(x, y_budget, marker="o", linewidth=1.2)
+    esc_x = [i for i, r in enumerate(plot_rows, start=1) if str(r.get("action", "")).startswith("escalate_")]
+    esc_y = [y_budget[i - 1] for i in esc_x]
+    dec_x = [i for i, r in enumerate(plot_rows, start=1) if str(r.get("action", "")).startswith("deescalate_")]
+    dec_y = [y_budget[i - 1] for i in dec_x]
+    if esc_x:
+        plt.scatter(esc_x, esc_y, marker="^", s=70, label="escalate")
+    if dec_x:
+        plt.scatter(dec_x, dec_y, marker="v", s=70, label="deescalate")
+    plt.xlabel("Query Index (final trials)")
+    plt.ylabel("Budget Seconds")
+    plt.title("Online Policy Budget Switch Trace")
+    plt.grid(True, alpha=0.35)
+    if esc_x or dec_x:
+        plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = p1.with_suffix(f".{ext}")
+        plt.savefig(p)
+        all_paths.append(str(p))
+    plt.close()
+
+    p2 = out_fig / "fig_policy_safety_vs_latency"
+    lat = [float(r.get("latency_e2e_ms", r.get("e2e_ms", 0.0)) or 0.0) for r in plot_rows]
+    safety = [float(r.get("safety_is_critical_fn", 0.0) or 0.0) for r in plot_rows]
+    plt.figure(figsize=(8.2, 4.4))
+    ax1 = plt.gca()
+    ax1.plot(x, lat, marker="o", linestyle="-", label="latency_e2e_ms")
+    ax1.set_xlabel("Query Index (final trials)")
+    ax1.set_ylabel("Latency (ms)")
+    ax1.grid(True, alpha=0.35)
+    ax2 = ax1.twinx()
+    ax2.plot(x, safety, marker="s", linestyle="--", label="safety_is_critical_fn")
+    ax2.set_ylabel("Safety Critical FN (0/1)")
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
+    plt.title("Policy Safety vs Latency")
+    plt.tight_layout()
+    for ext in formats:
+        p = p2.with_suffix(f".{ext}")
+        plt.savefig(p)
+        all_paths.append(str(p))
+    plt.close()
+    return all_paths
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Streaming online budget-policy smoke (fixed/recommend/adaptive)")
     parser.add_argument("--json", required=True, help="Input pipeline json (v03 decisions)")
     parser.add_argument("--out_dir", required=True, help="Output directory")
     parser.add_argument("--step-s", type=float, default=8.0, help="Streaming step size (seconds)")
     parser.add_argument("--mode", default="hard_pseudo_nlq", help="Query mode (default hard_pseudo_nlq)")
+    parser.add_argument("--query", action="append", default=[], help="Optional query text (repeatable)")
     parser.add_argument("--budgets", required=True, help='Budget list like "20/50/4,40/100/8,60/200/12"')
-    parser.add_argument("--budget-policy", choices=["fixed", "recommend", "adaptive"], default="fixed")
+    parser.add_argument(
+        "--budget-policy",
+        "--policy",
+        dest="budget_policy",
+        choices=["fixed", "recommend", "adaptive", "safety_latency"],
+        default="fixed",
+    )
     parser.add_argument("--fixed-budget", default="40/100/8", help="Budget key for fixed policy")
     parser.add_argument("--recommend-dir", default=None, help="Path to v1.5 budget_recommend output dir")
     parser.add_argument("--policy-gates-json", default=None, help="JSON string/path for adaptive gate constraints")
     parser.add_argument("--policy-targets-json", default=None, help="JSON string/path for adaptive targets")
+    parser.add_argument("--latency-cap-ms", type=float, default=25.0, help="Latency cap for safety_latency policy")
+    parser.add_argument("--max-trials-per-query", type=int, default=3, help="Max trials per query for safety_latency")
+    group_pref = parser.add_mutually_exclusive_group()
+    group_pref.add_argument("--prefer-lower-budget", dest="prefer_lower_budget", action="store_true")
+    group_pref.add_argument("--prefer-higher-budget", dest="prefer_lower_budget", action="store_false")
+    parser.set_defaults(prefer_lower_budget=True)
+    parser.add_argument(
+        "--escalate-on-reason",
+        action="append",
+        default=[],
+        help="Reason names that trigger escalation in safety_latency policy (repeatable)",
+    )
+    parser.add_argument("--formats", default="png,pdf", help="Figure formats, e.g. png,pdf")
     parser.add_argument("--top-k", "--topk", dest="top_k", type=int, default=6)
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
@@ -136,12 +232,18 @@ def main() -> int:
         config=StreamingConfig(
             step_s=float(args.step_s),
             top_k=int(args.top_k),
+            queries=[str(x) for x in list(args.query or []) if str(x).strip()],
             budgets=budgets,
             budget_policy=str(args.budget_policy),
             fixed_budget=str(args.fixed_budget),
             recommend_dir=args.recommend_dir,
             policy_gates=gates,
             policy_targets=targets,
+            latency_cap_ms=float(args.latency_cap_ms),
+            max_trials_per_query=int(args.max_trials_per_query),
+            prefer_lower_budget=bool(args.prefer_lower_budget),
+            escalate_on_reasons=[str(x).strip() for x in list(args.escalate_on_reason or []) if str(x).strip()]
+            or ["budget_insufficient"],
             allow_gt_fallback=False,
             nlq_mode=str(args.mode),
             nlq_seed=int(args.seed),
@@ -162,6 +264,11 @@ def main() -> int:
     _write_csv(steps_csv, list(payload.get("step_rows", [])))
     _write_csv(queries_csv, list(payload.get("query_rows", [])))
     _write_report(report_md, payload, policy_gates=gates, policy_targets=targets)
+    figure_paths = _make_figures(
+        out_dir=out_dir,
+        query_rows=list(payload.get("query_rows", [])),
+        formats=[x.strip() for x in str(args.formats).split(",") if x.strip()],
+    )
 
     summary = dict(payload.get("summary", {}))
     snapshot = {
@@ -174,8 +281,14 @@ def main() -> int:
             "budget_policy": str(args.budget_policy),
             "fixed_budget": str(args.fixed_budget),
             "recommend_dir": str(args.recommend_dir) if args.recommend_dir else None,
+            "queries": [str(x) for x in list(args.query or []) if str(x).strip()],
             "policy_gates": gates,
             "policy_targets": targets,
+            "latency_cap_ms": float(args.latency_cap_ms),
+            "max_trials_per_query": int(args.max_trials_per_query),
+            "prefer_lower_budget": bool(args.prefer_lower_budget),
+            "escalate_on_reasons": [str(x).strip() for x in list(args.escalate_on_reason or []) if str(x).strip()]
+            or ["budget_insufficient"],
             "top_k": int(args.top_k),
             "seed": int(args.seed),
         },
@@ -183,6 +296,7 @@ def main() -> int:
         "outputs": {
             "steps_csv": str(steps_csv),
             "queries_csv": str(queries_csv),
+            "figures": figure_paths,
             "report_md": str(report_md),
         },
     }
@@ -195,6 +309,7 @@ def main() -> int:
     print(f"avg_trials_per_query={float(summary.get('avg_trials_per_query', 0.0)):.4f}")
     print(f"saved_steps={steps_csv}")
     print(f"saved_queries={queries_csv}")
+    print(f"saved_figures={figure_paths}")
     print(f"saved_report={report_md}")
     print(f"saved_snapshot={snapshot_json}")
     return 0

@@ -4,6 +4,7 @@ from pov_compiler.streaming.budget_policy import (
     BudgetSpec,
     FixedBudgetPolicy,
     RecommendedBudgetPolicy,
+    SafetyLatencyBudgetPolicy,
 )
 from pov_compiler.streaming.runner import StreamingConfig, run_streaming
 
@@ -15,4 +16,5 @@ __all__ = [
     "FixedBudgetPolicy",
     "RecommendedBudgetPolicy",
     "AdaptiveMinBudgetPolicy",
+    "SafetyLatencyBudgetPolicy",
 ]
