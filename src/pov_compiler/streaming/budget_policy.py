@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 from pov_compiler.streaming.interventions import policy_action_order
 
 @dataclass(frozen=True)
@@ -500,10 +501,14 @@ class SafetyLatencyInterventionBudgetPolicy:
         strict_threshold: float = 1.0,
         max_top1_in_distractor_rate: float = 0.2,
         prefer_lower_budget: bool = True,
+        intervention_cfg: InterventionConfig | dict[str, Any] | str | Path | None = None,
     ):
         self.budgets = sorted(list(budgets), key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
         self.latency_cap_ms = float(latency_cap_ms)
-        self.max_trials_per_query = max(1, int(max_trials_per_query))
+        self.intervention_cfg = resolve_intervention_config(intervention_cfg)
+        self.max_trials_per_query = max(
+            1, min(int(max_trials_per_query), int(self.intervention_cfg.max_trials_cap))
+        )
         self.strict_threshold = float(strict_threshold)
         self.max_top1_in_distractor_rate = float(max_top1_in_distractor_rate)
         self.prefer_lower_budget = bool(prefer_lower_budget)
@@ -519,6 +524,9 @@ class SafetyLatencyInterventionBudgetPolicy:
             "prefer_lower_budget": bool(self.prefer_lower_budget),
             "budgets": [b.key for b in self.budgets],
             "action_order": self.action_order,
+            "intervention_cfg_name": str(self.intervention_cfg.name),
+            "intervention_cfg_hash": str(self.intervention_cfg.stable_hash()),
+            "intervention_cfg": self.intervention_cfg.to_dict(),
         }
 
 

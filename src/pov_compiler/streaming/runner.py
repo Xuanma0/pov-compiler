@@ -30,6 +30,7 @@ from pov_compiler.streaming.budget_policy import (
     SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
 )
+from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 from pov_compiler.streaming.interventions import (
     InterventionState,
     STOP_ACTIONS,
@@ -413,6 +414,7 @@ class StreamingConfig:
     escalate_on_reasons: list[str] | None = None
     deescalate_on_latency: bool = True
     stop_on_non_budget_failure: bool = True
+    intervention_cfg: InterventionConfig | dict[str, Any] | str | Path | None = None
     mode: str = "basic"
 
 
@@ -579,6 +581,7 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
     budgets_sorted = sorted(budgets, key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
     fixed_budget = str(cfg.fixed_budget or budgets_sorted[-1].key)
     policy_name = str(cfg.budget_policy or "fixed").strip().lower()
+    intervention_cfg = resolve_intervention_config(cfg.intervention_cfg)
     if policy_name == "recommend":
         policy = RecommendedBudgetPolicy(cfg.recommend_dir or "")
     elif policy_name == "safety_latency_intervention":
@@ -589,6 +592,7 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
             strict_threshold=float(cfg.strict_threshold),
             max_top1_in_distractor_rate=float(cfg.max_top1_in_distractor_rate),
             prefer_lower_budget=bool(cfg.prefer_lower_budget),
+            intervention_cfg=intervention_cfg,
         )
     elif policy_name == "safety_latency":
         policy = SafetyLatencyBudgetPolicy(
@@ -759,7 +763,8 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                 action_final = "give_up_max_trials"
                 action_reason_final = "max_trials_reached"
                 chosen_budget = budgets_sorted[state.budget_idx]
-                for trial_idx in range(1, max(1, int(cfg.max_trials_per_query)) + 1):
+                max_trials_eff = max(1, min(int(cfg.max_trials_per_query), int(intervention_cfg.max_trials_cap)))
+                for trial_idx in range(1, int(max_trials_eff) + 1):
                     budget_before = budgets_sorted[state.budget_idx]
                     config_before = state.to_config()
                     metrics = _eval_budget(
@@ -781,9 +786,10 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                         latency_e2e_ms=latency_now,
                         latency_cap_ms=float(cfg.latency_cap_ms),
                         trial_idx=int(trial_idx),
-                        max_trials=max(1, int(cfg.max_trials_per_query)),
+                        max_trials=int(max_trials_eff),
                         max_top1_in_distractor_rate=float(cfg.max_top1_in_distractor_rate),
                         budgets=budgets_sorted,
+                        intervention_cfg=intervention_cfg,
                     )
                     updated_state = apply_intervention_action(
                         state=state,
@@ -1074,6 +1080,9 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "escalate_on_reasons": list(cfg.escalate_on_reasons or ["budget_insufficient"]),
         "policy_action_counts": action_counts,
         "policy_action_order": policy_action_order() if policy_name == "safety_latency_intervention" else {},
+        "intervention_cfg_name": str(intervention_cfg.name) if policy_name == "safety_latency_intervention" else "",
+        "intervention_cfg_hash": str(intervention_cfg.stable_hash()) if policy_name == "safety_latency_intervention" else "",
+        "intervention_cfg": intervention_cfg.to_dict() if policy_name == "safety_latency_intervention" else {},
         "strict_threshold": float(cfg.strict_threshold),
         "max_top1_in_distractor_rate": float(cfg.max_top1_in_distractor_rate),
     }

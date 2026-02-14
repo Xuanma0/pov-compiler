@@ -1,0 +1,8 @@
+name: default
+w_safety: 1.0
+w_latency: 0.2
+w_trials: 0.1
+penalty_budget_up: 0.35
+penalty_retry: 0.10
+penalty_relax: 0.15
+max_trials_cap: 5

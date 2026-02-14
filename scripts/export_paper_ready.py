@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional directory from run_streaming_policy_compare.py compare/ output",
     )
+    parser.add_argument(
+        "--streaming-intervention-sweep-dir",
+        default=None,
+        help="Optional directory from sweep_streaming_interventions.py output",
+    )
     parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
     _parse_bool_with_neg(parser, "with-figs", default=True)
     parser.add_argument("--png", action="store_true")
@@ -639,6 +644,60 @@ def main() -> int:
         streaming_policy_compare["copied_summary"] = copied_summary
         figure_paths.extend(streaming_policy_compare["copied_figures"])
 
+    streaming_intervention_sweep: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "best_summary": {},
+    }
+    if args.streaming_intervention_sweep_dir:
+        sis_dir = Path(args.streaming_intervention_sweep_dir)
+        streaming_intervention_sweep["enabled"] = True
+        streaming_intervention_sweep["source_dir"] = str(sis_dir)
+        dst_root = out_dir / "streaming_intervention_sweep"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            sis_dir / "best_config.yaml",
+            sis_dir / "best_report.md",
+            sis_dir / "snapshot.json",
+            sis_dir / "figures" / "fig_objective_vs_latency.png",
+            sis_dir / "figures" / "fig_objective_vs_latency.pdf",
+            sis_dir / "figures" / "fig_pareto_frontier.png",
+            sis_dir / "figures" / "fig_pareto_frontier.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        streaming_intervention_sweep["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        snap_src = sis_dir / "snapshot.json"
+        if snap_src.exists():
+            try:
+                snap_payload = json.loads(snap_src.read_text(encoding="utf-8"))
+                if isinstance(snap_payload, dict):
+                    best = snap_payload.get("best", {})
+                    if isinstance(best, dict):
+                        streaming_intervention_sweep["best_summary"] = {
+                            "cfg_name": best.get("cfg_name", ""),
+                            "cfg_hash": best.get("cfg_hash", ""),
+                            "objective": best.get("objective", 0.0),
+                        }
+                    default = snap_payload.get("default", {})
+                    if isinstance(default, dict):
+                        streaming_intervention_sweep["best_summary"]["default_objective"] = default.get("objective", 0.0)
+            except Exception:
+                pass
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -669,6 +728,17 @@ def main() -> int:
             )
         else:
             report_lines.append("- streaming_policy_compare: source provided but artifacts missing.")
+    if args.streaming_intervention_sweep_dir:
+        if streaming_intervention_sweep.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- streaming_intervention_sweep_dir: `{streaming_intervention_sweep.get('source_dir')}`",
+                    f"- streaming_intervention_sweep_files: `{streaming_intervention_sweep.get('copied_files')}`",
+                    f"- streaming_intervention_best: `{json.dumps(streaming_intervention_sweep.get('best_summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- streaming_intervention_sweep: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -695,6 +765,9 @@ def main() -> int:
             "streaming_policy_compare_dir": str(args.streaming_policy_compare_dir)
             if args.streaming_policy_compare_dir
             else None,
+            "streaming_intervention_sweep_dir": str(args.streaming_intervention_sweep_dir)
+            if args.streaming_intervention_sweep_dir
+            else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -710,6 +783,7 @@ def main() -> int:
             "figures": figure_paths,
             "safety_figures": safety_figure_paths,
             "streaming_policy_compare": streaming_policy_compare,
+            "streaming_intervention_sweep": streaming_intervention_sweep,
             "report_md": str(report_path),
         },
     }

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pov_compiler.bench.nlq.safety import classify_failure_reason
+from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 
 ACTION_ORDER_BY_ATTRIBUTION: dict[str, list[str]] = {
     "retrieval_distractor": ["switch_rerank_cfg", "expand_candidates", "escalate_budget"],
@@ -65,10 +66,13 @@ def choose_intervention_action(
     max_trials: int,
     max_top1_in_distractor_rate: float,
     budgets: list[Any],
+    intervention_cfg: InterventionConfig | dict[str, Any] | str | None = None,
 ) -> tuple[str, str]:
+    cfg = resolve_intervention_config(intervention_cfg)
+    max_trials_eff = max(1, min(int(max_trials), int(cfg.max_trials_cap)))
     if strict_hit and top1_in_distractor_rate <= float(max_top1_in_distractor_rate) and latency_e2e_ms <= float(latency_cap_ms):
         return "accept", "strict_and_risk_ok"
-    if trial_idx >= int(max_trials):
+    if trial_idx >= max_trials_eff:
         return "give_up_max_trials", "max_trials_reached"
     if latency_e2e_ms > float(latency_cap_ms):
         if int(state.budget_idx) > 0:
@@ -76,15 +80,56 @@ def choose_intervention_action(
         return "stop_at_budget_boundary", "latency_high_at_min_budget"
 
     key = attribution if attribution in ACTION_ORDER_BY_ATTRIBUTION else "other"
-    seq = ACTION_ORDER_BY_ATTRIBUTION.get(key, ACTION_ORDER_BY_ATTRIBUTION["other"])
+    seq = list(ACTION_ORDER_BY_ATTRIBUTION.get(key, ACTION_ORDER_BY_ATTRIBUTION["other"]))
+    # Score candidate interventions with configurable weights/penalties.
+    # Higher score is preferred; actions already attempted for this attribution are skipped.
+    def _score(action: str) -> float:
+        base = 0.0
+        if key == "retrieval_distractor":
+            base += {"switch_rerank_cfg": 1.0, "expand_candidates": 0.8, "escalate_budget": 0.4}.get(action, 0.0)
+        elif key == "constraints_over_filtered":
+            base += {"relax_constraints": 1.0, "expand_candidates": 0.7, "escalate_budget": 0.3}.get(action, 0.0)
+        elif key == "evidence_missing":
+            base += {"expand_candidates": 1.0, "widen_evidence_window": 0.9, "escalate_budget": 0.35}.get(action, 0.0)
+        elif key == "budget_insufficient":
+            base += {"escalate_budget": 1.0}.get(action, 0.0)
+        else:
+            base += {"expand_candidates": 0.7, "escalate_budget": 0.4}.get(action, 0.0)
+
+        # Shared objective terms.
+        safety_need = max(0.0, float(cfg.w_safety)) * (1.0 - (1.0 if strict_hit else 0.0))
+        latency_pressure = max(0.0, float(cfg.w_latency)) * max(0.0, (float(latency_e2e_ms) - float(latency_cap_ms)) / max(1.0, float(latency_cap_ms)))
+        trial_pressure = max(0.0, float(cfg.w_trials)) * (float(trial_idx) / max(1.0, float(max_trials_eff)))
+        base += safety_need
+        base -= trial_pressure
+        if action == "deescalate_budget":
+            base += latency_pressure + float(cfg.w_latency)
+        if action == "escalate_budget":
+            base -= float(cfg.penalty_budget_up)
+            # budget_insufficient specifically rewards budget escalation.
+            if key == "budget_insufficient":
+                base += float(cfg.w_safety) * 0.8
+            if latency_pressure > 0.0:
+                base -= latency_pressure
+        if action in {"switch_rerank_cfg", "expand_candidates", "widen_evidence_window", "relax_constraints"}:
+            base -= float(cfg.penalty_retry)
+        if action == "relax_constraints":
+            base -= float(cfg.penalty_relax)
+        return float(base)
+
     cur = int(state.action_cursor.get(key, 0))
-    while cur < len(seq):
-        action = str(seq[cur])
-        state.action_cursor[key] = cur + 1
-        cur += 1
+    candidates: list[tuple[float, int, str]] = []
+    for i, action in enumerate(seq):
+        if i < cur:
+            continue
         if action == "escalate_budget" and int(state.budget_idx) >= len(budgets) - 1:
             continue
-        return action, f"attribution={key}"
+        candidates.append((_score(action), i, str(action)))
+    if candidates:
+        candidates.sort(key=lambda x: (-float(x[0]), int(x[1]), str(x[2])))
+        _, chosen_idx, chosen_action = candidates[0]
+        state.action_cursor[key] = int(chosen_idx) + 1
+        return chosen_action, f"attribution={key},cfg={cfg.name}"
     return "stop_non_budget_failure", f"no_more_actions_for={key}"
 
 

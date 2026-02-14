@@ -7,6 +7,7 @@ from pov_compiler.streaming.budget_policy import (
     SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
 )
+from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 from pov_compiler.streaming.interventions import (
     ACTION_ORDER_BY_ATTRIBUTION,
     InterventionState,
@@ -27,6 +28,8 @@ __all__ = [
     "AdaptiveMinBudgetPolicy",
     "SafetyLatencyBudgetPolicy",
     "SafetyLatencyInterventionBudgetPolicy",
+    "InterventionConfig",
+    "resolve_intervention_config",
     "ACTION_ORDER_BY_ATTRIBUTION",
     "InterventionState",
     "infer_failure_attribution",

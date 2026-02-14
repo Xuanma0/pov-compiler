@@ -83,6 +83,8 @@ def _write_report(path: Path, payload: dict[str, Any], policy_gates: dict[str, A
     lines.append(f"- intervention_trials_total: {int(summary.get('intervention_trials_total', 0))}")
     lines.append(f"- intervention_success_rate: {float(summary.get('intervention_success_rate', 0.0)):.4f}")
     lines.append(f"- policy_action_order: `{json.dumps(summary.get('policy_action_order', {}), ensure_ascii=False, sort_keys=True)}`")
+    lines.append(f"- intervention_cfg_name: {summary.get('intervention_cfg_name', '')}")
+    lines.append(f"- intervention_cfg_hash: {summary.get('intervention_cfg_hash', '')}")
     lines.append(
         "- e2e_includes: step slicing + events_v1 incremental update + index update + policy trials + retrieval + rerank + metrics + write"
     )
@@ -266,6 +268,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fixed-budget", default="40/100/8", help="Budget key for fixed policy")
     parser.add_argument("--recommend-dir", default=None, help="Path to v1.5 budget_recommend output dir")
+    parser.add_argument(
+        "--intervention-cfg",
+        default=None,
+        help="YAML path for safety_latency_intervention action-selection config",
+    )
     parser.add_argument("--policy-gates-json", default=None, help="JSON string/path for adaptive gate constraints")
     parser.add_argument("--policy-targets-json", default=None, help="JSON string/path for adaptive targets")
     parser.add_argument("--latency-cap-ms", type=float, default=25.0, help="Latency cap for safety_latency policy")
@@ -322,6 +329,7 @@ def main() -> int:
             prefer_lower_budget=bool(args.prefer_lower_budget),
             escalate_on_reasons=[str(x).strip() for x in list(args.escalate_on_reason or []) if str(x).strip()]
             or ["budget_insufficient"],
+            intervention_cfg=args.intervention_cfg,
             allow_gt_fallback=False,
             nlq_mode=str(args.mode),
             nlq_seed=int(args.seed),
@@ -362,6 +370,7 @@ def main() -> int:
             "budget_policy": str(args.budget_policy),
             "fixed_budget": str(args.fixed_budget),
             "recommend_dir": str(args.recommend_dir) if args.recommend_dir else None,
+            "intervention_cfg": str(args.intervention_cfg) if args.intervention_cfg else None,
             "queries": [str(x) for x in list(args.query or []) if str(x).strip()],
             "policy_gates": gates,
             "policy_targets": targets,
@@ -382,6 +391,8 @@ def main() -> int:
             ),
             "top_k": int(args.top_k),
             "seed": int(args.seed),
+            "intervention_cfg_name": str(summary.get("intervention_cfg_name", "")),
+            "intervention_cfg_hash": str(summary.get("intervention_cfg_hash", "")),
         },
         "summary": summary,
         "outputs": {
@@ -399,6 +410,8 @@ def main() -> int:
     print(f"steps={int(summary.get('steps', 0))}")
     print(f"queries_total={int(summary.get('queries_total', 0))}")
     print(f"avg_trials_per_query={float(summary.get('avg_trials_per_query', 0.0)):.4f}")
+    print(f"intervention_cfg_name={str(summary.get('intervention_cfg_name', ''))}")
+    print(f"intervention_cfg_hash={str(summary.get('intervention_cfg_hash', ''))}")
     print(f"saved_steps={steps_csv}")
     print(f"saved_queries={queries_csv}")
     print(f"saved_interventions={interventions_csv}")

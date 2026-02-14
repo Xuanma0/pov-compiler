@@ -73,6 +73,8 @@ def test_run_streaming_policy_compare_smoke(tmp_path: Path) -> None:
         "20/50/4,60/200/12,120/400/24",
         "--max-trials",
         "5",
+        "--intervention-cfg",
+        str(ROOT / "configs" / "streaming_intervention_default.yaml"),
         "--query",
         "anchor=turn_head top_k=6",
         "--query",
@@ -127,3 +129,7 @@ def test_run_streaming_policy_compare_smoke(tmp_path: Path) -> None:
     assert summary.get("policy_a")
     assert summary.get("policy_b")
     assert "delta" in summary
+    snap = json.loads(snapshot_json.read_text(encoding="utf-8"))
+    inputs = snap.get("inputs", {})
+    assert str(inputs.get("intervention_cfg", "")).strip()
+    assert str(inputs.get("intervention_cfg_hash", "")).strip()

@@ -129,6 +129,24 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"policy_a": "safety_latency", "policy_b": "safety_latency_intervention"}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional streaming intervention sweep input.
+    (compare_dir / "stream_intervention_sweep" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_intervention_sweep" / "best_config.yaml").write_text("name: best\nw_safety: 1.1\n", encoding="utf-8")
+    (compare_dir / "stream_intervention_sweep" / "best_report.md").write_text("# best\n", encoding="utf-8")
+    (compare_dir / "stream_intervention_sweep" / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "best": {"cfg_name": "best", "cfg_hash": "abc123", "objective": 0.6},
+                "default": {"objective": 0.4},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_intervention_sweep" / "figures" / "fig_objective_vs_latency.png").write_bytes(b"PNG")
+    (compare_dir / "stream_intervention_sweep" / "figures" / "fig_objective_vs_latency.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_intervention_sweep" / "figures" / "fig_pareto_frontier.png").write_bytes(b"PNG")
+    (compare_dir / "stream_intervention_sweep" / "figures" / "fig_pareto_frontier.pdf").write_bytes(b"PDF")
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -142,6 +160,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         "md+csv",
         "--streaming-policy-compare-dir",
         str(compare_dir / "stream_policy_cmp"),
+        "--streaming-intervention-sweep-dir",
+        str(compare_dir / "stream_intervention_sweep"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -169,6 +189,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "tables" / "table_streaming_policy_compare.md").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_safety_latency.png").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_delta.png").exists()
+    assert (out_dir / "streaming_intervention_sweep" / "best_config.yaml").exists()
+    assert (out_dir / "streaming_intervention_sweep" / "best_report.md").exists()
+    assert (out_dir / "figures" / "fig_objective_vs_latency.png").exists()
+    assert (out_dir / "figures" / "fig_pareto_frontier.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

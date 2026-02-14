@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--policy-a", default="safety_latency")
     parser.add_argument("--policy-b", default="safety_latency_intervention")
+    parser.add_argument("--intervention-cfg", default=None, help="YAML config for intervention policy (run_b)")
     parser.add_argument("--max-trials", type=int, default=5)
     parser.add_argument("--latency-cap-ms", type=float, default=25.0)
     parser.add_argument("--max-trials-per-query", type=int, default=3)
@@ -256,6 +257,7 @@ def _build_smoke_cmd(
     top_k: int,
     seed: int,
     recommend_dir: str | None,
+    intervention_cfg: str | None,
     max_trials: int,
     max_trials_per_query: int,
     latency_cap_ms: float,
@@ -296,6 +298,8 @@ def _build_smoke_cmd(
     ]
     if recommend_dir:
         cmd.extend(["--recommend-dir", str(recommend_dir)])
+    if intervention_cfg:
+        cmd.extend(["--intervention-cfg", str(intervention_cfg)])
     cmd.append("--prefer-lower-budget" if prefer_lower_budget else "--prefer-higher-budget")
     for q in queries:
         cmd.extend(["--query", str(q)])
@@ -360,6 +364,7 @@ def main() -> int:
         top_k=int(args.top_k),
         seed=int(args.seed),
         recommend_dir=args.recommend_dir,
+        intervention_cfg=None,
         max_trials=int(args.max_trials),
         max_trials_per_query=int(args.max_trials_per_query),
         latency_cap_ms=float(args.latency_cap_ms),
@@ -378,6 +383,7 @@ def main() -> int:
         top_k=int(args.top_k),
         seed=int(args.seed),
         recommend_dir=args.recommend_dir,
+        intervention_cfg=args.intervention_cfg,
         max_trials=int(args.max_trials),
         max_trials_per_query=int(args.max_trials_per_query),
         latency_cap_ms=float(args.latency_cap_ms),
@@ -396,6 +402,16 @@ def main() -> int:
 
     metrics_a = _collect_metrics(run_a)
     metrics_b = _collect_metrics(run_b)
+    run_b_snapshot_payload: dict[str, Any] = {}
+    run_b_snapshot = run_b / "snapshot.json"
+    if run_b_snapshot.exists():
+        try:
+            run_b_snapshot_payload = json.loads(run_b_snapshot.read_text(encoding="utf-8"))
+        except Exception:
+            run_b_snapshot_payload = {}
+    run_b_summary = dict(run_b_snapshot_payload.get("summary", {})) if isinstance(run_b_snapshot_payload, dict) else {}
+    intervention_cfg_name = str(run_b_summary.get("intervention_cfg_name", ""))
+    intervention_cfg_hash = str(run_b_summary.get("intervention_cfg_hash", ""))
 
     row = {
         "policy_a": str(args.policy_a),
@@ -462,6 +478,9 @@ def main() -> int:
             "top_k": int(args.top_k),
             "seed": int(args.seed),
             "mode": str(args.mode),
+            "intervention_cfg": str(args.intervention_cfg) if args.intervention_cfg else None,
+            "intervention_cfg_name": intervention_cfg_name,
+            "intervention_cfg_hash": intervention_cfg_hash,
         },
         "metrics_a": metrics_a,
         "metrics_b": metrics_b,
@@ -498,6 +517,9 @@ def main() -> int:
             "max_top1_in_distractor_rate": float(args.max_top1_in_distractor_rate),
             "prefer_lower_budget": bool(args.prefer_lower_budget),
             "recommend_dir": str(args.recommend_dir) if args.recommend_dir else None,
+            "intervention_cfg": str(args.intervention_cfg) if args.intervention_cfg else None,
+            "intervention_cfg_name": intervention_cfg_name,
+            "intervention_cfg_hash": intervention_cfg_hash,
         },
         "runs": {
             "run_a_snapshot": str(run_a / "snapshot.json"),
@@ -522,6 +544,8 @@ def main() -> int:
     print(f"saved_compare={compare_dir}")
     print(f"policies={args.policy_a},{args.policy_b}")
     print(f"budgets={len([x for x in str(args.budgets).split(',') if x.strip()])}")
+    print(f"intervention_cfg_name={intervention_cfg_name}")
+    print(f"intervention_cfg_hash={intervention_cfg_hash}")
     print(f"saved_table={[str(table_csv), str(table_md)]}")
     print(f"saved_figures={figure_paths}")
     print(f"saved_snapshot={snapshot_path}")
