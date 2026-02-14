@@ -112,8 +112,10 @@ docs/
 | `scripts\run_streaming_policy_compare.py` | One-click baseline vs intervention streaming compare harness (`safety_latency` vs `safety_latency_intervention`) | `--json --out_dir --budgets --query ... --max-trials` | `run_a/*`, `run_b/*`, `compare/tables/table_streaming_policy_compare.*`, `compare/figures/fig_streaming_policy_compare_*`, `compare_summary.json`, `snapshot.json` |
 | `scripts\sweep_streaming_interventions.py` | Random/grid sweep over intervention config to optimize strict+safety+latency objective | `--json --out_dir --budgets --trials --base-cfg --query ...` | `results_sweep.csv`, `best_config.yaml`, `best_report.md`, `figures/fig_objective_vs_latency*`, `snapshot.json` |
 | `scripts\place_interaction_smoke.py` | AMEGO-style place-segment and interaction-signature smoke summary (`events_v1` focus) | `--json --out_dir [--n --seed]` | `place_segments.json`, `interaction_summary.csv`, `report.md`, `snapshot.json` |
-| `scripts\repo_smoke.py` | RepoV0 write/read/dedup smoke on one JSON (`events_v1/highlights/tokens/decisions -> chunks`) | `--json --out_dir [--query] --strategy --max-repo-chunks` | `repo_chunks.jsonl`, `repo_selected.jsonl`, `report.md`, `snapshot.json` |
-| `scripts\sweep_repo_budgets.py` | RepoV0 budget sweep for `repo_only` + `events_plus_repo` context variants | `--json --out_dir --budgets --repo-strategy` | `aggregate/metrics_by_budget.*`, `figures/fig_repo_quality_vs_budget_seconds.*`, `snapshot.json` |
+| `scripts\repo_policy_smoke.py` | RepoV1 write/read/dedup smoke with configurable policies (`fixed_interval/event_triggered/novelty` + `budgeted_topk/diverse`) | `--json --out_dir [--repo-cfg] [--query ...]` | `repo_chunks.jsonl`, `repo_selected.jsonl`, `context.txt`, `report.md`, `snapshot.json` |
+| `scripts\sweep_repo_policies.py` | RepoV1 policy × budget sweep (`write_policy × read_policy × budgets`) | `--pov-json-dir --uids-file --budgets --out_dir --write-policies --read-policies` | `aggregate/metrics_by_setting.*`, `figures/fig_repo_*`, `best_report.md`, `snapshot.json` |
+| `scripts\repo_smoke.py` | RepoV0 legacy smoke (kept for backward compatibility) | `--json --out_dir [--query]` | `repo_chunks.jsonl`, `repo_selected.jsonl`, `report.md`, `snapshot.json` |
+| `scripts\sweep_repo_budgets.py` | RepoV0 legacy budget sweep | `--json --out_dir --budgets` | `aggregate/metrics_by_budget.*`, `figures/fig_repo_quality_vs_budget_seconds.*`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ/streaming budget sweeps, reranker sweep, and recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-reranker-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/reranker_sweep/*`, `compare/budget_recommend/*` |
 
@@ -355,21 +357,27 @@ Optional AB hook:
 python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v113 --with-nlq --with-reranker-sweep --reranker-sweep-grid "w_trigger=0.2,0.8;w_action=0.3"
 ```
 
-## RepoV0 (LangRepo-style write/read)
+## RepoV1 (LangRepo-style write/read policy)
 
-RepoV0 adds an explicit repository layer with `write` (multi-scale chunks), `dedup` (text-hash + time overlap), and `read` (budgeted selection).  
-It maps LangRepo-style concepts into POV Compiler as: `writer -> repository chunks`, `reader -> query-conditioned budget selection`, and `trace/snapshot -> reproducible repository state`.
+RepoV1 upgrades repository memory to explicit `WritePolicy + ReadPolicy` with multi-scale chunks (`event/decision/place`) and cross-scale dedup.  
+LangRepo mapping in this repo: `writer(policy) -> chunks`, `dedup(reasoned) -> compact memory`, `reader(policy,budget,query) -> selected context`.
 
-Single-video smoke:
+Single-video RepoV1 smoke:
 
 ```text
-python scripts\repo_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\repo_smoke_demo --query "decision=ATTENTION_TURN_HEAD top_k=6"
+python scripts\repo_policy_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\repo_policy_smoke_v116_demo --query "anchor=turn_head top_k=6"
 ```
 
-Budget sweep (proxy quality/coverage):
+RepoV1 policy × budget sweep:
 
 ```text
-python scripts\sweep_repo_budgets.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\repo_budget_demo --budgets "20/50/4,40/100/8,60/200/12"
+python scripts\sweep_repo_policies.py --pov-json-dir data\outputs\ego4d_ab_real_n6\json --uids-file data\outputs\ab_v12_uids.txt --out_dir data\outputs\repo_policy_sweep_v116_demo --budgets "20/50/4,60/200/12" --write-policies "fixed_interval,event_triggered,novelty" --read-policies "budgeted_topk,diverse"
+```
+
+Paper-ready integration (optional):
+
+```text
+python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v17_demo\compare --out_dir data\outputs\ab_v17_demo\compare\paper_ready --repo-policy-sweep-dir data\outputs\repo_policy_sweep_v116_demo
 ```
 
 ## Place + Interaction IR (v1.14)

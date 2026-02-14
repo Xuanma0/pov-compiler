@@ -19,7 +19,10 @@ DEFAULT_BUDGET = {
     "max_seconds": None,
     "max_repo_chunks": 16,
     "max_repo_chars": 6000,
+    "max_repo_tokens": 200,
     "repo_strategy": "importance_greedy",
+    "use_repo": False,
+    "repo_read_policy": "budgeted_topk",
 }
 
 
@@ -366,7 +369,7 @@ def _select_decisions(
     return [_decision_summary(d) for d in selected]
 
 
-def _load_repo_chunks(output: Output) -> list[dict[str, Any]]:
+def _load_repo_chunks(output: Output, repo_cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     repository = dict(output.repository or {})
     chunks_payload = repository.get("chunks", [])
     chunks: list[dict[str, Any]] = []
@@ -376,8 +379,10 @@ def _load_repo_chunks(output: Output) -> list[dict[str, Any]]:
                 chunks.append(dict(item))
     if chunks:
         return chunks
-    built = build_repo_chunks(output, cfg={})
-    deduped = deduplicate_chunks(built, cfg={})
+    cfg = dict(repo_cfg or {})
+    dedup_cfg = dict(cfg.get("dedup", {}))
+    built = build_repo_chunks(output, cfg=cfg)
+    deduped = deduplicate_chunks(built, cfg=dedup_cfg)
     return [_model_dump(chunk) for chunk in deduped]
 
 
@@ -478,30 +483,43 @@ def build_context(
         max_tokens=max_tokens,
     )
 
-    repo_chunks = _load_repo_chunks(output)
-    repo_models = [
-        RepoChunk.model_validate(chunk) if hasattr(RepoChunk, "model_validate") else RepoChunk.parse_obj(chunk)
-        for chunk in repo_chunks
-    ]
-    repo_selected_models = select_chunks_for_query(
-        repo_models,
-        query=str((budget or {}).get("repo_query", "")),
-        budget={
-            "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
-            "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
-            "max_seconds": max_seconds,
-            "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
-        },
-        cfg={"strategy": str(merged_budget.get("repo_strategy", "importance_greedy"))},
-    )
-    repo_selected = [_model_dump(chunk) for chunk in repo_selected_models]
+    use_repo = bool(merged_budget.get("use_repo", False)) or mode in {"repo_only", "events_plus_repo"}
+    repo_cfg = dict((output.repository or {}).get("cfg", {}) if isinstance(output.repository, dict) else {})
+    repo_chunks = _load_repo_chunks(output, repo_cfg=repo_cfg) if use_repo else []
+    repo_selected: list[dict[str, Any]] = []
+    if use_repo and repo_chunks:
+        repo_models = [
+            RepoChunk.model_validate(chunk) if hasattr(RepoChunk, "model_validate") else RepoChunk.parse_obj(chunk)
+            for chunk in repo_chunks
+        ]
+        repo_selected_models = select_chunks_for_query(
+            repo_models,
+            query=str((budget or {}).get("repo_query", "")),
+            budget={
+                "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
+                "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+                "max_repo_tokens": int(merged_budget.get("max_repo_tokens", 200)),
+                "max_seconds": max_seconds,
+                "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+            },
+            cfg={
+                "strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+                "read_policy": {
+                    "name": str(merged_budget.get("repo_read_policy", merged_budget.get("repo_strategy", "importance_greedy")))
+                },
+            },
+        )
+        repo_selected = [_model_dump(chunk) for chunk in repo_selected_models]
     repo_trace = {
         "mode": mode,
+        "use_repo": use_repo,
         "budget_used": {
             "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
             "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+            "max_repo_tokens": int(merged_budget.get("max_repo_tokens", 200)),
             "max_seconds": max_seconds,
             "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+            "repo_read_policy": str(merged_budget.get("repo_read_policy", merged_budget.get("repo_strategy", "importance_greedy"))),
         },
         "repo_before": len(repo_chunks),
         "repo_after": len(repo_selected),
@@ -526,6 +544,12 @@ def build_context(
             "max_tokens": max_tokens,
             "decisions_min_gap_s": decisions_min_gap_s,
             "max_seconds": max_seconds,
+            "use_repo": use_repo,
+            "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
+            "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+            "max_repo_tokens": int(merged_budget.get("max_repo_tokens", 200)),
+            "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+            "repo_read_policy": str(merged_budget.get("repo_read_policy", merged_budget.get("repo_strategy", "importance_greedy"))),
         },
         events=events,
         highlights=highlights,

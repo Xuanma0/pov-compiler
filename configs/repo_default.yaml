@@ -1,0 +1,26 @@
+repo:
+  enable: true
+  write_policy:
+    name: fixed_interval
+    chunk_step_s: 8.0
+    keep_levels: ["decision", "place"]
+  read_policy:
+    name: budgeted_topk
+    max_chunks: 16
+    max_tokens: 200
+    max_seconds: null
+  scales:
+    event: true
+    decision: true
+    place: true
+    window: true
+    segment: true
+  window_s: 30.0
+  min_segment_s: 5.0
+  dedup:
+    iou_thresh: 0.6
+    sim_thresh: 0.9
+    cross_scale: true
+    keep_best_importance: true
+context:
+  use_repo: false

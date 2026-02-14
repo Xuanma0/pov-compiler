@@ -17,7 +17,7 @@ from pov_compiler.l3_decisions.decision_compiler import DecisionCompiler
 from pov_compiler.ir.events_v1 import convert_output_to_events_v1
 from pov_compiler.memory.decision_sampling import build_highlights
 from pov_compiler.perception.runner import run_perception
-from pov_compiler.repository import build_repo_chunks, deduplicate_chunks
+from pov_compiler.repository import build_repo_chunks, deduplicate_chunks, policy_cfg_hash
 from pov_compiler.schemas import Output
 
 
@@ -96,15 +96,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "repo": {
         "enable": False,
+        "write_policy": {
+            "name": "fixed_interval",
+            "chunk_step_s": 8.0,
+            "keep_levels": ["decision", "place"],
+        },
+        "read_policy": {
+            "name": "budgeted_topk",
+            "max_chunks": 16,
+            "max_tokens": 200,
+            "max_seconds": None,
+        },
         "window_s": 30.0,
         "min_segment_s": 5.0,
         "scales": {
             "event": True,
+            "decision": True,
+            "place": True,
             "window": True,
             "segment": True,
         },
         "dedup": {
             "iou_thresh": 0.6,
+            "sim_thresh": 0.9,
+            "cross_scale": True,
             "keep_best_importance": True,
         },
     },
@@ -341,18 +356,19 @@ class OfflinePipeline:
         if bool(repo_cfg.get("enable", False)):
             raw_chunks = build_repo_chunks(output, cfg=repo_cfg)
             dedup_chunks = deduplicate_chunks(raw_chunks, cfg=dict(repo_cfg.get("dedup", {})))
+            by_level: dict[str, int] = {}
+            for chunk in dedup_chunks:
+                key = str(chunk.level or chunk.scale)
+                by_level[key] = by_level.get(key, 0) + 1
             output.repository = {
                 "chunks": [_model_dump(chunk) for chunk in dedup_chunks],
                 "summary": {
                     "chunks_before_dedup": len(raw_chunks),
                     "chunks_after_dedup": len(dedup_chunks),
-                    "by_scale": {
-                        "event": sum(1 for c in dedup_chunks if str(c.scale) == "event"),
-                        "window": sum(1 for c in dedup_chunks if str(c.scale) == "window"),
-                        "segment": sum(1 for c in dedup_chunks if str(c.scale) == "segment"),
-                    },
+                    "by_scale": dict(sorted(by_level.items())),
                 },
                 "cfg": repo_cfg,
+                "cfg_hash": policy_cfg_hash(repo_cfg),
             }
         return output
 

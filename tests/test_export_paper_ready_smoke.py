@@ -183,6 +183,23 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "reranker_sweep" / "figures" / "fig_objective_vs_weights_id.pdf").write_bytes(b"PDF")
     (compare_dir / "reranker_sweep" / "figures" / "fig_tradeoff_strict_vs_distractor.png").write_bytes(b"PNG")
     (compare_dir / "reranker_sweep" / "figures" / "fig_tradeoff_strict_vs_distractor.pdf").write_bytes(b"PDF")
+    # Optional repo policy sweep input.
+    (compare_dir / "repo_policy_sweep" / "aggregate").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_policy_sweep" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_policy_sweep" / "aggregate" / "metrics_by_setting.csv").write_text(
+        "setting,budget_key,quality_proxy,objective\nfixed_interval|budgeted_topk,20/50/4,0.42,0.31\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_policy_sweep" / "aggregate" / "metrics_by_setting.md").write_text("# repo policy\n", encoding="utf-8")
+    (compare_dir / "repo_policy_sweep" / "best_report.md").write_text("# best repo policy\n", encoding="utf-8")
+    (compare_dir / "repo_policy_sweep" / "snapshot.json").write_text(
+        json.dumps({"best": {"setting": "fixed_interval|budgeted_topk"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_quality_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_quality_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_size_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_size_vs_budget_seconds.pdf").write_bytes(b"PDF")
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -202,6 +219,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "stream_codec_sweep"),
         "--reranker-sweep-dir",
         str(compare_dir / "reranker_sweep"),
+        "--repo-policy-sweep-dir",
+        str(compare_dir / "repo_policy_sweep"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -241,6 +260,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "reranker_sweep" / "best_weights.yaml").exists()
     assert (out_dir / "figures" / "fig_objective_vs_weights_id.png").exists()
     assert (out_dir / "figures" / "fig_tradeoff_strict_vs_distractor.png").exists()
+    assert (out_dir / "repo_policy" / "metrics_by_setting.csv").exists()
+    assert (out_dir / "repo_policy" / "best_report.md").exists()
+    assert (out_dir / "figures" / "fig_repo_quality_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_repo_size_vs_budget_seconds.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

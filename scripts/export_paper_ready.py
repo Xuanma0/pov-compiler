@@ -40,6 +40,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from sweep_streaming_codec_k.py output",
     )
     parser.add_argument(
+        "--repo-policy-sweep-dir",
+        default=None,
+        help="Optional directory from sweep_repo_policies.py output",
+    )
+    parser.add_argument(
         "--reranker-sweep-dir",
         default=None,
         help="Optional directory from sweep_reranker.py output",
@@ -808,6 +813,43 @@ def main() -> int:
             except Exception:
                 pass
 
+    repo_policy_sweep: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    if args.repo_policy_sweep_dir:
+        rps_dir = Path(args.repo_policy_sweep_dir)
+        repo_policy_sweep["enabled"] = True
+        repo_policy_sweep["source_dir"] = str(rps_dir)
+        dst_root = out_dir / "repo_policy"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            rps_dir / "aggregate" / "metrics_by_setting.csv",
+            rps_dir / "aggregate" / "metrics_by_setting.md",
+            rps_dir / "best_report.md",
+            rps_dir / "snapshot.json",
+            rps_dir / "figures" / "fig_repo_quality_vs_budget_seconds.png",
+            rps_dir / "figures" / "fig_repo_quality_vs_budget_seconds.pdf",
+            rps_dir / "figures" / "fig_repo_size_vs_budget_seconds.png",
+            rps_dir / "figures" / "fig_repo_size_vs_budget_seconds.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        repo_policy_sweep["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -870,6 +912,16 @@ def main() -> int:
             )
         else:
             report_lines.append("- streaming_codec_sweep: source provided but artifacts missing.")
+    if args.repo_policy_sweep_dir:
+        if repo_policy_sweep.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- repo_policy_sweep_dir: `{repo_policy_sweep.get('source_dir')}`",
+                    f"- repo_policy_sweep_files: `{repo_policy_sweep.get('copied_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- repo_policy_sweep: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -903,6 +955,7 @@ def main() -> int:
             if args.streaming_codec_sweep_dir
             else None,
             "reranker_sweep_dir": str(args.reranker_sweep_dir) if args.reranker_sweep_dir else None,
+            "repo_policy_sweep_dir": str(args.repo_policy_sweep_dir) if args.repo_policy_sweep_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -921,6 +974,7 @@ def main() -> int:
             "streaming_intervention_sweep": streaming_intervention_sweep,
             "streaming_codec_sweep": streaming_codec_sweep,
             "reranker_sweep": reranker_sweep,
+            "repo_policy_sweep": repo_policy_sweep,
             "report_md": str(report_path),
         },
     }

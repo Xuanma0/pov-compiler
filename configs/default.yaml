@@ -123,15 +123,30 @@ events_v1:
   enabled: true
 repo:
   enable: false
+  write_policy:
+    name: fixed_interval
+    chunk_step_s: 8.0
+    keep_levels: ["decision", "place"]
+  read_policy:
+    name: budgeted_topk
+    max_chunks: 16
+    max_tokens: 200
+    max_seconds: null
   window_s: 30.0
   min_segment_s: 5.0
   scales:
     event: true
+    decision: true
+    place: true
     window: true
     segment: true
   dedup:
     iou_thresh: 0.6
+    sim_thresh: 0.9
+    cross_scale: true
     keep_best_importance: true
+context:
+  use_repo: false
 streaming:
   step_s: 5.0
   queries:

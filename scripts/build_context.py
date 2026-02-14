@@ -39,6 +39,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-decisions", type=int, default=None)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--max-seconds", type=float, default=None)
+    parser.add_argument("--use-repo", dest="use_repo", action="store_true")
+    parser.add_argument("--no-use-repo", dest="use_repo", action="store_false")
+    parser.set_defaults(use_repo=None)
+    parser.add_argument("--max-repo-chunks", type=int, default=None)
+    parser.add_argument("--max-repo-chars", type=int, default=None)
+    parser.add_argument("--max-repo-tokens", type=int, default=None)
+    parser.add_argument("--repo-strategy", default=None)
+    parser.add_argument("--repo-read-policy", default=None)
+    parser.add_argument("--repo-query", default=None)
     parser.add_argument("--query", default=None, help='Optional retrieval query, e.g. "anchor=turn_head top_k=6"')
     parser.add_argument("--index", default=None, help="Optional index prefix for vector retrieval")
     return parser.parse_args()
@@ -85,6 +94,20 @@ def main() -> int:
         budget["max_tokens"] = int(args.max_tokens)
     if args.max_seconds is not None:
         budget["max_seconds"] = float(args.max_seconds)
+    if args.use_repo is not None:
+        budget["use_repo"] = bool(args.use_repo)
+    if args.max_repo_chunks is not None:
+        budget["max_repo_chunks"] = int(args.max_repo_chunks)
+    if args.max_repo_chars is not None:
+        budget["max_repo_chars"] = int(args.max_repo_chars)
+    if args.max_repo_tokens is not None:
+        budget["max_repo_tokens"] = int(args.max_repo_tokens)
+    if args.repo_strategy is not None:
+        budget["repo_strategy"] = str(args.repo_strategy)
+    if args.repo_read_policy is not None:
+        budget["repo_read_policy"] = str(args.repo_read_policy)
+    if args.repo_query is not None:
+        budget["repo_query"] = str(args.repo_query)
 
     context = build_context(
         output_json=Path(args.json),

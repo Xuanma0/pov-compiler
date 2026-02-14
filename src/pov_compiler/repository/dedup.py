@@ -23,6 +23,16 @@ def _hash_text(text: str) -> str:
     return hashlib.sha1(norm.encode("utf-8")).hexdigest()
 
 
+def _token_set(text: str) -> set[str]:
+    return {x for x in _normalize_text(text).split(" ") if x}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a and not b:
+        return 1.0
+    return float(len(a & b) / max(1, len(a | b)))
+
+
 def _iou(a0: float, a1: float, b0: float, b1: float) -> float:
     left = max(float(a0), float(b0))
     right = min(float(a1), float(b1))
@@ -31,43 +41,104 @@ def _iou(a0: float, a1: float, b0: float, b1: float) -> float:
     return float(inter / union)
 
 
+def _level_weight(level: str) -> float:
+    lv = str(level).lower()
+    if lv == "decision":
+        return 0.35
+    if lv == "place":
+        return 0.3
+    if lv == "event":
+        return 0.2
+    if lv == "segment":
+        return 0.15
+    if lv == "window":
+        return 0.1
+    return 0.05
+
+
+def _info_density(chunk: RepoChunk) -> float:
+    return float(
+        float(chunk.importance)
+        + _level_weight(chunk.level or chunk.scale)
+        + 0.02 * len(chunk.tags or [])
+        + 0.01 * len(chunk.source_ids or [])
+    )
+
+
 def deduplicate_chunks(chunks: list[RepoChunk], cfg: dict[str, Any] | None = None) -> list[RepoChunk]:
     cfg = dict(cfg or {})
     iou_thresh = float(cfg.get("iou_thresh", 0.6))
+    sim_thresh = float(cfg.get("sim_thresh", cfg.get("text_sim_thresh", 0.9)))
     keep_best = bool(cfg.get("keep_best_importance", True))
+    cross_scale = bool(cfg.get("cross_scale", True))
 
-    ordered = sorted(chunks, key=lambda c: (float(c.t0), float(c.t1), str(c.scale), str(c.id)))
+    ordered = sorted(chunks, key=lambda c: (float(c.t0), float(c.t1), str(c.level or c.scale), str(c.id)))
     kept: list[RepoChunk] = []
-    groups: dict[str, list[int]] = {}
 
     for chunk in ordered:
-        text_hash = _hash_text(chunk.text)
-        bucket = groups.get(text_hash, [])
+        chunk.meta = dict(chunk.meta or {})
+        chunk.meta["norm_hash"] = _hash_text(chunk.text)
+        words = _token_set(chunk.text)
+
         duplicate_idx: int | None = None
-        for idx in bucket:
-            ref = kept[idx]
-            if _iou(chunk.t0, chunk.t1, ref.t0, ref.t1) >= iou_thresh:
-                duplicate_idx = idx
-                break
+        duplicate_reason = ""
+        for idx, ref in enumerate(kept):
+            if not cross_scale and str(ref.level or ref.scale) != str(chunk.level or chunk.scale):
+                continue
+            iou = _iou(chunk.t0, chunk.t1, ref.t0, ref.t1)
+            if iou < iou_thresh:
+                continue
+            sim = _jaccard(words, _token_set(ref.text))
+            same_hash = bool(chunk.meta.get("norm_hash") == ref.meta.get("norm_hash"))
+            if sim < sim_thresh and not same_hash:
+                continue
+            duplicate_idx = idx
+            duplicate_reason = (
+                f"sim={sim:.2f} iou={iou:.2f} keep={str(ref.level or ref.scale)} "
+                f"drop={str(chunk.level or chunk.scale)}"
+            )
+            break
 
         if duplicate_idx is None:
-            chunk.meta = dict(chunk.meta or {})
-            chunk.meta["norm_hash"] = text_hash
-            groups.setdefault(text_hash, []).append(len(kept))
+            chunk.meta.setdefault("dedup_dropped_ids", [])
+            chunk.meta.setdefault("dedup_kept_reasons", [])
             kept.append(chunk)
             continue
 
         if not keep_best:
+            ref = kept[duplicate_idx]
+            ref.meta = dict(ref.meta or {})
+            dropped = list(ref.meta.get("dedup_dropped_ids", []))
+            dropped.append(str(chunk.id))
+            reasons = list(ref.meta.get("dedup_kept_reasons", []))
+            reasons.append(str(duplicate_reason))
+            ref.meta["dedup_dropped_ids"] = dropped
+            ref.meta["dedup_kept_reasons"] = reasons
             continue
 
-        prev = kept[duplicate_idx]
-        cand = chunk
-        prev_key = (float(prev.importance), float(prev.t1 - prev.t0), -len(prev.text), str(prev.id))
-        cand_key = (float(cand.importance), float(cand.t1 - cand.t0), -len(cand.text), str(cand.id))
-        if cand_key > prev_key:
-            cand.meta = dict(cand.meta or {})
-            cand.meta["norm_hash"] = text_hash
-            kept[duplicate_idx] = cand
+        ref = kept[duplicate_idx]
+        ref_key = (_info_density(ref), float(ref.t1 - ref.t0), -len(ref.text), str(ref.id))
+        chunk_key = (_info_density(chunk), float(chunk.t1 - chunk.t0), -len(chunk.text), str(chunk.id))
+        if chunk_key > ref_key:
+            chunk.meta = dict(chunk.meta or {})
+            dropped = list(chunk.meta.get("dedup_dropped_ids", []))
+            dropped.append(str(ref.id))
+            reasons = list(chunk.meta.get("dedup_kept_reasons", []))
+            reasons.append(
+                f"sim_replaced keep={str(chunk.level or chunk.scale)} drop={str(ref.level or ref.scale)}; {duplicate_reason}"
+            )
+            chunk.meta["dedup_dropped_ids"] = dropped
+            chunk.meta["dedup_kept_reasons"] = reasons
+            kept[duplicate_idx] = chunk
+        else:
+            ref.meta = dict(ref.meta or {})
+            dropped = list(ref.meta.get("dedup_dropped_ids", []))
+            dropped.append(str(chunk.id))
+            reasons = list(ref.meta.get("dedup_kept_reasons", []))
+            reasons.append(str(duplicate_reason))
+            ref.meta["dedup_dropped_ids"] = dropped
+            ref.meta["dedup_kept_reasons"] = reasons
 
-    kept.sort(key=lambda c: (float(c.t0), float(c.t1), str(c.scale), str(c.id)))
+    kept.sort(key=lambda c: (float(c.t0), float(c.t1), str(c.level or c.scale), str(c.id)))
     return kept
+
