@@ -45,7 +45,9 @@ python scripts/bye_regression_smoke.py \
   --pov_json data/outputs/<run>/json/<uid>_v03_decisions.json \
   --out_dir data/outputs/bye_regression_smoke/<uid> \
   --bye_root <path_to_bye_repo> \
-  --bye-report <optional_override_report_script.py>
+  --bye-report <optional_override_report_script.py> \
+  --bye-collect-report \
+  --bye-gate --max-bye-critical-fn 1
 ```
 
 Optional:
@@ -61,6 +63,13 @@ Output layout:
 - `report/` (copied report artifacts when available)
 - `bye_metrics.json` + `bye_metrics.csv` (normalized BYE-side metrics for aggregation)
 - `snapshot.json` (full audit trail: args, BYE root, resolved entrypoints, return codes, artifact paths)
+
+BYE report panel fields (from `bye_report_metrics.json`):
+- `bye_status`
+- `bye_primary_score`
+- `bye_critical_fn`
+- `bye_latency_p50_ms`, `bye_latency_p95_ms`
+- `bye_warnings`
 
 When BYE repo is missing:
 - non-strict mode prints warning and still succeeds with export artifacts.
@@ -80,6 +89,24 @@ python scripts/ego4d_smoke.py \
 ```
 
 Per UID output goes to `out_dir/bye/<uid>/...`, and `summary.csv` includes `bye_status`, `bye_report_rc`, `bye_regression_rc`, `bye_metrics_path`, and `bye_numeric_*` columns.
+With v1.20 it also includes `bye_primary_score`, `bye_critical_fn`, `bye_latency_p50_ms`, `bye_latency_p95_ms`, and `bye_report_parse_status`.
+
+To compare BYE report metrics between stub/real runs:
+
+```bash
+python scripts/compare_bye_report_metrics.py \
+  --a-dir data/outputs/ab/run_stub \
+  --b-dir data/outputs/ab/run_real \
+  --a-label stub --b-label real \
+  --out_dir data/outputs/ab/compare/bye_report
+```
+
+Outputs:
+- `tables/table_bye_report_compare.csv`
+- `tables/table_bye_report_compare.md`
+- `figures/fig_bye_critical_fn_delta.(png/pdf)`
+- `figures/fig_bye_latency_delta.(png/pdf)`
+- `compare_summary.json`
 
 ## Budget Sweep + A/B Compare
 

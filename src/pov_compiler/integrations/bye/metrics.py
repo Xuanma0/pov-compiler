@@ -5,26 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-
-def _flatten_numeric(prefix: str, value: Any, out: dict[str, float], depth: int = 0, max_depth: int = 2) -> None:
-    if depth > max_depth:
-        return
-    if isinstance(value, bool):
-        return
-    if isinstance(value, (int, float)):
-        out[prefix] = float(value)
-        return
-    if isinstance(value, dict):
-        for k, v in value.items():
-            key = f"{prefix}.{k}" if prefix else str(k)
-            _flatten_numeric(key, v, out, depth + 1, max_depth=max_depth)
-        return
-    if isinstance(value, list):
-        for idx, v in enumerate(value[:20]):
-            key = f"{prefix}[{idx}]"
-            _flatten_numeric(key, v, out, depth + 1, max_depth=max_depth)
-        return
-
+from pov_compiler.integrations.bye.report import load_report_json, parse_bye_report as parse_bye_report_payload
 
 def parse_bye_report(report_dir: Path) -> dict[str, Any]:
     report_dir = Path(report_dir)
@@ -37,34 +18,27 @@ def parse_bye_report(report_dir: Path) -> dict[str, Any]:
             "numeric_metrics": {},
         }
 
-    try:
-        payload = json.loads(report_path.read_text(encoding="utf-8"))
-    except Exception as exc:
+    payload = load_report_json(report_path)
+    if not payload:
         return {
             "status": "invalid_report",
             "report_path": str(report_path),
             "summary_keys": [],
             "numeric_metrics": {},
-            "error": str(exc),
+            "error": "invalid_or_empty_report_json",
         }
-
-    if not isinstance(payload, dict):
-        return {
-            "status": "invalid_report",
-            "report_path": str(report_path),
-            "summary_keys": [],
-            "numeric_metrics": {},
-            "error": "report.json is not an object",
-        }
-
-    numeric: dict[str, float] = {}
-    _flatten_numeric("", payload, numeric, depth=0, max_depth=2)
+    parsed = parse_bye_report_payload(payload)
     summary_keys = sorted([str(k) for k in payload.keys()])
     return {
-        "status": "ok",
+        "status": str(parsed.bye_status),
         "report_path": str(report_path),
         "summary_keys": summary_keys,
-        "numeric_metrics": dict(sorted(numeric.items())),
+        "numeric_metrics": dict(sorted(parsed.numeric_metrics.items())),
+        "bye_primary_score": parsed.bye_primary_score,
+        "bye_critical_fn": parsed.bye_critical_fn,
+        "bye_latency_p50_ms": parsed.bye_latency_p50_ms,
+        "bye_latency_p95_ms": parsed.bye_latency_p95_ms,
+        "bye_warnings": list(parsed.bye_warnings),
     }
 
 
@@ -81,6 +55,21 @@ def save_bye_metrics(metrics: dict[str, Any], out_dir: Path) -> tuple[Path, Path
         "report_path": str(metrics.get("report_path", "")),
         "summary_keys": ";".join([str(x) for x in metrics.get("summary_keys", [])]),
     }
+    for key in (
+        "bye_primary_score",
+        "bye_critical_fn",
+        "bye_latency_p50_ms",
+        "bye_latency_p95_ms",
+    ):
+        val = metrics.get(key)
+        try:
+            row[key] = float(val) if val is not None else ""
+        except Exception:
+            row[key] = ""
+    warnings = metrics.get("bye_warnings", [])
+    if isinstance(warnings, list):
+        row["bye_warnings"] = ";".join([str(x) for x in warnings])
+
     numeric = metrics.get("numeric_metrics", {})
     if isinstance(numeric, dict):
         for k, v in numeric.items():
@@ -96,4 +85,3 @@ def save_bye_metrics(metrics: dict[str, Any], out_dir: Path) -> tuple[Path, Path
         writer.writerow(row)
 
     return json_path, csv_path
-

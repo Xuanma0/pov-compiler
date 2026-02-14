@@ -269,6 +269,25 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"inputs": {"selected_uids": 2}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional BYE report compare input.
+    (compare_dir / "bye_report_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "bye_report_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "bye_report_cmp" / "tables" / "table_bye_report_compare.csv").write_text(
+        "uid,status_a,status_b,bye_primary_score_a,bye_primary_score_b,delta_bye_primary_score\nu001,ok,ok,0.7,0.8,0.1\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "bye_report_cmp" / "tables" / "table_bye_report_compare.md").write_text(
+        "# bye report compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "bye_report_cmp" / "figures" / "fig_bye_critical_fn_delta.png").write_bytes(b"PNG")
+    (compare_dir / "bye_report_cmp" / "figures" / "fig_bye_critical_fn_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "bye_report_cmp" / "figures" / "fig_bye_latency_delta.png").write_bytes(b"PNG")
+    (compare_dir / "bye_report_cmp" / "figures" / "fig_bye_latency_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "bye_report_cmp" / "compare_summary.json").write_text(
+        json.dumps({"uids_total": 1, "labels": {"a": "stub", "b": "real"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -296,6 +315,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "repo_query_selection_sweep"),
         "--component-attribution-dir",
         str(compare_dir / "component_attr_cmp"),
+        "--bye-report-compare-dir",
+        str(compare_dir / "bye_report_cmp"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -352,6 +373,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "component_attribution" / "table_component_attribution.md").exists()
     assert (out_dir / "figures" / "fig_component_attribution_delta.png").exists()
     assert (out_dir / "figures" / "fig_component_attribution_tradeoff.png").exists()
+    assert (out_dir / "bye_report" / "table_bye_report_compare.csv").exists()
+    assert (out_dir / "bye_report" / "table_bye_report_compare.md").exists()
+    assert (out_dir / "figures" / "fig_bye_critical_fn_delta.png").exists()
+    assert (out_dir / "figures" / "fig_bye_latency_delta.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

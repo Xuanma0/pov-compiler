@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from run_component_attribution.py compare/ output",
     )
     parser.add_argument(
+        "--bye-report-compare-dir",
+        default=None,
+        help="Optional directory from compare_bye_report_metrics.py output",
+    )
+    parser.add_argument(
         "--reranker-sweep-dir",
         default=None,
         help="Optional directory from sweep_reranker.py output",
@@ -997,6 +1002,51 @@ def main() -> int:
             except Exception:
                 pass
 
+    bye_report_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "summary": {},
+    }
+    if args.bye_report_compare_dir:
+        br_dir = Path(args.bye_report_compare_dir)
+        bye_report_compare["enabled"] = True
+        bye_report_compare["source_dir"] = str(br_dir)
+        dst_root = out_dir / "bye_report"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            br_dir / "tables" / "table_bye_report_compare.csv",
+            br_dir / "tables" / "table_bye_report_compare.md",
+            br_dir / "compare_summary.json",
+            br_dir / "figures" / "fig_bye_critical_fn_delta.png",
+            br_dir / "figures" / "fig_bye_critical_fn_delta.pdf",
+            br_dir / "figures" / "fig_bye_latency_delta.png",
+            br_dir / "figures" / "fig_bye_latency_delta.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        bye_report_compare["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        summary_src = br_dir / "compare_summary.json"
+        if summary_src.exists():
+            try:
+                payload = json.loads(summary_src.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    bye_report_compare["summary"] = dict(payload)
+            except Exception:
+                pass
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -1102,6 +1152,17 @@ def main() -> int:
             )
         else:
             report_lines.append("- component_attribution: source provided but artifacts missing.")
+    if args.bye_report_compare_dir:
+        if bye_report_compare.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- bye_report_compare_dir: `{bye_report_compare.get('source_dir')}`",
+                    f"- bye_report_compare_files: `{bye_report_compare.get('copied_files')}`",
+                    f"- bye_report_compare_summary: `{json.dumps(bye_report_compare.get('summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- bye_report_compare: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -1143,6 +1204,7 @@ def main() -> int:
             if args.repo_query_selection_sweep_dir
             else None,
             "component_attribution_dir": str(args.component_attribution_dir) if args.component_attribution_dir else None,
+            "bye_report_compare_dir": str(args.bye_report_compare_dir) if args.bye_report_compare_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -1165,6 +1227,7 @@ def main() -> int:
             "repo_policy_sweep": repo_policy_sweep,
             "repo_query_selection_sweep": repo_query_selection_sweep,
             "component_attribution": component_attribution,
+            "bye_report_compare": bye_report_compare,
             "report_md": str(report_path),
         },
     }

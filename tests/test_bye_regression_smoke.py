@@ -89,6 +89,26 @@ def _write_fake_tool(path: Path, *, writes_report: bool = False) -> None:
     path.write_text("\n".join(content) + "\n", encoding="utf-8")
 
 
+def _write_fake_report_tool_with_critical(path: Path, critical_fn: float) -> None:
+    content = [
+        "import argparse",
+        "import json",
+        "from pathlib import Path",
+        "p = argparse.ArgumentParser()",
+        "p.add_argument('--run-package', '--run_package', '--package', dest='run_package', default='')",
+        "p.add_argument('--out-dir', '--out_dir', '--out', dest='out_dir', default='')",
+        "p.add_argument('pos', nargs='*')",
+        "a = p.parse_args()",
+        "rp = a.run_package or (a.pos[0] if a.pos else '')",
+        "od = a.out_dir or (a.pos[1] if len(a.pos) > 1 else rp)",
+        "out = Path(od)",
+        "out.mkdir(parents=True, exist_ok=True)",
+        f"(out / 'report.json').write_text(json.dumps({{'qualityScore': 0.5, 'critical_fn': {float(critical_fn)}, 'latency_ms': 12.0}}), encoding='utf-8')",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(content) + "\n", encoding="utf-8")
+
+
 def test_resolve_bye_root_and_smoke_with_fake_repo(tmp_path: Path) -> None:
     fake_bye = tmp_path / "fake_bye_repo"
     _write_fake_tool(fake_bye / "Gateway" / "scripts" / "lint_run_package.py")
@@ -135,6 +155,7 @@ def test_resolve_bye_root_and_smoke_with_fake_repo(tmp_path: Path) -> None:
         assert isinstance(snapshot["outputs"].get("report_files", []), list)
         assert (out_dir / "bye_metrics.json").exists()
         assert (out_dir / "bye_metrics.csv").exists()
+        assert (out_dir / "bye_report_metrics.json").exists()
     finally:
         if old_env is None:
             os.environ.pop("BYE_ROOT", None)
@@ -163,7 +184,37 @@ def test_smoke_without_bye_root_warns_and_exports(tmp_path: Path) -> None:
     assert (out_dir / "events" / "events_v1.jsonl").exists()
     snapshot = json.loads((out_dir / "snapshot.json").read_text(encoding="utf-8"))
     assert snapshot["bye"]["status"] == "missing_bye_root"
+    assert (out_dir / "bye_report_metrics.json").exists()
 
     strict_cmd = cmd + ["--strict"]
     strict_result = subprocess.run(strict_cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert strict_result.returncode != 0
+
+
+def test_bye_gate_triggers_on_critical_fn(tmp_path: Path) -> None:
+    fake_bye = tmp_path / "fake_bye_repo_gate"
+    _write_fake_tool(fake_bye / "Gateway" / "scripts" / "lint_run_package.py")
+    _write_fake_report_tool_with_critical(fake_bye / "report_run.py", critical_fn=3.0)
+    _write_fake_tool(fake_bye / "run_regression_suite.py")
+
+    pov_json = tmp_path / "demo_v03_decisions.json"
+    pov_json.write_text(json.dumps(_sample_output("gate_uid"), ensure_ascii=False, indent=2), encoding="utf-8")
+    out_dir = tmp_path / "bye_gate_out"
+
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "bye_regression_smoke.py"),
+        "--pov_json",
+        str(pov_json),
+        "--out_dir",
+        str(out_dir),
+        "--bye_root",
+        str(fake_bye),
+        "--bye-gate",
+        "--max-bye-critical-fn",
+        "1",
+    ]
+    result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    assert result.returncode == 2, result.stderr or result.stdout
+    metrics = json.loads((out_dir / "bye_report_metrics.json").read_text(encoding="utf-8"))
+    assert float(metrics.get("bye_critical_fn", 0.0)) > 1.0

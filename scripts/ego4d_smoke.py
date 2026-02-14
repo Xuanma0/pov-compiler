@@ -478,6 +478,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bye-report", default=None, help="Override BYE report script path")
     parser.add_argument("--bye-regression", default=None, help="Override BYE regression script path")
     parser.add_argument("--bye-video-mode", choices=["none", "copy", "link"], default="none")
+    _parse_bool_auto_args(parser, "bye-collect-report", default=True, help_text="Collect and parse BYE report metrics")
+    _parse_bool_auto_args(parser, "bye-gate", default=False, help_text="Enable BYE report critical-fn gate")
+    parser.add_argument("--max-bye-critical-fn", type=float, default=999.0, help="Gate threshold for bye_critical_fn")
     _parse_bool_auto_args(parser, "run-perception", default=False, help_text="Run Perception v0 stage")
     parser.add_argument("--perception-fps", type=float, default=10.0, help="Perception sample fps")
     parser.add_argument("--perception-max-frames", type=int, default=300, help="Perception max frames per video")
@@ -568,6 +571,16 @@ def _load_bye_numeric_metrics(path: Path) -> dict[str, float]:
             continue
         out[str(key)] = float(number)
     return out
+
+
+def _load_bye_report_metrics(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _build_proxy(
@@ -845,6 +858,9 @@ def _process_video(
     bye_report: str | None,
     bye_regression: str | None,
     bye_video_mode: str,
+    bye_collect_report: bool,
+    bye_gate: bool,
+    max_bye_critical_fn: float,
     resume: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     scripts_dir = ROOT / "scripts"
@@ -1055,10 +1071,12 @@ def _process_video(
 
     bye_snapshot_path = bye_dir / "snapshot.json"
     bye_metrics_csv_path = bye_dir / "bye_metrics.csv"
+    bye_report_metrics_json_path = bye_dir / "bye_report_metrics.json"
     bye_status = "skipped"
     bye_report_rc: int | None = None
     bye_regression_rc: int | None = None
     bye_numeric: dict[str, float] = {}
+    bye_report_metrics: dict[str, Any] = {}
     if status == "ok" and run_bye and actions.get("run_bye", False):
         bye_args = [
             "--pov_json",
@@ -1084,6 +1102,9 @@ def _process_video(
             bye_args.extend(["--bye-report", str(bye_report)])
         if bye_regression:
             bye_args.extend(["--bye-regression", str(bye_regression)])
+        bye_args.append("--bye-collect-report" if bool(bye_collect_report) else "--no-bye-collect-report")
+        bye_args.append("--bye-gate" if bool(bye_gate) else "--no-bye-gate")
+        bye_args.extend(["--max-bye-critical-fn", str(float(max_bye_critical_fn))])
         if bye_strict:
             bye_args.append("--strict")
         ok, log = _run_python_script(bye_smoke_script, bye_args, cwd=ROOT)
@@ -1091,6 +1112,7 @@ def _process_video(
         bye_report_rc = _extract_bye_step_rc(snapshot_payload, "report")
         bye_regression_rc = _extract_bye_step_rc(snapshot_payload, "regression")
         bye_numeric = _load_bye_numeric_metrics(bye_metrics_csv_path)
+        bye_report_metrics = _load_bye_report_metrics(bye_report_metrics_json_path)
         if ok:
             stage_results["run_bye"] = "done"
             status_stage = "run_bye"
@@ -1114,6 +1136,7 @@ def _process_video(
         bye_report_rc = _extract_bye_step_rc(snapshot_payload, "report")
         bye_regression_rc = _extract_bye_step_rc(snapshot_payload, "regression")
         bye_numeric = _load_bye_numeric_metrics(bye_metrics_csv_path)
+        bye_report_metrics = _load_bye_report_metrics(bye_report_metrics_json_path)
         bye_state = snapshot_payload.get("bye", {}) if isinstance(snapshot_payload, dict) else {}
         if isinstance(bye_state, dict):
             bye_status = str(bye_state.get("status", "skipped"))
@@ -1151,10 +1174,20 @@ def _process_video(
         "bye_dir": str(bye_dir),
         "bye_snapshot_path": str(bye_snapshot_path),
         "bye_metrics_csv_path": str(bye_metrics_csv_path),
+        "bye_report_metrics_json_path": str(bye_report_metrics_json_path),
         "bye_status": str(bye_status),
         "bye_report_rc": bye_report_rc if bye_report_rc is not None else "",
         "bye_regression_rc": bye_regression_rc if bye_regression_rc is not None else "",
         "bye_numeric_metrics": bye_numeric,
+        "bye_primary_score": bye_report_metrics.get("bye_primary_score", ""),
+        "bye_critical_fn": bye_report_metrics.get("bye_critical_fn", ""),
+        "bye_latency_p50_ms": bye_report_metrics.get("bye_latency_p50_ms", ""),
+        "bye_latency_p95_ms": bye_report_metrics.get("bye_latency_p95_ms", ""),
+        "bye_report_parse_status": bye_report_metrics.get("status", ""),
+        "bye_report_warnings": ";".join([str(x) for x in bye_report_metrics.get("bye_warnings", [])])
+        if isinstance(bye_report_metrics.get("bye_warnings"), list)
+        else "",
+        "bye_report_path": bye_report_metrics.get("report_path", ""),
         "perception_dir": str(perception_dir),
         "event_dir": str(event_dir),
         "perception_json_path": str(perception_json_path),
@@ -1242,6 +1275,14 @@ def _write_summary(
             "bye_report_rc": "",
             "bye_regression_rc": "",
             "bye_metrics_path": "",
+            "bye_report_metrics_path": "",
+            "bye_primary_score": "",
+            "bye_critical_fn": "",
+            "bye_latency_p50_ms": "",
+            "bye_latency_p95_ms": "",
+            "bye_report_parse_status": "",
+            "bye_report_warnings": "",
+            "bye_report_path": "",
             "selection_mode": str(selection_info.get("mode", "random")),
             "uids_file_path": str(selection_info.get("uids_file_path", "")),
             "uids_requested": int(selection_info.get("uids_requested", 0)),
@@ -1253,12 +1294,25 @@ def _write_summary(
             row["bye_status"] = record.get("bye_status", "")
             row["bye_report_rc"] = record.get("bye_report_rc", "")
             row["bye_regression_rc"] = record.get("bye_regression_rc", "")
+            row["bye_primary_score"] = record.get("bye_primary_score", "")
+            row["bye_critical_fn"] = record.get("bye_critical_fn", "")
+            row["bye_latency_p50_ms"] = record.get("bye_latency_p50_ms", "")
+            row["bye_latency_p95_ms"] = record.get("bye_latency_p95_ms", "")
+            row["bye_report_parse_status"] = record.get("bye_report_parse_status", "")
+            row["bye_report_warnings"] = record.get("bye_report_warnings", "")
+            row["bye_report_path"] = record.get("bye_report_path", "")
             bye_metrics_path = Path(str(record.get("bye_metrics_csv_path", "")))
             if bye_metrics_path.exists():
                 try:
                     row["bye_metrics_path"] = str(bye_metrics_path.relative_to(out_dir))
                 except Exception:
                     row["bye_metrics_path"] = str(bye_metrics_path)
+            bye_report_metrics_path = Path(str(record.get("bye_report_metrics_json_path", "")))
+            if bye_report_metrics_path.exists():
+                try:
+                    row["bye_report_metrics_path"] = str(bye_report_metrics_path.relative_to(out_dir))
+                except Exception:
+                    row["bye_report_metrics_path"] = str(bye_report_metrics_path)
             metrics_dict = record.get("bye_numeric_metrics", {})
             if isinstance(metrics_dict, dict):
                 for key, value in metrics_dict.items():
@@ -1383,6 +1437,12 @@ def _write_summary(
             lines.append(f"- bye_report_rc: `{record.get('bye_report_rc', '')}`")
             lines.append(f"- bye_regression_rc: `{record.get('bye_regression_rc', '')}`")
             lines.append(f"- bye_metrics_csv: `{record.get('bye_metrics_csv_path', '')}`")
+            lines.append(f"- bye_report_metrics_json: `{record.get('bye_report_metrics_json_path', '')}`")
+            lines.append(f"- bye_primary_score: `{record.get('bye_primary_score', '')}`")
+            lines.append(f"- bye_critical_fn: `{record.get('bye_critical_fn', '')}`")
+            lines.append(f"- bye_latency_p50_ms: `{record.get('bye_latency_p50_ms', '')}`")
+            lines.append(f"- bye_latency_p95_ms: `{record.get('bye_latency_p95_ms', '')}`")
+            lines.append(f"- bye_report_parse_status: `{record.get('bye_report_parse_status', '')}`")
         report_path = Path(str(record.get("report_path", "")))
         if report_path.exists():
             report_text = report_path.read_text(encoding="utf-8")
@@ -1523,6 +1583,9 @@ def main() -> int:
         print(f"bye_skip_report={str(bool(args.bye_skip_report)).lower()}")
         print(f"bye_skip_regression={str(bool(args.bye_skip_regression)).lower()}")
         print(f"bye_video_mode={str(args.bye_video_mode)}")
+        print(f"bye_collect_report={str(bool(args.bye_collect_report)).lower()}")
+        print(f"bye_gate={str(bool(args.bye_gate)).lower()}")
+        print(f"max_bye_critical_fn={float(args.max_bye_critical_fn):.6f}")
     print(f"run_perception={str(bool(args.run_perception)).lower()}")
     if bool(args.run_perception):
         print(f"perception_fps={float(args.perception_fps):.2f}")
@@ -1623,6 +1686,9 @@ def main() -> int:
         "bye_report": str(args.bye_report) if args.bye_report else None,
         "bye_regression": str(args.bye_regression) if args.bye_regression else None,
         "bye_video_mode": str(args.bye_video_mode),
+        "bye_collect_report": bool(args.bye_collect_report),
+        "bye_gate": bool(args.bye_gate),
+        "max_bye_critical_fn": float(args.max_bye_critical_fn),
         "resume": bool(args.resume),
     }
 

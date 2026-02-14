@@ -16,7 +16,8 @@ if str(SRC_DIR) not in sys.path:
 from pov_compiler.integrations.bye.budget_filter import Budget, apply_budget
 from pov_compiler.integrations.bye.entrypoints import EntryPointResolver
 from pov_compiler.integrations.bye.exporter import export_bye_events_from_output_dict, write_jsonl
-from pov_compiler.integrations.bye.metrics import parse_bye_report, save_bye_metrics
+from pov_compiler.integrations.bye.metrics import save_bye_metrics
+from pov_compiler.integrations.bye.report import load_report_json, parse_bye_report
 from pov_compiler.integrations.bye.run_package import (
     build_run_package,
     collect_report_candidates,
@@ -26,6 +27,14 @@ from pov_compiler.integrations.bye.run_package import (
     resolve_bye_root,
     run_bye_tool,
 )
+
+
+def _parse_bool_with_neg(parser: argparse.ArgumentParser, name: str, default: bool) -> None:
+    group = parser.add_mutually_exclusive_group()
+    dest = name.replace("-", "_")
+    group.add_argument(f"--{name}", dest=dest, action="store_true")
+    group.add_argument(f"--no-{name}", dest=dest, action="store_false")
+    parser.set_defaults(**{dest: default})
 
 
 def _infer_video_id(output_dict: dict[str, Any], json_path: Path, cli_video_id: str | None) -> str:
@@ -66,6 +75,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip_lint", action="store_true", help="Skip BYE lint step")
     parser.add_argument("--skip_report", action="store_true", help="Skip BYE report step")
     parser.add_argument("--skip_regression", action="store_true", help="Skip BYE regression step")
+    _parse_bool_with_neg(
+        parser,
+        "bye-collect-report",
+        default=True,
+    )
+    _parse_bool_with_neg(
+        parser,
+        "bye-gate",
+        default=False,
+    )
+    parser.add_argument("--max-bye-critical-fn", type=float, default=999.0)
     parser.add_argument(
         "--include",
         default="events_v1,highlights,tokens,decisions",
@@ -111,6 +131,12 @@ def _copy_report_outputs(out_dir: Path, candidates: list[Path]) -> list[str]:
         shutil.copyfile(src, dst)
         copied.append(str(dst))
     return copied
+
+
+def _write_report_metrics_json(metrics: dict[str, Any], out_dir: Path) -> Path:
+    path = out_dir / "bye_report_metrics.json"
+    path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return path
 
 
 def _run_tool_with_attempts(
@@ -163,17 +189,48 @@ def _run_tool_with_attempts(
 
 
 def _build_metrics_payload(status: str, report_dir: Path) -> dict[str, Any]:
+    report_path = report_dir / "report.json"
     if status == "ok":
-        return parse_bye_report(report_dir)
+        report_payload = load_report_json(report_path)
+        parsed = parse_bye_report(report_payload)
+        out = parsed.to_dict()
+        out["status"] = str(parsed.bye_status)
+        out["report_path"] = str(report_path)
+        return out
     if status == "skipped":
-        return {"status": "skipped", "report_path": str(report_dir / "report.json"), "summary_keys": [], "numeric_metrics": {}}
+        return {
+            "status": "skipped",
+            "report_path": str(report_path),
+            "summary_keys": [],
+            "numeric_metrics": {},
+            "bye_primary_score": None,
+            "bye_critical_fn": None,
+            "bye_latency_p50_ms": None,
+            "bye_latency_p95_ms": None,
+            "bye_warnings": ["report step skipped"],
+        }
     if status == "failed":
-        return {"status": "failed", "report_path": str(report_dir / "report.json"), "summary_keys": [], "numeric_metrics": {}}
+        return {
+            "status": "failed",
+            "report_path": str(report_path),
+            "summary_keys": [],
+            "numeric_metrics": {},
+            "bye_primary_score": None,
+            "bye_critical_fn": None,
+            "bye_latency_p50_ms": None,
+            "bye_latency_p95_ms": None,
+            "bye_warnings": ["report step failed"],
+        }
     return {
         "status": "missing_report",
-        "report_path": str(report_dir / "report.json"),
+        "report_path": str(report_path),
         "summary_keys": [],
         "numeric_metrics": {},
+        "bye_primary_score": None,
+        "bye_critical_fn": None,
+        "bye_latency_p50_ms": None,
+        "bye_latency_p95_ms": None,
+        "bye_warnings": ["report file missing"],
     }
 
 
@@ -257,13 +314,16 @@ def main() -> int:
         metrics_payload["status"] = "failed"
         metrics_payload["reason"] = msg
         metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+        report_metrics_json = _write_report_metrics_json(metrics_payload, out_dir)
         snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
         snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
+        snapshot["outputs"]["bye_report_metrics_json"] = str(report_metrics_json)
         snapshot["outputs_rel"] = {
             "events_jsonl": _to_rel(events_jsonl_path, out_dir),
             "run_package_dir": _to_rel(run_pkg, out_dir),
             "bye_metrics_json": _to_rel(metrics_json, out_dir),
             "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
+            "bye_report_metrics_json": _to_rel(report_metrics_json, out_dir),
         }
         snapshot_path = _write_snapshot(snapshot, out_dir)
         print(f"WARN: {msg}")
@@ -277,13 +337,16 @@ def main() -> int:
         metrics_payload["status"] = "failed"
         metrics_payload["reason"] = msg
         metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+        report_metrics_json = _write_report_metrics_json(metrics_payload, out_dir)
         snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
         snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
+        snapshot["outputs"]["bye_report_metrics_json"] = str(report_metrics_json)
         snapshot["outputs_rel"] = {
             "events_jsonl": _to_rel(events_jsonl_path, out_dir),
             "run_package_dir": _to_rel(run_pkg, out_dir),
             "bye_metrics_json": _to_rel(metrics_json, out_dir),
             "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
+            "bye_report_metrics_json": _to_rel(report_metrics_json, out_dir),
         }
         snapshot_path = _write_snapshot(snapshot, out_dir)
         print(f"WARN: {msg}")
@@ -299,8 +362,10 @@ def main() -> int:
         metrics_payload = _build_metrics_payload("missing", out_dir / "report")
         metrics_payload["reason"] = "missing_bye_root"
         metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+        report_metrics_json = _write_report_metrics_json(metrics_payload, out_dir)
         snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
         snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
+        snapshot["outputs"]["bye_report_metrics_json"] = str(report_metrics_json)
         snapshot["outputs_rel"] = {
             "events_jsonl": _to_rel(events_jsonl_path, out_dir),
             "run_package_dir": _to_rel(run_pkg, out_dir),
@@ -308,6 +373,7 @@ def main() -> int:
             "report_dir": _to_rel(out_dir / "report", out_dir),
             "bye_metrics_json": _to_rel(metrics_json, out_dir),
             "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
+            "bye_report_metrics_json": _to_rel(report_metrics_json, out_dir),
         }
         snapshot_path = _write_snapshot(snapshot, out_dir)
         print(f"video_id={video_id}")
@@ -384,12 +450,26 @@ def main() -> int:
     copied_reports = _copy_report_outputs(out_dir, report_candidates) if report_candidates else []
     snapshot["outputs"]["report_files"] = copied_reports
 
-    metrics_payload = _build_metrics_payload(report_step_status, out_dir / "report")
-    if report_step_status != "ok":
+    effective_report_status = report_step_status
+    if not bool(args.bye_collect_report):
+        effective_report_status = "skipped"
+    metrics_payload = _build_metrics_payload(effective_report_status, out_dir / "report")
+    if effective_report_status != "ok":
         metrics_payload["reason"] = report_step_status
+    metrics_payload["gate_enabled"] = bool(args.bye_gate)
+    metrics_payload["max_bye_critical_fn"] = float(args.max_bye_critical_fn)
     metrics_json, metrics_csv = save_bye_metrics(metrics_payload, out_dir)
+    report_metrics_json = _write_report_metrics_json(metrics_payload, out_dir)
     snapshot["outputs"]["bye_metrics_json"] = str(metrics_json)
     snapshot["outputs"]["bye_metrics_csv"] = str(metrics_csv)
+    snapshot["outputs"]["bye_report_metrics_json"] = str(report_metrics_json)
+    snapshot["bye"]["report_parse_status"] = str(metrics_payload.get("status", "missing_report"))
+    snapshot["bye"]["report_path"] = str(metrics_payload.get("report_path", ""))
+    snapshot["bye"]["report_warnings"] = list(metrics_payload.get("bye_warnings", []))
+    snapshot["bye"]["gate"] = {
+        "enabled": bool(args.bye_gate),
+        "max_bye_critical_fn": float(args.max_bye_critical_fn),
+    }
     snapshot["outputs_rel"] = {
         "events_jsonl": _to_rel(events_jsonl_path, out_dir),
         "run_package_dir": _to_rel(run_pkg, out_dir),
@@ -398,7 +478,18 @@ def main() -> int:
         "report_files": [_to_rel(x, out_dir) for x in copied_reports],
         "bye_metrics_json": _to_rel(metrics_json, out_dir),
         "bye_metrics_csv": _to_rel(metrics_csv, out_dir),
+        "bye_report_metrics_json": _to_rel(report_metrics_json, out_dir),
     }
+
+    critical_val = metrics_payload.get("bye_critical_fn")
+    critical_num = float(critical_val) if isinstance(critical_val, (int, float)) else None
+    gate_triggered = False
+    if bool(args.bye_gate) and critical_num is not None:
+        gate_triggered = critical_num > float(args.max_bye_critical_fn)
+        snapshot["bye"]["gate"]["triggered"] = bool(gate_triggered)
+        snapshot["bye"]["gate"]["critical_fn"] = float(critical_num)
+    else:
+        snapshot["bye"]["gate"]["triggered"] = False
 
     snapshot_path = _write_snapshot(snapshot, out_dir)
     print(f"video_id={video_id}")
@@ -412,7 +503,14 @@ def main() -> int:
     print(f"report_files={len(copied_reports)}")
     print(f"bye_metrics_json={metrics_json}")
     print(f"bye_metrics_csv={metrics_csv}")
+    print(f"bye_report_metrics_json={report_metrics_json}")
+    if bool(args.bye_gate):
+        print(f"bye_gate={str(bool(args.bye_gate)).lower()}")
+        print(f"max_bye_critical_fn={float(args.max_bye_critical_fn)}")
+        print(f"bye_gate_triggered={str(bool(gate_triggered)).lower()}")
 
+    if gate_triggered:
+        return 2
     if strict_failure:
         return 3
     return 0

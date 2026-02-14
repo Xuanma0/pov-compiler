@@ -100,9 +100,10 @@ docs/
 | `scripts\make_paper_figures.py` | Generate paper figures/tables | `--cross_dir --nlq_csv --out_dir --macro_avg/--macro-avg --compare_dir` | `figures/*`, `tables/*`, `snapshot.json` |
 | `scripts\sweep_reranker.py` | Sweep decision-aligned reranker weights (strict+distractor+safety objective) | `--run_dir (or --json --index) --nlq-mode --grid/--w-*-list --alpha --beta` | `aggregate/metrics_by_weights.*`, `best_weights.yaml`, `best_report.md`, `figures/fig_tradeoff_*`, `snapshot.json` |
 | `scripts\debug_rerank.py` | Score decomposition debug for reranker | `--json --index --out --rerank-cfg` | debug CSV + summary logs |
-| `scripts\export_bye_events.py` / `scripts\bye_regression_smoke.py` | BYE offline injection export and optional lint/report/regression loop | `--json/--pov_json --out_dir --bye_root --strict` | `events/events_v1.jsonl`, `run_package/`, `logs/`, `snapshot.json` |
+| `scripts\export_bye_events.py` / `scripts\bye_regression_smoke.py` | BYE offline injection export and optional lint/report/regression loop | `--json/--pov_json --out_dir --bye_root --bye-collect-report --bye-gate --max-bye-critical-fn --strict` | `events/events_v1.jsonl`, `run_package/`, `logs/`, `bye_metrics.*`, `bye_report_metrics.json`, `snapshot.json` |
 | `scripts\sweep_bye_budgets.py` | BYE metrics over budget points (strict UID matching by default) | `--pov-json-dir --uids-file --budgets --out-dir [--strict-uids]` | `aggregate/metrics_by_budget.*`, `figures/fig_bye_*`, `snapshot.json` |
 | `scripts\compare_bye_budget_sweeps.py` | Compare two BYE budget sweeps (A/B curve + delta) | `--a_dir/--a_csv --b_dir/--b_csv --out_dir --primary-metric` | `tables/table_budget_compare.*`, `figures/fig_bye_primary_*`, `compare_summary.json` |
+| `scripts\compare_bye_report_metrics.py` | Compare BYE report-panel metrics (primary/critical_fn/latency) between two runs | `--a-dir --b-dir --out_dir --a-label --b-label` | `tables/table_bye_report_compare.*`, `figures/fig_bye_critical_fn_delta.*`, `figures/fig_bye_latency_delta.*`, `compare_summary.json` |
 | `scripts\sweep_nlq_budgets.py` | NLQ hard/pseudo evaluation over explicit budget points (strict UID matching by default) | `--json_dir --index_dir --uids-file --budgets --out_dir` | `aggregate/metrics_by_budget.*`, `figures/fig_nlq_*`, `snapshot.json` |
 | `scripts\sweep_streaming_budgets.py` | Streaming online simulation budget sweep (fixed/adaptive) | `--json_dir --uids-file --budgets --out_dir --policy` | `aggregate/metrics_by_budget.*`, `figures/fig_streaming_quality_*`, `snapshot.json` |
 | `scripts\sweep_streaming_codec_k.py` | Fixed-K Streaming Codec baseline sweep (`codec=fixed_k`) with quality/safety/latency curves | `--json/--json_dir --k-list --budgets --policy --out_dir` | `aggregate/metrics_by_k.*`, `figures/fig_streaming_*_vs_k.*`, `snapshot.json` |
@@ -118,7 +119,7 @@ docs/
 | `scripts\repo_smoke.py` | RepoV0 legacy smoke (kept for backward compatibility) | `--json --out_dir [--query]` | `repo_chunks.jsonl`, `repo_selected.jsonl`, `report.md`, `snapshot.json` |
 | `scripts\sweep_repo_budgets.py` | RepoV0 legacy budget sweep | `--json --out_dir --budgets` | `aggregate/metrics_by_budget.*`, `figures/fig_repo_quality_vs_budget_seconds.*`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
-| `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ/streaming budget sweeps, reranker sweep, and recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-reranker-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/reranker_sweep/*`, `compare/budget_recommend/*` |
+| `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ/streaming budget sweeps, BYE report panel compare, reranker sweep, and recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-report --bye-gate --max-bye-critical-fn --with-bye-budget-sweep --with-nlq-budget-sweep --with-reranker-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_report/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/reranker_sweep/*`, `compare/budget_recommend/*` |
 | `scripts\run_component_attribution.py` | Component Attribution Panel (A/B/C/D) for Repo vs Perception vs Streaming contribution under same UID/budget/query set | `--root --uids-file --out_dir --budgets --with-nlq --with-streaming-budget --with-perception` | `run_A/..run_D/`, `compare/tables/table_component_attribution.*`, `compare/figures/fig_component_attribution_*`, `compare_summary.json`, `snapshot.json` |
 
 ## Output Directory Contract
@@ -237,7 +238,7 @@ D:\Ego4D_Dataset
 Run reproducible stub vs real on the same UID list (optional perception/NLQ/figs/BYE):
 
 ```text
-python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v12 --with-perception --stub-perception-backend stub --real-perception-backend real --with-eval --with-nlq --nlq-mode hard_pseudo_nlq --with-figs --with-bye --bye-root "<YOUR_BYE_ROOT>" --bye-skip-regression --with-bye-budget-sweep --bye-budgets "20/50/4,40/100/8,60/200/12" --bye-primary-metric qualityScore --with-nlq-budget-sweep --nlq-budgets "20/50/4,40/100/8,60/200/12" --with-budget-recommend
+python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v12 --with-perception --stub-perception-backend stub --real-perception-backend real --with-eval --with-nlq --nlq-mode hard_pseudo_nlq --with-figs --with-bye --with-bye-report --bye-root "<YOUR_BYE_ROOT>" --bye-gate --max-bye-critical-fn 1 --bye-skip-regression --with-bye-budget-sweep --bye-budgets "20/50/4,40/100/8,60/200/12" --bye-primary-metric qualityScore --with-nlq-budget-sweep --nlq-budgets "20/50/4,40/100/8,60/200/12" --with-budget-recommend
 ```
 
 v1.7 unified budget panel (BYE/NLQ/Streaming + paper-ready export):
@@ -250,6 +251,7 @@ Main artifacts:
 - `data/outputs/ab_v12/run_stub/summary.csv`
 - `data/outputs/ab_v12/run_real/summary.csv`
 - `data/outputs/ab_v12/compare/bye/table_bye_compare.md`
+- `data/outputs/ab_v12/compare/bye_report/tables/table_bye_report_compare.md`
 - `data/outputs/ab_v12/compare/bye_budget/compare/tables/table_budget_compare.md`
 - `data/outputs/ab_v12/compare/bye_budget/compare/figures/fig_bye_primary_vs_budget_seconds_compare.png`
 - `data/outputs/ab_v12/compare/nlq_budget/stub/aggregate/metrics_by_budget.csv`
@@ -259,6 +261,26 @@ Main artifacts:
 - `data/outputs/ab_v12/compare/budget_recommend/stub/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/budget_recommend/real/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/paper_ready/tables/table_budget_panel.md`
+
+### v1.20 BYE Report Panel + Gate
+
+Fake BYE smoke (CI/local debug):
+
+```text
+python scripts\run_ab_bye_compare.py --root data\outputs\v120_fake\ego_root --uids-file data\outputs\v120_fake\uids.txt --out_dir data\outputs\v120_fake\ab_v120_demo --with-bye --with-bye-report --bye-root data\outputs\v120_fake\fake_bye --bye-skip-regression --with-bye-budget-sweep --bye-budgets "20/50/4,40/100/8" --with-nlq-budget-sweep --nlq-budgets "20/50/4,40/100/8" --with-budget-recommend --with-streaming-budget --export-paper-ready --nlq-eval-script data\outputs\v120_fake\fake_eval_nlq.py
+```
+
+Real BYE repo (if available):
+
+```text
+python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v120_real --with-bye --with-bye-report --bye-root "<YOUR_BYE_ROOT>" --bye-gate --max-bye-critical-fn 1 --bye-skip-regression --export-paper-ready
+```
+
+Key BYE report outputs:
+- `.../compare/bye_report/tables/table_bye_report_compare.md`
+- `.../compare/bye_report/figures/fig_bye_critical_fn_delta.png`
+- `.../compare/bye_report/figures/fig_bye_latency_delta.png`
+- `.../compare/paper_ready/bye_report/table_bye_report_compare.md`
 
 ## v1.18 Streaming + Repo Query-Aware Compare
 

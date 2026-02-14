@@ -96,6 +96,7 @@ def test_ego4d_smoke_with_bye_hook(tmp_path: Path) -> None:
     assert bye_uid_dir.exists()
     assert (bye_uid_dir / "snapshot.json").exists()
     assert (bye_uid_dir / "bye_metrics.csv").exists()
+    assert (bye_uid_dir / "bye_report_metrics.json").exists()
 
     summary_csv = out_dir / "summary.csv"
     assert summary_csv.exists()
@@ -106,6 +107,9 @@ def test_ego4d_smoke_with_bye_hook(tmp_path: Path) -> None:
     assert "bye_status" in row
     assert "bye_report_rc" in row
     assert "bye_metrics_path" in row
+    assert "bye_primary_score" in row
+    assert "bye_critical_fn" in row
+    assert "bye_latency_p50_ms" in row
+    assert "bye_latency_p95_ms" in row
     bye_numeric_cols = [k for k in row.keys() if k.startswith("bye_numeric_")]
     assert bye_numeric_cols
-

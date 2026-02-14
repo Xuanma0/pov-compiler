@@ -152,7 +152,7 @@ def _eval_gate(metric_value: float | None, op: str, threshold: float) -> bool:
 def _write_csv(path: Path, rows: list[dict[str, Any]], columns: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=columns)
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)

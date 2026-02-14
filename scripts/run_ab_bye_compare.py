@@ -60,7 +60,10 @@ def parse_args() -> argparse.Namespace:
     _parse_bool_with_neg(parser, "stub-perception-strict", default=False)
 
     _parse_bool_with_neg(parser, "with-bye", default=False)
+    _parse_bool_with_neg(parser, "with-bye-report", default=True)
     parser.add_argument("--bye-root", default=None)
+    _parse_bool_with_neg(parser, "bye-gate", default=False)
+    parser.add_argument("--max-bye-critical-fn", type=float, default=999.0)
     _parse_bool_with_neg(parser, "bye-skip-regression", default=True)
     bye_budget_group = parser.add_mutually_exclusive_group()
     bye_budget_group.add_argument("--with-bye-budget-sweep", dest="with_bye_budget_sweep", action="store_true")
@@ -127,7 +130,10 @@ def _build_smoke_cmd(
     perception_fps: float,
     perception_max_frames: int,
     with_bye: bool,
+    with_bye_report: bool,
     bye_root: str | None,
+    bye_gate: bool,
+    max_bye_critical_fn: float,
     bye_skip_regression: bool,
     bye_video_mode: str,
     bye_lint: str | None,
@@ -196,6 +202,9 @@ def _build_smoke_cmd(
     if with_bye:
         cmd.append("--run-bye")
         cmd.extend(["--bye-video-mode", str(bye_video_mode)])
+        cmd.append("--bye-collect-report" if with_bye_report else "--no-bye-collect-report")
+        cmd.append("--bye-gate" if bye_gate else "--no-bye-gate")
+        cmd.extend(["--max-bye-critical-fn", str(float(max_bye_critical_fn))])
         if bye_root:
             cmd.extend(["--bye-root", str(bye_root)])
         if bye_skip_regression:
@@ -238,6 +247,7 @@ def _write_compare_readme(
     cmd_stub: list[str],
     cmd_real: list[str],
     cmd_bye_compare: list[str],
+    cmd_bye_report_compare: list[str] | None,
     cmd_bye_budget: list[list[str]],
     cmd_nlq_budget: list[list[str]],
     cmd_streaming_budget: list[list[str]],
@@ -262,6 +272,8 @@ def _write_compare_readme(
         _render_cmd(cmd_real),
         _render_cmd(cmd_bye_compare),
     ]
+    if cmd_bye_report_compare:
+        lines.append(_render_cmd(cmd_bye_report_compare))
     for cmd in cmd_bye_budget:
         lines.append(_render_cmd(cmd))
     for cmd in cmd_nlq_budget:
@@ -287,6 +299,9 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye' / 'table_bye_compare.csv'}`",
             f"- `{out_dir / 'compare' / 'bye' / 'table_bye_compare.md'}`",
             f"- `{out_dir / 'compare' / 'bye' / 'compare_summary.json'}`",
+            f"- `{out_dir / 'compare' / 'bye_report' / 'tables' / 'table_bye_report_compare.csv'}`",
+            f"- `{out_dir / 'compare' / 'bye_report' / 'tables' / 'table_bye_report_compare.md'}`",
+            f"- `{out_dir / 'compare' / 'bye_report' / 'figures' / 'fig_bye_critical_fn_delta.png'}`",
             f"- `{out_dir / 'compare' / 'bye_budget'}`",
             f"- `{out_dir / 'compare' / 'nlq_budget'}`",
             f"- `{out_dir / 'compare' / 'streaming_budget'}`",
@@ -336,6 +351,7 @@ def main() -> int:
     run_real = out_dir / "run_real"
     compare_dir = out_dir / "compare"
     compare_bye_dir = compare_dir / "bye"
+    compare_bye_report_dir = compare_dir / "bye_report"
     compare_bye_budget_stub = compare_dir / "bye_budget" / "stub"
     compare_bye_budget_real = compare_dir / "bye_budget" / "real"
     compare_bye_budget_compare = compare_dir / "bye_budget" / "compare"
@@ -353,6 +369,7 @@ def main() -> int:
     run_stub.mkdir(parents=True, exist_ok=True)
     run_real.mkdir(parents=True, exist_ok=True)
     compare_bye_dir.mkdir(parents=True, exist_ok=True)
+    compare_bye_report_dir.mkdir(parents=True, exist_ok=True)
     compare_bye_budget_stub.mkdir(parents=True, exist_ok=True)
     compare_bye_budget_real.mkdir(parents=True, exist_ok=True)
     compare_bye_budget_compare.mkdir(parents=True, exist_ok=True)
@@ -395,7 +412,10 @@ def main() -> int:
         perception_fps=args.perception_fps,
         perception_max_frames=args.perception_max_frames,
         with_bye=args.with_bye,
+        with_bye_report=args.with_bye_report,
         bye_root=bye_root,
+        bye_gate=args.bye_gate,
+        max_bye_critical_fn=args.max_bye_critical_fn,
         bye_skip_regression=args.bye_skip_regression,
         bye_video_mode=args.bye_video_mode,
         bye_lint=args.bye_lint,
@@ -444,7 +464,10 @@ def main() -> int:
         perception_fps=args.perception_fps,
         perception_max_frames=args.perception_max_frames,
         with_bye=args.with_bye,
+        with_bye_report=args.with_bye_report,
         bye_root=bye_root,
+        bye_gate=args.bye_gate,
+        max_bye_critical_fn=args.max_bye_critical_fn,
         bye_skip_regression=args.bye_skip_regression,
         bye_video_mode=args.bye_video_mode,
         bye_lint=args.bye_lint,
@@ -477,6 +500,33 @@ def main() -> int:
     rc = _run(cmd_bye_compare, cwd=ROOT, log_prefix=compare_dir / "compare_bye", commands_file=commands_file)
     if rc != 0:
         return rc
+
+    cmd_bye_report_compare: list[str] | None = None
+    if args.with_bye and args.with_bye_report:
+        cmd_bye_report_compare = [
+            sys.executable,
+            str(ROOT / "scripts" / "compare_bye_report_metrics.py"),
+            "--a-dir",
+            str(run_stub),
+            "--b-dir",
+            str(run_real),
+            "--a-label",
+            "stub",
+            "--b-label",
+            "real",
+            "--format",
+            "md+csv",
+            "--out_dir",
+            str(compare_bye_report_dir),
+        ]
+        rc = _run(
+            cmd_bye_report_compare,
+            cwd=ROOT,
+            log_prefix=compare_dir / "compare_bye_report",
+            commands_file=commands_file,
+        )
+        if rc != 0:
+            return rc
 
     bye_budget_cmds: list[list[str]] = []
     bye_budget_compare_cmd: list[str] | None = None
@@ -842,6 +892,8 @@ def main() -> int:
             str(args.paper_ready_format),
             "--with-figs",
         ]
+        if args.with_bye and args.with_bye_report:
+            cmd_paper_ready.extend(["--bye-report-compare-dir", str(compare_bye_report_dir)])
         if args.with_reranker_sweep:
             cmd_paper_ready.extend(["--reranker-sweep-dir", str(compare_reranker_sweep_real)])
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
@@ -858,6 +910,7 @@ def main() -> int:
         cmd_stub=cmd_stub,
         cmd_real=cmd_real,
         cmd_bye_compare=cmd_bye_compare,
+        cmd_bye_report_compare=cmd_bye_report_compare,
         cmd_bye_budget=bye_budget_cmds,
         cmd_nlq_budget=nlq_budget_cmds,
         cmd_streaming_budget=streaming_budget_cmds,
@@ -873,6 +926,8 @@ def main() -> int:
     print(f"run_label={str(args.run_label)}")
     print(f"with_repo={str(bool(args.with_repo)).lower()}")
     print(f"repo_read_policy={str(args.repo_read_policy)}")
+    print(f"with_bye_report={str(bool(args.with_bye_report)).lower()}")
+    print(f"bye_gate={str(bool(args.bye_gate)).lower()}")
     if args.with_bye_budget_sweep:
         print(f"bye_budget_stub_saved={compare_bye_budget_stub}")
         print(f"bye_budget_real_saved={compare_bye_budget_real}")
@@ -883,6 +938,8 @@ def main() -> int:
                 print(f"budgets_matched={payload.get('budgets_matched')}")
             except Exception:
                 pass
+    if args.with_bye and args.with_bye_report:
+        print(f"bye_report_saved={compare_bye_report_dir}")
     if run_nlq_budget_sweep:
         print(f"nlq_budget_stub_saved={compare_nlq_budget_stub}")
         print(f"nlq_budget_real_saved={compare_nlq_budget_real}")
