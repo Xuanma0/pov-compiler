@@ -74,6 +74,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional directory from sweep_reranker.py output",
     )
+    parser.add_argument(
+        "--chain-nlq-dir",
+        default=None,
+        help="Optional directory containing chain NLQ outputs (table_chain_summary.* and optional figures)",
+    )
     parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
     _parse_bool_with_neg(parser, "with-figs", default=True)
     parser.add_argument("--png", action="store_true")
@@ -1085,6 +1090,39 @@ def main() -> int:
             if str(p).endswith(".png") or str(p).endswith(".pdf"):
                 figure_paths.append(str(p))
 
+    chain_nlq_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    if args.chain_nlq_dir:
+        ch_dir = Path(args.chain_nlq_dir)
+        chain_nlq_panel["enabled"] = True
+        chain_nlq_panel["source_dir"] = str(ch_dir)
+        dst_root = out_dir / "chain_nlq_panel"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            ch_dir / "table_chain_summary.csv",
+            ch_dir / "table_chain_summary.md",
+            ch_dir / "fig_chain_success_vs_budget_seconds.png",
+            ch_dir / "fig_chain_success_vs_budget_seconds.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.suffix.lower() in {".png", ".pdf"}:
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        chain_nlq_panel["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -1211,6 +1249,16 @@ def main() -> int:
             )
         else:
             report_lines.append("- lost_object_panel: source provided but artifacts missing.")
+    if args.chain_nlq_dir:
+        if chain_nlq_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- chain_nlq_dir: `{chain_nlq_panel.get('source_dir')}`",
+                    f"- chain_nlq_files: `{chain_nlq_panel.get('copied_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- chain_nlq_panel: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -1254,6 +1302,7 @@ def main() -> int:
             "component_attribution_dir": str(args.component_attribution_dir) if args.component_attribution_dir else None,
             "bye_report_compare_dir": str(args.bye_report_compare_dir) if args.bye_report_compare_dir else None,
             "lost_object_panel_dir": str(args.lost_object_panel_dir) if args.lost_object_panel_dir else None,
+            "chain_nlq_dir": str(args.chain_nlq_dir) if args.chain_nlq_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -1278,6 +1327,7 @@ def main() -> int:
             "component_attribution": component_attribution,
             "bye_report_compare": bye_report_compare,
             "lost_object_panel": lost_object_panel,
+            "chain_nlq_panel": chain_nlq_panel,
             "report_md": str(report_path),
         },
     }

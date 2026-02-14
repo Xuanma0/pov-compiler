@@ -800,3 +800,91 @@ def load_hard_pseudo_nlq(
     for i, sample in enumerate(samples, start=1):
         sample.qid = f"hnlq_{i:06d}"
     return samples
+
+
+def load_hard_pseudo_chain(
+    output_json_path: str | Path | dict[str, Any] | Output,
+    *,
+    seed: int = 0,
+    n_chain: int = 12,
+    n_highlight: int = 10,
+    n_token: int = 10,
+    n_decision: int = 10,
+    top_k: int = 6,
+    max_distractors: int = 3,
+    distractor_min_gap_s: float = 10.0,
+) -> list[NLQSample]:
+    base = load_hard_pseudo_nlq(
+        output_json_path=output_json_path,
+        seed=int(seed),
+        n_highlight=int(n_highlight),
+        n_token=int(n_token),
+        n_decision=int(n_decision),
+        top_k=int(top_k),
+        max_distractors=int(max_distractors),
+        distractor_min_gap_s=float(distractor_min_gap_s),
+    )
+    if not base:
+        return []
+
+    rng = np.random.default_rng(int(seed))
+    by_type: dict[str, list[NLQSample]] = {}
+    for sample in base:
+        by_type.setdefault(str(sample.query_type), []).append(sample)
+    for values in by_type.values():
+        values.sort(key=lambda x: (float(x.gt_span[0]), float(x.gt_span[1]), str(x.qid)))
+
+    combos: list[tuple[str, list[str], list[str]]] = [
+        ("place_or_interaction_to_lost_object", ["hard_pseudo_place", "hard_pseudo_interaction"], ["hard_pseudo_lost_object"]),
+        ("anchor_to_decision", ["hard_pseudo_anchor"], ["hard_pseudo_decision"]),
+        ("decision_to_token", ["hard_pseudo_decision"], ["hard_pseudo_token"]),
+    ]
+
+    out: list[NLQSample] = []
+    budget_per_combo = max(1, int(max(1, n_chain) // max(1, len(combos))))
+    rel = "after"
+    window_s = 30.0
+    for combo_name, step1_types, step2_types in combos:
+        step1_pool = [s for t in step1_types for s in by_type.get(t, [])]
+        step2_pool = [s for t in step2_types for s in by_type.get(t, [])]
+        if not step1_pool or not step2_pool:
+            continue
+        n_pick = min(int(budget_per_combo), len(step1_pool), len(step2_pool))
+        idx1 = _sample_indices(len(step1_pool), n_pick, rng)
+        idx2 = _sample_indices(len(step2_pool), n_pick, rng)
+        for i in range(min(len(idx1), len(idx2))):
+            s1 = step1_pool[idx1[i]]
+            s2 = step2_pool[idx2[i]]
+            query = f"{str(s1.query).strip()} then {str(s2.query).strip()} chain_rel={rel} chain_window_s={window_s:.1f} chain_top1_only=true"
+            meta = {
+                "source_kind": "chain",
+                "chain_meta": {
+                    "combo": str(combo_name),
+                    "step1_type": str(s1.query_type),
+                    "step2_type": str(s2.query_type),
+                    "rel": str(rel),
+                    "window_s": float(window_s),
+                },
+                "step1_meta": dict(s1.meta),
+                "step2_meta": dict(s2.meta),
+            }
+            out.append(
+                NLQSample(
+                    qid=f"cnlq_{len(out) + 1:06d}",
+                    query=query,
+                    query_type="hard_pseudo_chain",
+                    gt_span=(float(s2.gt_span[0]), float(s2.gt_span[1])),
+                    top_k=int(top_k),
+                    distractors=list(s2.distractors),
+                    meta=meta,
+                )
+            )
+            if len(out) >= int(n_chain):
+                break
+        if len(out) >= int(n_chain):
+            break
+
+    out.sort(key=lambda x: (float(x.gt_span[0]), float(x.gt_span[1]), str(x.qid)))
+    for i, sample in enumerate(out, start=1):
+        sample.qid = f"cnlq_{i:06d}"
+    return out

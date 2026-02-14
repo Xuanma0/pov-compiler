@@ -32,9 +32,27 @@ class ParsedQuery:
     budget_overrides: dict[str, Any] = field(default_factory=dict)
     filters_applied: list[str] = field(default_factory=list)
     parse_warnings: list[str] = field(default_factory=list)
+    chain_rel: str | None = None
+    chain_window_s: float | None = None
+    chain_top1_only: bool | None = None
+
+
+@dataclass
+class QueryStep:
+    raw: str
+    parsed: ParsedQuery
+
+
+@dataclass
+class QueryChain:
+    steps: list[QueryStep]
+    rel: str = "after"
+    window_s: float = 30.0
+    top1_only: bool = True
 
 
 _TIME_PATTERN = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*-\s*([0-9]+(?:\.[0-9]+)?)\s*$")
+_CHAIN_SPLIT = re.compile(r"\bthen\b", flags=re.IGNORECASE)
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -54,6 +72,15 @@ def _parse_time_range(value: str) -> tuple[float, float]:
 
 def _warn(parsed: ParsedQuery, msg: str) -> None:
     parsed.parse_warnings.append(str(msg))
+
+
+def _parse_bool(value: str) -> bool | None:
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
 
 
 def parse_query(query: str) -> ParsedQuery:
@@ -185,5 +212,57 @@ def parse_query(query: str) -> ParsedQuery:
                 parsed.budget_overrides[key] = float(value)
             except Exception:
                 _warn(parsed, f"invalid_max_seconds={value}")
+        elif key == "chain_rel":
+            rel = str(value).strip().lower()
+            if rel in {"after", "before", "around"}:
+                parsed.chain_rel = rel
+                parsed.filters_applied.append("chain_rel")
+            else:
+                _warn(parsed, f"invalid_chain_rel={value}")
+        elif key == "chain_window_s":
+            try:
+                parsed.chain_window_s = float(value)
+                parsed.filters_applied.append("chain_window_s")
+            except Exception:
+                _warn(parsed, f"invalid_chain_window_s={value}")
+        elif key == "chain_top1_only":
+            b = _parse_bool(value)
+            if b is None:
+                _warn(parsed, f"invalid_chain_top1_only={value}")
+            else:
+                parsed.chain_top1_only = bool(b)
+                parsed.filters_applied.append("chain_top1_only")
 
     return parsed
+
+
+def parse_query_chain(query: str) -> QueryChain | None:
+    text = str(query or "").strip()
+    if not text:
+        return None
+    parts = _CHAIN_SPLIT.split(text, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    step1 = str(parts[0]).strip()
+    step2 = str(parts[1]).strip()
+    if not step1 or not step2:
+        return None
+
+    parsed1 = parse_query(step1)
+    parsed2 = parse_query(step2)
+    rel = str(parsed2.chain_rel or parsed1.chain_rel or "after").strip().lower()
+    if rel not in {"after", "before", "around"}:
+        rel = "after"
+    window = parsed2.chain_window_s if parsed2.chain_window_s is not None else parsed1.chain_window_s
+    if window is None:
+        window = 30.0
+    top1_only = parsed2.chain_top1_only if parsed2.chain_top1_only is not None else parsed1.chain_top1_only
+    if top1_only is None:
+        top1_only = True
+
+    return QueryChain(
+        steps=[QueryStep(raw=step1, parsed=parsed1), QueryStep(raw=step2, parsed=parsed2)],
+        rel=str(rel),
+        window_s=float(window),
+        top1_only=bool(top1_only),
+    )

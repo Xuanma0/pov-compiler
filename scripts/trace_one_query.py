@@ -29,11 +29,19 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     plan = dict(trace.get("plan", {}))
     ctrace = dict(trace.get("constraint_trace", {}))
     hits = list(trace.get("hits", []))
+    chain = trace.get("chain", {})
+    is_chain = bool(isinstance(chain, dict) and chain.get("is_chain", False))
     lines: list[str] = []
     lines.append("# Query Trace Report")
     lines.append("")
     lines.append(f"- video_id: {trace.get('video_id', '')}")
     lines.append(f"- query: `{trace.get('query', '')}`")
+    lines.append(f"- is_chain: {str(is_chain).lower()}")
+    if is_chain:
+        lines.append(f"- chain_steps: 2")
+        lines.append(f"- chain_rel: {chain.get('chain_rel', 'after')}")
+        lines.append(f"- chain_window_s: {float(chain.get('window_s', 30.0)):.3f}")
+        lines.append(f"- chain_top1_only: {str(bool(chain.get('top1_only', True))).lower()}")
     lines.append(f"- chosen_plan_intent: {plan.get('intent', '')}")
     lines.append(f"- rerank_cfg_hash: {trace.get('rerank_cfg_hash', '')}")
     lines.append(f"- top1_kind: {trace.get('top1_kind', '')}")
@@ -77,6 +85,48 @@ def _render_markdown(trace: dict[str, Any]) -> str:
                 f"{int(bool(step.get('satisfied', False)))} | `{details}` |"
             )
     lines.append("")
+    if is_chain:
+        lines.append("## Chain Step 1")
+        lines.append("")
+        step1 = chain.get("step1", {}) if isinstance(chain, dict) else {}
+        lines.append(f"- query: `{step1.get('query', '')}`")
+        lines.append(f"- parsed_constraints: `{json.dumps(step1.get('parsed_constraints', {}), ensure_ascii=False, sort_keys=True)}`")
+        lines.append(f"- applied_constraints: {step1.get('applied_constraints', [])}")
+        lines.append(
+            f"- filtered_hits_before/after: {int(step1.get('filtered_hits_before', 0))}->{int(step1.get('filtered_hits_after', 0))}"
+        )
+        lines.append(f"- top1_kind: {step1.get('top1_kind', '')}")
+        lines.append("")
+        step1_hits = step1.get("topk_hits", [])
+        if isinstance(step1_hits, list) and step1_hits:
+            lines.append("| rank | kind | id | span | score |")
+            lines.append("|---:|---|---|---|---:|")
+            for item in step1_hits[:10]:
+                if not isinstance(item, dict):
+                    continue
+                lines.append(
+                    f"| {int(item.get('rank', 0))} | {item.get('kind', '')} | {item.get('id', '')} | "
+                    f"{float(item.get('t0', 0.0)):.3f}-{float(item.get('t1', 0.0)):.3f} | {float(item.get('score', 0.0)):.4f} |"
+                )
+        lines.append("")
+        lines.append("## Derived Constraints")
+        lines.append("")
+        derived = chain.get("derived_constraints", {}) if isinstance(chain, dict) else {}
+        lines.append(f"- `{json.dumps(derived, ensure_ascii=False, sort_keys=True)}`")
+        lines.append("")
+        lines.append("## Chain Step 2")
+        lines.append("")
+        step2 = chain.get("step2", {}) if isinstance(chain, dict) else {}
+        lines.append(f"- query: `{step2.get('query', '')}`")
+        lines.append(f"- query_derived: `{step2.get('query_derived', '')}`")
+        lines.append(f"- parsed_constraints: `{json.dumps(step2.get('parsed_constraints', {}), ensure_ascii=False, sort_keys=True)}`")
+        lines.append(f"- applied_constraints: {step2.get('applied_constraints', [])}")
+        lines.append(
+            f"- filtered_hits_before/after: {int(step2.get('filtered_hits_before', 0))}->{int(step2.get('filtered_hits_after', 0))}"
+        )
+        lines.append(f"- top1_kind: {step2.get('top1_kind', '')}")
+        lines.append("")
+
     lines.append("## Object Memory V0")
     lines.append("")
     obj_rows = trace.get("object_memory_summary", [])
@@ -244,6 +294,22 @@ def main() -> int:
     print(f"video_id={trace.get('video_id', '')}")
     print(f"query={trace.get('query', '')}")
     print(f"chosen_plan_intent={trace.get('plan', {}).get('intent', '')}")
+    chain = trace.get("chain", {})
+    is_chain = bool(isinstance(chain, dict) and chain.get("is_chain", False))
+    if is_chain:
+        print(f"is_chain=true chain_steps=2 chain_rel={chain.get('chain_rel', 'after')}")
+        print(f"derived_constraints={chain.get('derived_constraints', {})}")
+        step1 = chain.get("step1", {}) if isinstance(chain, dict) else {}
+        step2 = chain.get("step2", {}) if isinstance(chain, dict) else {}
+        print(
+            "step1_filtered_hits_before="
+            f"{int(step1.get('filtered_hits_before', 0))} step1_filtered_hits_after={int(step1.get('filtered_hits_after', 0))}"
+        )
+        print(
+            "step2_filtered_hits_before="
+            f"{int(step2.get('filtered_hits_before', 0))} step2_filtered_hits_after={int(step2.get('filtered_hits_after', 0))}"
+        )
+        print(f"step1_top1_kind={step1.get('top1_kind', '')} step2_top1_kind={step2.get('top1_kind', '')}")
     print(f"parsed_constraints={trace.get('plan', {}).get('constraints', {})}")
     print(f"applied_constraints={trace.get('constraint_trace', {}).get('applied_constraints', [])}")
     print(f"filtered_hits_before={trace.get('constraint_trace', {}).get('filtered_hits_before', 0)}")

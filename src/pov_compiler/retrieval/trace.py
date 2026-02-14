@@ -7,8 +7,9 @@ from typing import Any
 from pov_compiler.context.context_builder import build_context
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.retrieval.constraints import HardConstraintConfig, apply_constraints_detailed
-from pov_compiler.retrieval.query_planner import QueryPlan, plan as plan_query
-from pov_compiler.retrieval.reranker import rerank
+from pov_compiler.retrieval.query_parser import QueryChain, parse_query_chain
+from pov_compiler.retrieval.query_planner import ChainPlan, QueryPlan, plan as plan_query, plan_chain
+from pov_compiler.retrieval.reranker import Hit, rerank
 from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
 from pov_compiler.retrieval.rerank_debug import explain_scores
 from pov_compiler.retrieval.retriever import Retriever
@@ -47,6 +48,92 @@ def trace_query(
 ) -> dict[str, Any]:
     output = ensure_events_v1(_as_output(output_json))
     retriever = Retriever(output_json=output, index=index_prefix, config=dict(retrieval_config or {}))
+    chain_query: QueryChain | None = parse_query_chain(str(query))
+    if chain_query is not None:
+        chain_plan: ChainPlan | None = plan_chain(str(query))
+        step1_query = str(chain_query.steps[0].raw)
+        step2_query = str(chain_query.steps[1].raw)
+        step1_trace = trace_query(
+            output_json=output,
+            query=step1_query,
+            index_prefix=index_prefix,
+            retrieval_config=retrieval_config,
+            hard_constraints_cfg=hard_constraints_cfg,
+            rerank_cfg=rerank_cfg,
+            top_k=int(top_k),
+            enable_constraints=bool(enable_constraints),
+            use_repo=False,
+        )
+        step1_hits = list(step1_trace.get("hits", []))
+        step1_top = step1_hits[0] if step1_hits else None
+        if step1_top:
+            derived_constraints = retriever._derive_constraints_from_hit(  # type: ignore[attr-defined]
+                Hit(
+                    kind=str(step1_top.get("kind", "")),
+                    id=str(step1_top.get("id", "")),
+                    t0=float(step1_top.get("t0", 0.0)),
+                    t1=float(step1_top.get("t1", 0.0)),
+                    score=float(step1_top.get("score", 0.0)),
+                    source_query=step1_query,
+                    meta={},
+                ),
+                rel=str(chain_query.rel),
+                window_s=float(chain_query.window_s),
+            )
+            step2_query_derived = retriever._merge_step2_query(  # type: ignore[attr-defined]
+                step2_query,
+                derived_constraints,
+                default_top_k=int(top_k),
+            )
+        else:
+            derived_constraints = {}
+            step2_query_derived = step2_query
+
+        step2_trace = trace_query(
+            output_json=output,
+            query=step2_query_derived,
+            index_prefix=index_prefix,
+            retrieval_config=retrieval_config,
+            hard_constraints_cfg=hard_constraints_cfg,
+            rerank_cfg=rerank_cfg,
+            top_k=int(top_k),
+            enable_constraints=bool(enable_constraints),
+            use_repo=bool(use_repo),
+        )
+        combined = dict(step2_trace)
+        combined["query"] = str(query)
+        combined["is_chain"] = True
+        combined["chain"] = {
+            "is_chain": True,
+            "chain_rel": str(chain_query.rel),
+            "window_s": float(chain_query.window_s),
+            "top1_only": bool(chain_query.top1_only),
+            "plan_debug": dict(chain_plan.debug) if chain_plan is not None else {},
+            "step1": {
+                "query": step1_query,
+                "parsed_constraints": dict(step1_trace.get("plan", {}).get("constraints", {})),
+                "applied_constraints": list(step1_trace.get("constraint_trace", {}).get("applied_constraints", [])),
+                "filtered_hits_before": int(step1_trace.get("constraint_trace", {}).get("filtered_hits_before", 0)),
+                "filtered_hits_after": int(step1_trace.get("constraint_trace", {}).get("filtered_hits_after", 0)),
+                "topk_hits": step1_hits[: max(1, int(top_k))],
+                "chosen_top1": step1_top if isinstance(step1_top, dict) else {},
+                "top1_kind": str(step1_top.get("kind", "")) if isinstance(step1_top, dict) else "",
+            },
+            "derived_constraints": dict(derived_constraints),
+            "step2": {
+                "query": step2_query,
+                "query_derived": step2_query_derived,
+                "parsed_constraints": dict(step2_trace.get("plan", {}).get("constraints", {})),
+                "applied_constraints": list(step2_trace.get("constraint_trace", {}).get("applied_constraints", [])),
+                "filtered_hits_before": int(step2_trace.get("constraint_trace", {}).get("filtered_hits_before", 0)),
+                "filtered_hits_after": int(step2_trace.get("constraint_trace", {}).get("filtered_hits_after", 0)),
+                "topk_hits": list(step2_trace.get("hits", []))[: max(1, int(top_k))],
+                "chosen_top1": dict(step2_trace.get("hits", [{}])[0]) if list(step2_trace.get("hits", [])) else {},
+                "top1_kind": str(step2_trace.get("top1_kind", "")),
+            },
+        }
+        return combined
+
     plan: QueryPlan = plan_query(str(query))
     candidates = [dict(c) for c in plan.candidates]
     candidate_queries = [str(c["query"]) for c in candidates]

@@ -210,6 +210,15 @@ def _force_top_k(query: str, top_k: int) -> str:
 
 
 def _build_plan(sample: NLQSample, allow_gt_fallback: bool) -> QueryPlan:
+    if " then " in str(sample.query).lower():
+        q = _force_top_k(str(sample.query), int(sample.top_k))
+        return QueryPlan(
+            intent="mixed",
+            candidates=[QueryCandidate(query=q, reason="chain_query", priority=0)],
+            constraints={},
+            debug={"chain_query": True, "candidate_count": 1},
+        )
+
     planned = plan_query(sample.query)
     candidates: list[QueryCandidate] = []
     seen: set[str] = set()
@@ -411,12 +420,43 @@ def evaluate_nlq_samples(
                         f"reranked={len(reranked_hits)}; fallback={str(bool(cresult.used_fallback)).lower()}"
                     ),
                 }
+                chain_meta = sample.meta.get("chain_meta", {}) if isinstance(sample.meta, dict) else {}
+                if isinstance(chain_meta, dict):
+                    row["chain_combo"] = str(chain_meta.get("combo", ""))
+                    row["chain_step1_type"] = str(chain_meta.get("step1_type", ""))
+                    row["chain_step2_type"] = str(chain_meta.get("step2_type", ""))
                 for key in _CONSTRAINT_KEYS:
                     row[f"present_{key}"] = bool(present_flags.get(key, False))
                     row[f"filtered_{key}"] = bool(filtered_flags.get(key, False))
                     row[f"relaxed_{key}"] = bool(relaxed_flags.get(key, False))
 
                 top1_meta = dict(reranked_hits[0].get("meta", {})) if reranked_hits else {}
+                chain_payload: dict[str, Any] = {}
+                for hit_item in reranked_hits:
+                    meta_item = hit_item.get("meta", {})
+                    if isinstance(meta_item, dict):
+                        cmeta = meta_item.get("chain", {})
+                        if isinstance(cmeta, dict) and bool(cmeta.get("is_chain", False)):
+                            chain_payload = cmeta
+                            break
+                step1_info = chain_payload.get("step1", {}) if isinstance(chain_payload, dict) else {}
+                step2_info = chain_payload.get("step2", {}) if isinstance(chain_payload, dict) else {}
+                chain_step1_has_hit = 1.0 if float(step1_info.get("hit_count", 0.0) or 0.0) > 0.0 else 0.0
+                chain_step2_has_hit = 1.0 if float(step2_info.get("hit_count", 0.0) or 0.0) > 0.0 else 0.0
+                step2_before = float(step2_info.get("filtered_hits_before", 0.0) or 0.0)
+                step2_after = float(step2_info.get("filtered_hits_after", 0.0) or 0.0)
+                chain_filtered_ratio_step2 = float((step2_before - step2_after) / step2_before) if step2_before > 0.0 else 0.0
+                chain_success = (
+                    1.0
+                    if (
+                        chain_step1_has_hit > 0.0
+                        and chain_step2_has_hit > 0.0
+                        and hit_at_k_strict > 0.0
+                        and top1_in_distractor < 0.5
+                        and len(pred_spans) > 0
+                    )
+                    else 0.0
+                )
                 gt_place = str(sample.meta.get("gt_place_segment_id", "")).strip()
                 pred_place = str(top1_meta.get("place_segment_id", "")).strip()
                 row["top1_place_segment_mismatch"] = float(
@@ -425,6 +465,10 @@ def evaluate_nlq_samples(
                 gt_obj = str(sample.meta.get("interaction_object", sample.meta.get("active_object_top1", ""))).strip().lower()
                 pred_obj = str(top1_meta.get("interaction_primary_object", "")).strip().lower()
                 row["top1_interaction_object_match"] = float(1.0 if gt_obj and pred_obj and gt_obj == pred_obj else 0.0)
+                row["chain_step1_has_hit"] = float(chain_step1_has_hit)
+                row["chain_step2_has_hit"] = float(chain_step2_has_hit)
+                row["chain_success"] = float(chain_success)
+                row["chain_filtered_ratio_step2"] = float(chain_filtered_ratio_step2)
 
                 row.update(base)
                 local_rows.append(row)
@@ -458,6 +502,12 @@ def evaluate_nlq_samples(
                     ),
                     "top1_interaction_object_match_rate": _mean(
                         [float(r.get("top1_interaction_object_match", 0.0)) for r in local_rows]
+                    ),
+                    "chain_step1_has_hit_rate": _mean([float(r.get("chain_step1_has_hit", 0.0)) for r in local_rows]),
+                    "chain_step2_has_hit_rate": _mean([float(r.get("chain_step2_has_hit", 0.0)) for r in local_rows]),
+                    "chain_success_rate": _mean([float(r.get("chain_success", 0.0)) for r in local_rows]),
+                    "chain_filtered_ratio_step2": _mean(
+                        [float(r.get("chain_filtered_ratio_step2", 0.0)) for r in local_rows]
                     ),
                     "mrr": _mean([float(r["mrr"]) for r in local_rows]),
                     **base,
@@ -514,6 +564,12 @@ def evaluate_nlq_samples(
                         ),
                         "top1_interaction_object_match_rate": _mean(
                             [float(r.get("top1_interaction_object_match", 0.0)) for r in rows]
+                        ),
+                        "chain_step1_has_hit_rate": _mean([float(r.get("chain_step1_has_hit", 0.0)) for r in rows]),
+                        "chain_step2_has_hit_rate": _mean([float(r.get("chain_step2_has_hit", 0.0)) for r in rows]),
+                        "chain_success_rate": _mean([float(r.get("chain_success", 0.0)) for r in rows]),
+                        "chain_filtered_ratio_step2": _mean(
+                            [float(r.get("chain_filtered_ratio_step2", 0.0)) for r in rows]
                         ),
                         "mrr": _mean([float(r["mrr"]) for r in rows]),
                         "hit_at_k_event": _mean([float(r["hit_at_k_event"]) for r in rows]),

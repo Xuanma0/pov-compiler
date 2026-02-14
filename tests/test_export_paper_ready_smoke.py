@@ -288,6 +288,15 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"uids_total": 1, "labels": {"a": "stub", "b": "real"}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional chain NLQ panel input.
+    (compare_dir / "chain_nlq").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "chain_nlq" / "table_chain_summary.csv").write_text(
+        "budget_key,budget_seconds,chain_hit_at_k_strict,chain_mrr,chain_success_rate\n20/50/4,20,0.5,0.45,0.5\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_nlq" / "table_chain_summary.md").write_text("# chain\n", encoding="utf-8")
+    (compare_dir / "chain_nlq" / "fig_chain_success_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "chain_nlq" / "fig_chain_success_vs_budget_seconds.pdf").write_bytes(b"PDF")
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -317,6 +326,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "component_attr_cmp"),
         "--bye-report-compare-dir",
         str(compare_dir / "bye_report_cmp"),
+        "--chain-nlq-dir",
+        str(compare_dir / "chain_nlq"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -377,6 +388,9 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "bye_report" / "table_bye_report_compare.md").exists()
     assert (out_dir / "figures" / "fig_bye_critical_fn_delta.png").exists()
     assert (out_dir / "figures" / "fig_bye_latency_delta.png").exists()
+    assert (out_dir / "chain_nlq_panel" / "table_chain_summary.csv").exists()
+    assert (out_dir / "chain_nlq_panel" / "table_chain_summary.md").exists()
+    assert (out_dir / "figures" / "fig_chain_success_vs_budget_seconds.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

@@ -4,6 +4,8 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
+from pov_compiler.retrieval.query_parser import QueryChain, parse_query_chain
+
 
 class QueryCandidate(TypedDict):
     query: str
@@ -16,6 +18,15 @@ class QueryPlan:
     intent: Literal["anchor", "token", "decision", "time", "mixed"]
     candidates: list[QueryCandidate] = field(default_factory=list)
     constraints: dict[str, Any] = field(default_factory=dict)
+    debug: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ChainPlan:
+    chain_rel: str
+    window_s: float
+    top1_only: bool
+    steps: list[QueryPlan] = field(default_factory=list)
     debug: dict[str, Any] = field(default_factory=dict)
 
 
@@ -384,5 +395,23 @@ def plan(query_text: str) -> QueryPlan:
             "query_text": text_raw,
             "intent_flags": dict(flags),
             "candidate_count": len(candidates),
+        },
+    )
+
+
+def plan_chain(query_text: str) -> ChainPlan | None:
+    chain: QueryChain | None = parse_query_chain(query_text)
+    if chain is None:
+        return None
+    step_plans = [plan(step.raw) for step in chain.steps]
+    return ChainPlan(
+        chain_rel=str(chain.rel),
+        window_s=float(chain.window_s),
+        top1_only=bool(chain.top1_only),
+        steps=step_plans,
+        debug={
+            "chain_query": str(query_text),
+            "step_count": len(step_plans),
+            "derived_strategy": "step1_top1_to_step2_constraints",
         },
     )

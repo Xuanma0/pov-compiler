@@ -33,7 +33,11 @@ def parse_args() -> argparse.Namespace:
 
     _parse_bool_with_neg(parser, "with-eval", default=False)
     _parse_bool_with_neg(parser, "with-nlq", default=False)
-    parser.add_argument("--nlq-mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "ego4d"], default="hard_pseudo_nlq")
+    parser.add_argument(
+        "--nlq-mode",
+        choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "hard_pseudo_chain", "ego4d"],
+        default="hard_pseudo_nlq",
+    )
     nlq_budget_group = parser.add_mutually_exclusive_group()
     nlq_budget_group.add_argument("--with-nlq-budget-sweep", dest="with_nlq_budget_sweep", action="store_true")
     nlq_budget_group.add_argument("--no-with-nlq-budget-sweep", dest="with_nlq_budget_sweep", action="store_false")
@@ -899,6 +903,8 @@ def main() -> int:
             cmd_paper_ready.extend(["--reranker-sweep-dir", str(compare_reranker_sweep_real)])
         if run_nlq_budget_sweep:
             cmd_paper_ready.extend(["--lost-object-panel-dir", str(compare_nlq_budget_real / "aggregate")])
+            if str(args.nlq_mode).strip().lower() == "hard_pseudo_chain":
+                cmd_paper_ready.extend(["--chain-nlq-dir", str(compare_nlq_budget_real / "aggregate")])
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
         if rc != 0:
             return rc

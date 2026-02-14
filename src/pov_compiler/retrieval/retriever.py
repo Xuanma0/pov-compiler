@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+import shlex
 from typing import Any
 
 import numpy as np
 
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
-from pov_compiler.retrieval.query_parser import ParsedQuery, parse_query
+from pov_compiler.retrieval.query_parser import ParsedQuery, QueryChain, parse_query, parse_query_chain
 from pov_compiler.retrieval.reranker import Hit
 from pov_compiler.schemas import DecisionPoint, Output
 
@@ -232,7 +233,140 @@ class Retriever:
         )
         return next_events, next_highlights, next_tokens, next_decisions
 
+    @staticmethod
+    def _count_selected(result: dict[str, Any]) -> int:
+        total = 0
+        for key in ("selected_events", "selected_highlights", "selected_tokens", "selected_decisions"):
+            values = result.get(key, [])
+            if isinstance(values, list):
+                total += len(values)
+        return int(total)
+
+    @staticmethod
+    def _parsed_constraints(parsed: ParsedQuery) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if parsed.time_range is not None:
+            out["time"] = {"t0": float(parsed.time_range[0]), "t1": float(parsed.time_range[1])}
+        if parsed.token_types:
+            out["token_types"] = list(parsed.token_types)
+        if parsed.anchor_types:
+            out["anchor_types"] = list(parsed.anchor_types)
+        if parsed.decision_types:
+            out["decision_types"] = list(parsed.decision_types)
+        if parsed.event_ids:
+            out["event_ids"] = list(parsed.event_ids)
+        if parsed.event_labels:
+            out["event_labels"] = list(parsed.event_labels)
+        if parsed.contact_min is not None:
+            out["contact_min"] = float(parsed.contact_min)
+        if parsed.place:
+            out["place"] = str(parsed.place)
+        if parsed.place_segment_ids:
+            out["place_segment_ids"] = list(parsed.place_segment_ids)
+        if parsed.interaction_min is not None:
+            out["interaction_min"] = float(parsed.interaction_min)
+        if parsed.interaction_object:
+            out["interaction_object"] = str(parsed.interaction_object)
+        if parsed.object_name:
+            out["object_name"] = str(parsed.object_name)
+        if parsed.which:
+            out["which"] = str(parsed.which)
+        if parsed.prefer_contact:
+            out["prefer_contact"] = bool(parsed.prefer_contact)
+        if parsed.need_object_match:
+            out["need_object_match"] = bool(parsed.need_object_match)
+        return out
+
+    @staticmethod
+    def _strip_query_keys(query: str, keys: set[str]) -> str:
+        try:
+            parts = shlex.split(str(query))
+        except Exception:
+            parts = str(query).split()
+        kept: list[str] = []
+        for part in parts:
+            if "=" not in part:
+                kept.append(part)
+                continue
+            key = str(part.split("=", 1)[0]).strip().lower().replace("-", "_")
+            if key in keys:
+                continue
+            kept.append(part)
+        return " ".join(kept).strip()
+
+    @staticmethod
+    def _derive_constraints_from_hit(
+        hit: Hit,
+        *,
+        rel: str,
+        window_s: float,
+    ) -> dict[str, Any]:
+        rel_norm = str(rel).strip().lower()
+        t0 = float(hit["t0"])
+        t1 = float(hit["t1"])
+        if rel_norm == "before":
+            t_min_s = 0.0
+            t_max_s = max(0.0, float(t0))
+        elif rel_norm == "around":
+            w = max(0.0, float(window_s))
+            t_min_s = max(0.0, float(t0) - w)
+            t_max_s = float(t1) + w
+        else:
+            rel_norm = "after"
+            t_min_s = max(0.0, float(t1))
+            t_max_s = float("inf")
+        meta = dict(hit.get("meta", {}))
+        return {
+            "rel": rel_norm,
+            "t_min_s": float(t_min_s),
+            "t_max_s": float(t_max_s),
+            "from_hit_kind": str(hit["kind"]),
+            "from_hit_id": str(hit["id"]),
+            "from_hit_t0": float(t0),
+            "from_hit_t1": float(t1),
+            "place_segment_id": str(meta.get("place_segment_id", "")).strip(),
+            "interaction_primary_object": str(meta.get("interaction_primary_object", "")).strip().lower(),
+        }
+
+    def _merge_step2_query(self, step2_query: str, derived: dict[str, Any], *, default_top_k: int) -> str:
+        parsed = parse_query(step2_query)
+        time_existing = parsed.time_range
+        t_min = float(derived.get("t_min_s", 0.0))
+        t_max = float(derived.get("t_max_s", float("inf")))
+        if time_existing is not None:
+            t_min = max(float(t_min), float(time_existing[0]))
+            t_max = min(float(t_max), float(time_existing[1]))
+        if not np.isfinite(t_max):
+            duration_s = float(self.output.meta.get("duration_s", 0.0) or 0.0)
+            t_max = duration_s if duration_s > 0 else max(float(t_min) + 60.0, float(t_min))
+        if t_max <= t_min:
+            t_max = float(t_min) + 0.5
+
+        cleaned = self._strip_query_keys(
+            step2_query,
+            {
+                "time",
+                "chain_rel",
+                "chain_window_s",
+                "chain_top1_only",
+            },
+        )
+        parts = [cleaned] if cleaned else []
+        parts.append(f"time={float(t_min):.3f}-{float(t_max):.3f}")
+
+        place_id = str(derived.get("place_segment_id", "")).strip()
+        if place_id and not parsed.place_segment_ids:
+            parts.append(f"place_segment_id={place_id}")
+        top_k = int(parsed.top_k if parsed.top_k is not None else int(default_top_k))
+        if "top_k=" not in " ".join(parts).lower():
+            parts.append(f"top_k={max(1, top_k)}")
+        return " ".join([p for p in parts if str(p).strip()]).strip()
+
     def retrieve(self, query: str) -> dict[str, Any]:
+        chain: QueryChain | None = parse_query_chain(str(query))
+        if chain is not None:
+            return self.retrieve_chain(chain, raw_query=str(query))
+
         parsed: ParsedQuery = parse_query(query)
         top_k = max(1, int(parsed.top_k if parsed.top_k is not None else self.cfg.default_top_k))
 
@@ -724,6 +858,113 @@ class Retriever:
         }
         return result
 
+    def retrieve_chain(self, chain: QueryChain, raw_query: str | None = None) -> dict[str, Any]:
+        step1 = chain.steps[0]
+        step2 = chain.steps[1]
+        step1_query = str(step1.raw).strip()
+        step2_query = str(step2.raw).strip()
+        top_k = max(
+            1,
+            int(
+                step2.parsed.top_k
+                if step2.parsed.top_k is not None
+                else (step1.parsed.top_k if step1.parsed.top_k is not None else self.cfg.default_top_k)
+            ),
+        )
+
+        step1_result = self.retrieve(step1_query)
+        step1_hits = self._result_to_hits(step1_query, step1_result)
+        step1_top = step1_hits[0] if step1_hits else None
+        step1_count = self._count_selected(step1_result)
+
+        if step1_top is None:
+            return {
+                "selected_events": [],
+                "selected_highlights": [],
+                "selected_decisions": [],
+                "selected_tokens": [],
+                "mode": step2.parsed.mode,
+                "budget_overrides": dict(step2.parsed.budget_overrides),
+                "debug": {
+                    "reason": "chain_step1_no_hit",
+                    "filters_applied": list(step2.parsed.filters_applied),
+                    "parse_warnings": list(step2.parsed.parse_warnings),
+                    "search_hits": [],
+                    "chain": {
+                        "is_chain": True,
+                        "raw_query": str(raw_query or f"{step1_query} then {step2_query}"),
+                        "chain_rel": str(chain.rel),
+                        "window_s": float(chain.window_s),
+                        "top1_only": bool(chain.top1_only),
+                        "step1": {
+                            "query": step1_query,
+                            "parsed_constraints": self._parsed_constraints(step1.parsed),
+                            "filtered_hits_before": int(step1_count),
+                            "filtered_hits_after": int(step1_count),
+                            "has_hit": False,
+                            "hit_count": int(step1_count),
+                        },
+                        "derived_constraints": {},
+                        "step2": {
+                            "query": step2_query,
+                            "query_derived": step2_query,
+                            "parsed_constraints": self._parsed_constraints(step2.parsed),
+                            "filtered_hits_before": 0,
+                            "filtered_hits_after": 0,
+                            "has_hit": False,
+                            "hit_count": 0,
+                        },
+                    },
+                },
+            }
+
+        derived = self._derive_constraints_from_hit(step1_top, rel=str(chain.rel), window_s=float(chain.window_s))
+        step2_query_derived = self._merge_step2_query(step2_query, derived, default_top_k=int(top_k))
+        step2_plain = self.retrieve(step2_query)
+        step2_result = self.retrieve(step2_query_derived)
+        step2_before = self._count_selected(step2_plain)
+        step2_after = self._count_selected(step2_result)
+        step2_hits = self._result_to_hits(step2_query_derived, step2_result)
+
+        final = dict(step2_result)
+        debug = dict(final.get("debug", {}) if isinstance(final.get("debug", {}), dict) else {})
+        base_reason = str(debug.get("reason", "")).strip()
+        chain_reason = f"chain:{step1_query} -> {step2_query_derived}"
+        debug["reason"] = f"{base_reason}; {chain_reason}" if base_reason else chain_reason
+        debug["chain"] = {
+            "is_chain": True,
+            "raw_query": str(raw_query or f"{step1_query} then {step2_query}"),
+            "chain_rel": str(chain.rel),
+            "window_s": float(chain.window_s),
+            "top1_only": bool(chain.top1_only),
+            "step1": {
+                "query": step1_query,
+                "parsed_constraints": self._parsed_constraints(step1.parsed),
+                "filtered_hits_before": int(step1_count),
+                "filtered_hits_after": int(step1_count),
+                "has_hit": bool(step1_top is not None),
+                "hit_count": int(step1_count),
+                "top1": {
+                    "kind": str(step1_top["kind"]),
+                    "id": str(step1_top["id"]),
+                    "t0": float(step1_top["t0"]),
+                    "t1": float(step1_top["t1"]),
+                },
+            },
+            "derived_constraints": dict(derived),
+            "step2": {
+                "query": step2_query,
+                "query_derived": step2_query_derived,
+                "parsed_constraints": self._parsed_constraints(step2.parsed),
+                "filtered_hits_before": int(step2_before),
+                "filtered_hits_after": int(step2_after),
+                "has_hit": bool(len(step2_hits) > 0),
+                "hit_count": int(step2_after),
+            },
+        }
+        final["debug"] = debug
+        return final
+
     @staticmethod
     def has_hits(result: dict[str, Any]) -> bool:
         if not isinstance(result, dict):
@@ -756,6 +997,12 @@ class Retriever:
 
     def _result_to_hits(self, query: str, result: dict[str, Any]) -> list[Hit]:
         query = str(query).strip()
+        chain_debug = None
+        debug_payload = result.get("debug", {})
+        if isinstance(debug_payload, dict):
+            chain_candidate = debug_payload.get("chain", None)
+            if isinstance(chain_candidate, dict):
+                chain_debug = dict(chain_candidate)
         event_map = {event.id: event for event in (list(self.output.events) + list(self.output.events_v0))}
         if self.output.events_v1:
             event_map = {event.id: event for event in self.output.events_v1}
@@ -813,6 +1060,7 @@ class Retriever:
                         "place_segment_reason": self._event_place_segment_reason(src_event) if src_event is not None else "",
                         "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
                         "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
+                        "chain": chain_debug,
                     },
                 )
             )
@@ -841,6 +1089,7 @@ class Retriever:
                         "place_segment_reason": self._event_place_segment_reason(src_event) if src_event is not None else "",
                         "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
                         "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
+                        "chain": chain_debug,
                     },
                 )
             )
@@ -894,6 +1143,7 @@ class Retriever:
                         "place_segment_reason": self._event_place_segment_reason(src_event) if src_event is not None else "",
                         "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
                         "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
+                        "chain": chain_debug,
                     },
                 )
             )
@@ -922,6 +1172,7 @@ class Retriever:
                         "place_segment_reason": self._event_place_segment_reason(event),
                         "interaction_primary_object": self._event_interaction_primary_object(event),
                         "interaction_score": self._event_interaction_score(event),
+                        "chain": chain_debug,
                     },
                 )
             )

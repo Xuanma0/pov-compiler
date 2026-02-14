@@ -13,7 +13,7 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_nlq
+from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_chain, load_hard_pseudo_nlq
 from pov_compiler.bench.nlq.evaluator import evaluate_nlq_samples
 from pov_compiler.bench.nlq.safety import SafetyGateConfig, build_safety_report
 from pov_compiler.eval.eval_cross_variant import evaluate_cross_variant
@@ -308,7 +308,7 @@ def _make_report(
     lines.append("")
 
     qset = set(query_types)
-    if mode == "hard_pseudo_nlq":
+    if mode in {"hard_pseudo_nlq", "hard_pseudo_chain"}:
         token_q = _pick_existing(qset, ["hard_pseudo_token", "pseudo_token", "token"], "hard_pseudo_token")
         decision_q = _pick_existing(qset, ["hard_pseudo_decision", "pseudo_decision", "decision"], "hard_pseudo_decision")
         hard_q = _pick_existing(qset, ["hard_pseudo_anchor", "pseudo_hard_time", "hard_time"], "hard_pseudo_anchor")
@@ -374,6 +374,16 @@ def _make_report(
             f"(delta {contact_full - contact_hl:+.4f}); "
             f"top1_in_distractor_rate delta {contact_fp_full - contact_fp_hl:+.4f}. "
             "This query family depends on events_v1 contact/perception evidence."
+        )
+    if mode == "hard_pseudo_chain":
+        chain_full = q_hit.get(("hard_pseudo_chain", "full"), 0.0)
+        chain_hl = q_hit.get(("hard_pseudo_chain", "highlights_only"), 0.0)
+        chain_fp_full = q_fp.get(("hard_pseudo_chain", "full"), 0.0)
+        chain_fp_hl = q_fp.get(("hard_pseudo_chain", "highlights_only"), 0.0)
+        lines.append(
+            f"- hard_pseudo_chain: `full` hit@k {chain_full:.4f} vs `highlights_only` {chain_hl:.4f} "
+            f"(delta {chain_full - chain_hl:+.4f}); "
+            f"top1_in_distractor_rate delta {chain_fp_full - chain_fp_hl:+.4f}."
         )
     lines.append("")
 
@@ -444,6 +454,99 @@ def _make_report(
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_chain_summary(
+    *,
+    out_dir: Path,
+    by_type_rows: list[dict[str, Any]],
+    per_query_rows: list[dict[str, Any]],
+    with_figures: bool = True,
+) -> tuple[Path, Path, list[Path]]:
+    chain_rows = [row for row in per_query_rows if str(row.get("query_type", "")) == "hard_pseudo_chain"]
+    summary: dict[tuple[str, float, int, int, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in chain_rows:
+        key = (
+            str(row.get("variant", "")),
+            float(row.get("budget_max_total_s", 0.0)),
+            int(row.get("budget_max_tokens", 0)),
+            int(row.get("budget_max_decisions", 0)),
+            str(row.get("chain_combo", "")),
+        )
+        summary[key].append(row)
+
+    out_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(summary.items(), key=lambda x: (x[0][0], x[0][1], x[0][4])):
+        variant, bs, bt, bd, combo = key
+        n = float(len(rows)) if rows else 1.0
+        out_rows.append(
+            {
+                "variant": variant,
+                "query_type": "hard_pseudo_chain",
+                "chain_combo": combo,
+                "budget_max_total_s": float(bs),
+                "budget_max_tokens": int(bt),
+                "budget_max_decisions": int(bd),
+                "num_queries": int(len(rows)),
+                "hit_at_k_strict": float(sum(float(r.get("hit_at_k_strict", 0.0)) for r in rows) / n),
+                "mrr": float(sum(float(r.get("mrr", 0.0)) for r in rows) / n),
+                "top1_in_distractor_rate": float(sum(float(r.get("top1_in_distractor", 0.0)) for r in rows) / n),
+                "chain_step1_has_hit_rate": float(sum(float(r.get("chain_step1_has_hit", 0.0)) for r in rows) / n),
+                "chain_step2_has_hit_rate": float(sum(float(r.get("chain_step2_has_hit", 0.0)) for r in rows) / n),
+                "chain_success_rate": float(sum(float(r.get("chain_success", 0.0)) for r in rows) / n),
+                "chain_filtered_ratio_step2": float(
+                    sum(float(r.get("chain_filtered_ratio_step2", 0.0)) for r in rows) / n
+                ),
+            }
+        )
+
+    table_csv = out_dir / "table_chain_summary.csv"
+    table_md = out_dir / "table_chain_summary.md"
+    _write_csv(table_csv, out_rows)
+    md_lines: list[str] = [
+        "# Chain Summary",
+        "",
+        "| variant | chain_combo | budget | hit@k_strict | chain_success | top1_in_distractor_rate |",
+        "|---|---|---|---:|---:|---:|",
+    ]
+    for row in out_rows:
+        budget_key = f"{int(float(row.get('budget_max_total_s', 0.0)))}/{int(row.get('budget_max_tokens', 0))}/{int(row.get('budget_max_decisions', 0))}"
+        md_lines.append(
+            f"| {row.get('variant', '')} | {row.get('chain_combo', '')} | {budget_key} | "
+            f"{float(row.get('hit_at_k_strict', 0.0)):.4f} | {float(row.get('chain_success_rate', 0.0)):.4f} | "
+            f"{float(row.get('top1_in_distractor_rate', 0.0)):.4f} |"
+        )
+    table_md.write_text("\n".join(md_lines), encoding="utf-8")
+
+    figure_paths: list[Path] = []
+    if with_figures and out_rows:
+        try:
+            import matplotlib.pyplot as plt
+
+            by_variant: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in out_rows:
+                by_variant[str(row.get("variant", ""))].append(row)
+            fig_base = out_dir / "fig_chain_success_vs_budget_seconds"
+            plt.figure(figsize=(7.4, 4.2))
+            for variant, rows in sorted(by_variant.items(), key=lambda x: x[0]):
+                ordered = sorted(rows, key=lambda x: float(x.get("budget_max_total_s", 0.0)))
+                xs = [float(x.get("budget_max_total_s", 0.0)) for x in ordered]
+                ys = [float(x.get("chain_success_rate", 0.0)) for x in ordered]
+                plt.plot(xs, ys, marker="o", label=variant)
+            plt.xlabel("Budget Seconds")
+            plt.ylabel("chain_success_rate")
+            plt.title("Chain Success vs Budget")
+            plt.grid(True, alpha=0.35)
+            plt.legend()
+            plt.tight_layout()
+            for ext in ("png", "pdf"):
+                p = fig_base.with_suffix(f".{ext}")
+                plt.savefig(p)
+                figure_paths.append(p)
+            plt.close()
+        except Exception:
+            pass
+    return table_csv, table_md, figure_paths
+
+
 def _resolve_allow_gt_fallback(mode: str, cli_value: bool | None) -> bool:
     if cli_value is not None:
         return bool(cli_value)
@@ -453,11 +556,11 @@ def _resolve_allow_gt_fallback(mode: str, cli_value: bool | None) -> bool:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="NLQ evaluation (mock/pseudo_nlq/hard_pseudo_nlq/ego4d)")
+    parser = argparse.ArgumentParser(description="NLQ evaluation (mock/pseudo_nlq/hard_pseudo_nlq/hard_pseudo_chain/ego4d)")
     parser.add_argument("--json", required=True, help="Pipeline output json")
     parser.add_argument("--index", default=None, help="Vector index prefix")
     parser.add_argument("--out_dir", required=True, help="Output directory")
-    parser.add_argument("--mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "ego4d"], default="pseudo_nlq")
+    parser.add_argument("--mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "hard_pseudo_chain", "ego4d"], default="pseudo_nlq")
     parser.add_argument("--ann", default=None, help="Annotation path for mode=ego4d")
     parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"))
     parser.add_argument("--sweep", action="store_true", help="Run budget sweep")
@@ -545,16 +648,27 @@ def main() -> int:
 
     allow_gt_fallback = _resolve_allow_gt_fallback(str(args.mode), args.allow_gt_fallback)
 
-    if str(args.mode) == "hard_pseudo_nlq":
+    if str(args.mode) in {"hard_pseudo_nlq", "hard_pseudo_chain"}:
         try:
-            samples: list[NLQSample] = load_hard_pseudo_nlq(
-                output,
-                seed=int(args.seed),
-                n_highlight=max(1, int(args.n)),
-                n_token=max(1, int(args.n)),
-                n_decision=max(1, int(args.n)),
-                top_k=max(1, int(args.top_k)),
-            )
+            if str(args.mode) == "hard_pseudo_chain":
+                samples = load_hard_pseudo_chain(
+                    output,
+                    seed=int(args.seed),
+                    n_chain=max(1, int(args.n)),
+                    n_highlight=max(2, int(args.n)),
+                    n_token=max(2, int(args.n)),
+                    n_decision=max(2, int(args.n)),
+                    top_k=max(1, int(args.top_k)),
+                )
+            else:
+                samples = load_hard_pseudo_nlq(
+                    output,
+                    seed=int(args.seed),
+                    n_highlight=max(1, int(args.n)),
+                    n_token=max(1, int(args.n)),
+                    n_decision=max(1, int(args.n)),
+                    top_k=max(1, int(args.top_k)),
+                )
         except Exception as exc:
             print(f"error=build_hard_queries_failed detail={exc}")
             return 1
@@ -622,6 +736,9 @@ def main() -> int:
     summary_csv = out_dir / "nlq_summary.csv"
     report_md = out_dir / "nlq_report.md"
     safety_json = out_dir / "safety_report.json"
+    chain_table_csv: Path | None = None
+    chain_table_md: Path | None = None
+    chain_figures: list[Path] = []
     _write_csv(results_csv, per_query_rows)
     _write_csv(summary_csv, by_type_rows)
     resolved_safety_cfg = SafetyGateConfig.from_dict(safety_cfg)
@@ -648,6 +765,13 @@ def main() -> int:
         hard_constraints_cfg=resolved_hard_cfg.to_dict(),
         safety_report=safety_report,
     )
+    if str(args.mode) == "hard_pseudo_chain":
+        chain_table_csv, chain_table_md, chain_figures = _write_chain_summary(
+            out_dir=out_dir,
+            by_type_rows=by_type_rows,
+            per_query_rows=per_query_rows,
+            with_figures=True,
+        )
 
     print(f"video_id={output.video_id}")
     print(f"mode={args.mode}")
@@ -670,6 +794,12 @@ def main() -> int:
     print(f"saved_summary={summary_csv}")
     print(f"saved_report={report_md}")
     print(f"saved_safety={safety_json}")
+    if chain_table_csv is not None:
+        print(f"saved_chain_table_csv={chain_table_csv}")
+    if chain_table_md is not None:
+        print(f"saved_chain_table_md={chain_table_md}")
+    if chain_figures:
+        print(f"saved_chain_figures={[str(p) for p in chain_figures]}")
     if bool(safety_report.get("gate_enforced", False)) and not bool(safety_report.get("pass_gate", True)):
         return 2
     return 0
