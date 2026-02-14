@@ -93,6 +93,16 @@ class ConstraintApplyResult:
     used_fallback: bool
     filtered_before: int
     filtered_after: int
+    steps: list["ConstraintStepTrace"]
+
+
+@dataclass
+class ConstraintStepTrace:
+    name: str
+    before: int
+    after: int
+    satisfied: bool
+    details: dict[str, Any]
 
 
 def _scene_change_time(output: Output | None) -> float | None:
@@ -179,12 +189,19 @@ def _match_object_name(hit: Hit, target: str) -> bool:
                 source.get("label", ""),
             ]
         )
+    has_explicit_object = False
     for value in values:
         norm = str(value).strip().lower()
         if not norm:
             continue
+        has_explicit_object = True
         if tgt in norm or norm in tgt:
             return True
+    source_query = str(hit.get("source_query", "")).strip().lower()
+    if (not has_explicit_object) and source_query and (
+        f"object={tgt}" in source_query or f"lost_object={tgt}" in source_query or f"interaction_object={tgt}" in source_query
+    ):
+        return True
     return False
 
 
@@ -215,30 +232,71 @@ def _apply_once(
     cfg: HardConstraintConfig,
     enabled: set[str],
     output: Output | None,
-) -> tuple[list[Hit], list[str]]:
+) -> tuple[list[Hit], list[str], list[ConstraintStepTrace]]:
     constraints = dict(plan.constraints)
     working = list(hits)
     applied: list[str] = []
+    steps: list[ConstraintStepTrace] = []
+
+    def _run_step(
+        name: str,
+        should_run: bool,
+        fn: Any,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        nonlocal working
+        if not should_run:
+            return
+        before = len(working)
+        next_hits = fn(list(working))
+        after = len(next_hits)
+        working = list(next_hits)
+        applied.append(name)
+        steps.append(
+            ConstraintStepTrace(
+                name=str(name),
+                before=int(before),
+                after=int(after),
+                satisfied=bool(after > 0),
+                details=dict(details or {}),
+            )
+        )
 
     if "after_scene_change" in enabled and bool(constraints.get("after_scene_change", False)):
         scene_t = _scene_change_time(output)
         if scene_t is not None:
-            working = [h for h in working if float(h["t1"]) >= float(scene_t)]
-            applied.append("after_scene_change")
+            _run_step(
+                "after_scene_change",
+                True,
+                lambda xs: [h for h in xs if float(h["t1"]) >= float(scene_t)],
+                {"scene_t": float(scene_t)},
+            )
 
     if "interaction_object" in enabled and bool(cfg.enable_interaction):
         target_obj = str(constraints.get("interaction_object", "")).strip().lower()
         if target_obj and not str(constraints.get("object_name", "")).strip():
-            working = [h for h in working if _match_interaction_object(h, target_obj)]
-            applied.append("interaction_object")
+            _run_step(
+                "interaction_object",
+                True,
+                lambda xs: [h for h in xs if _match_interaction_object(h, target_obj)],
+                {"interaction_object": str(target_obj)},
+            )
 
     if "object_match" in enabled and bool(cfg.enable_object_match):
         target_obj = str(
             constraints.get("object_name", constraints.get("lost_object", constraints.get("object_last_seen", "")))
         ).strip().lower()
-        if target_obj:
-            working = [h for h in working if _match_object_name(h, target_obj)]
-            applied.append("object_match")
+        require_object_match = bool(constraints.get("need_object_match", False))
+        if target_obj or require_object_match:
+            _run_step(
+                "object_match",
+                True,
+                lambda xs: [h for h in xs if _match_object_name(h, target_obj)] if target_obj else list(xs),
+                {
+                    "object_name": str(target_obj),
+                    "need_object_match": bool(require_object_match),
+                },
+            )
 
     if "interaction_min" in enabled and bool(cfg.enable_interaction):
         if constraints.get("interaction_min", None) is not None:
@@ -246,26 +304,49 @@ def _apply_once(
                 threshold = float(constraints.get("interaction_min"))
             except Exception:
                 threshold = 0.0
-            working = [h for h in working if _match_interaction_min(h, threshold)]
-            applied.append("interaction_min")
+            _run_step(
+                "interaction_min",
+                True,
+                lambda xs: [h for h in xs if _match_interaction_min(h, threshold)],
+                {"interaction_min": float(threshold)},
+            )
 
     if "type_match" in enabled and bool(cfg.enable_type_match):
         if any(k in constraints for k in ("anchor_type", "token_type", "decision_type")):
-            working = [h for h in working if _type_match(h, constraints)]
-            applied.append("type_match")
+            _run_step(
+                "type_match",
+                True,
+                lambda xs: [h for h in xs if _type_match(h, constraints)],
+                {
+                    "anchor_type": constraints.get("anchor_type", ""),
+                    "token_type": constraints.get("token_type", ""),
+                    "decision_type": constraints.get("decision_type", ""),
+                },
+            )
 
     if "first_last" in enabled and cfg.enable_first_last:
         which = str(constraints.get("which", "")).lower()
-        if which in {"first", "last"} and working:
-            ordered = sorted(working, key=lambda x: (float(x["t0"]), float(x["t1"]), str(x["id"])))
-            working = [ordered[0] if which == "first" else ordered[-1]]
-            applied.append("first_last")
+        if which in {"first", "last"}:
+            _run_step(
+                "first_last",
+                True,
+                lambda xs: (
+                    [sorted(xs, key=lambda x: (float(x["t0"]), float(x["t1"]), str(x["id"])))[0 if which == "first" else -1]]
+                    if xs
+                    else []
+                ),
+                {"which": str(which)},
+            )
 
     if "place_first_last" in enabled and cfg.enable_place:
         which_place = str(constraints.get("place", "")).lower()
-        if which_place in {"first", "last"} and working:
-            working = _apply_place_first_last(working, which_place)
-            applied.append("place_first_last")
+        if which_place in {"first", "last"}:
+            _run_step(
+                "place_first_last",
+                True,
+                lambda xs: _apply_place_first_last(xs, which_place),
+                {"place": str(which_place)},
+            )
 
     if "place_segment_id" in enabled and cfg.enable_place:
         raw_ids = constraints.get("place_segment_ids", constraints.get("place_segment_id", []))
@@ -276,10 +357,14 @@ def _apply_once(
         else:
             target_ids = set()
         if target_ids:
-            working = [h for h in working if str(h.get("meta", {}).get("place_segment_id", "")).strip() in target_ids]
-            applied.append("place_segment_id")
+            _run_step(
+                "place_segment_id",
+                True,
+                lambda xs: [h for h in xs if str(h.get("meta", {}).get("place_segment_id", "")).strip() in target_ids],
+                {"place_segment_ids": sorted(target_ids)},
+            )
 
-    return working, applied
+    return working, applied, steps
 
 
 def apply_constraints_detailed(
@@ -314,27 +399,31 @@ def apply_constraints_detailed(
         enabled.add("place_first_last")
         enabled.add("place_segment_id")
 
-    filtered, applied = _apply_once(hits, query_plan, resolved, enabled, output)
+    filtered, applied, steps = _apply_once(hits, query_plan, resolved, enabled, output)
     relaxed: list[str] = []
+    all_steps: list[ConstraintStepTrace] = list(steps)
+    applied_union: list[str] = list(dict.fromkeys(applied))
 
     if filtered:
         return ConstraintApplyResult(
             hits=filtered,
-            applied=applied,
+            applied=applied_union,
             relaxed=relaxed,
             used_fallback=False,
             filtered_before=before,
             filtered_after=len(filtered),
+            steps=all_steps,
         )
 
     if not resolved.relax_on_empty:
         return ConstraintApplyResult(
             hits=[],
-            applied=applied,
+            applied=applied_union,
             relaxed=relaxed,
             used_fallback=False,
             filtered_before=before,
             filtered_after=0,
+            steps=all_steps,
         )
 
     current_enabled = set(enabled)
@@ -344,24 +433,30 @@ def apply_constraints_detailed(
             continue
         current_enabled.remove(key)
         relaxed.append(key)
-        filtered_try, applied_try = _apply_once(hits, query_plan, resolved, current_enabled, output)
+        filtered_try, applied_try, steps_try = _apply_once(hits, query_plan, resolved, current_enabled, output)
+        all_steps.extend(steps_try)
+        for step_name in applied_try:
+            if step_name not in applied_union:
+                applied_union.append(step_name)
         if filtered_try:
             return ConstraintApplyResult(
                 hits=filtered_try,
-                applied=applied_try,
+                applied=applied_union,
                 relaxed=relaxed,
                 used_fallback=False,
                 filtered_before=before,
                 filtered_after=len(filtered_try),
+                steps=all_steps,
             )
 
     return ConstraintApplyResult(
         hits=list(hits),
-        applied=[],
+        applied=applied_union,
         relaxed=relaxed,
         used_fallback=True,
         filtered_before=before,
         filtered_after=len(hits),
+        steps=all_steps,
     )
 
 

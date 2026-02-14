@@ -25,6 +25,7 @@ class ParsedQuery:
     object_last_seen: str | None = None
     which: str | None = None
     prefer_contact: bool = False
+    need_object_match: bool = False
     text: str | None = None
     top_k: int | None = None
     mode: str | None = None
@@ -142,6 +143,7 @@ def parse_query(query: str) -> ParsedQuery:
                 parsed.interaction_object = obj
                 parsed.which = "last"
                 parsed.prefer_contact = True
+                parsed.need_object_match = True
                 parsed.filters_applied.append("lost_object")
         elif key == "object_last_seen":
             obj = str(value).strip().lower()
@@ -150,12 +152,14 @@ def parse_query(query: str) -> ParsedQuery:
                 parsed.object_name = obj
                 parsed.interaction_object = obj
                 parsed.which = "last"
+                parsed.need_object_match = True
                 parsed.filters_applied.append("object_last_seen")
         elif key == "object":
             obj = str(value).strip().lower()
             if obj:
                 parsed.object_name = obj
                 parsed.interaction_object = obj
+                parsed.need_object_match = True
                 parsed.filters_applied.append("object")
         elif key == "text":
             parsed.text = value

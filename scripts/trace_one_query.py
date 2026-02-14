@@ -63,6 +63,19 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- filtered_hits_before: {int(ctrace.get('filtered_hits_before', 0))}")
     lines.append(f"- filtered_hits_after: {int(ctrace.get('filtered_hits_after', 0))}")
     lines.append(f"- used_fallback: {str(bool(ctrace.get('used_fallback', False))).lower()}")
+    steps = ctrace.get("constraint_steps", [])
+    if isinstance(steps, list) and steps:
+        lines.append("")
+        lines.append("| constraint | before | after | satisfied | details |")
+        lines.append("|---|---:|---:|---:|---|")
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            details = json.dumps(step.get("details", {}), ensure_ascii=False, sort_keys=True)
+            lines.append(
+                f"| {step.get('name', '')} | {int(step.get('before', 0))} | {int(step.get('after', 0))} | "
+                f"{int(bool(step.get('satisfied', False)))} | `{details}` |"
+            )
     lines.append("")
     lines.append("## Object Memory V0")
     lines.append("")
@@ -236,6 +249,17 @@ def main() -> int:
     print(f"filtered_hits_before={trace.get('constraint_trace', {}).get('filtered_hits_before', 0)}")
     print(f"filtered_hits_after={trace.get('constraint_trace', {}).get('filtered_hits_after', 0)}")
     print(f"relax_steps={trace.get('constraint_trace', {}).get('constraints_relaxed', [])}")
+    step_rows = trace.get("constraint_trace", {}).get("constraint_steps", [])
+    if isinstance(step_rows, list) and step_rows:
+        summary_parts: list[str] = []
+        for step in step_rows:
+            if not isinstance(step, dict):
+                continue
+            summary_parts.append(
+                f"{step.get('name', '')} {int(step.get('before', 0))}->{int(step.get('after', 0))}"
+            )
+        if summary_parts:
+            print(f"constraint_steps_summary={'; '.join(summary_parts)}")
     print(f"top1_kind={trace.get('top1_kind', '')}")
     repo_sel = trace.get("repo_selection", {})
     if isinstance(repo_sel, dict) and repo_sel.get("enabled"):

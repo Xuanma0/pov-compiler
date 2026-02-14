@@ -69,6 +69,7 @@ def trace_query(
             used_fallback=False,
             filtered_before=len(raw_hits),
             filtered_after=len(raw_hits),
+            steps=[],
         )
     weights = resolve_weight_config(rerank_cfg)
     reranked_hits = rerank(
@@ -83,6 +84,16 @@ def trace_query(
             "filtered_hits_before": int(constraint_result.filtered_before),
             "filtered_hits_after": int(constraint_result.filtered_after),
             "used_fallback": bool(constraint_result.used_fallback),
+            "constraint_steps": [
+                {
+                    "name": str(step.name),
+                    "before": int(step.before),
+                    "after": int(step.after),
+                    "satisfied": bool(step.satisfied),
+                    "details": dict(step.details),
+                }
+                for step in list(constraint_result.steps)
+            ],
         },
     )
     scored = explain_scores(
@@ -248,6 +259,16 @@ def trace_query(
             "filtered_hits_before": int(constraint_result.filtered_before),
             "filtered_hits_after": int(constraint_result.filtered_after),
             "used_fallback": bool(constraint_result.used_fallback),
+            "constraint_steps": [
+                {
+                    "name": str(step.name),
+                    "before": int(step.before),
+                    "after": int(step.after),
+                    "satisfied": bool(step.satisfied),
+                    "details": dict(step.details),
+                }
+                for step in list(constraint_result.steps)
+            ],
         },
         "rerank_cfg_hash": str(weights.short_hash()),
         "top1_kind": str(hit_rows[0]["kind"]) if hit_rows else "",

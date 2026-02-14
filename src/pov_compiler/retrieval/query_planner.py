@@ -164,6 +164,7 @@ def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]
         if f" {name}" in f" {text}" or f"{name} " in f"{text} ":
             constraints.setdefault("interaction_object", name)
             constraints.setdefault("object_name", name)
+            constraints.setdefault("need_object_match", True)
             break
 
     if "last seen" in text or "last touch" in text or "last interacted" in text:
@@ -171,6 +172,7 @@ def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]
     if "lost object" in text:
         constraints.setdefault("which", "last")
         constraints.setdefault("prefer_contact", True)
+        constraints.setdefault("need_object_match", True)
 
     if _contains_any(text, time_keywords):
         flags["time"] = True
@@ -239,21 +241,25 @@ def plan(query_text: str) -> QueryPlan:
         elif key == "interaction_object":
             constraints["interaction_object"] = value.lower()
             constraints.setdefault("object_name", value.lower())
+            constraints["need_object_match"] = True
             explicit_object_query = True
         elif key == "object":
             constraints["object_name"] = value.lower()
             constraints.setdefault("interaction_object", value.lower())
+            constraints["need_object_match"] = True
             explicit_object_query = True
         elif key == "lost_object":
             constraints["object_name"] = value.lower()
             constraints.setdefault("interaction_object", value.lower())
             constraints["which"] = "last"
             constraints["prefer_contact"] = True
+            constraints["need_object_match"] = True
             explicit_object_query = True
         elif key == "object_last_seen":
             constraints["object_name"] = value.lower()
             constraints.setdefault("interaction_object", value.lower())
             constraints["which"] = "last"
+            constraints["need_object_match"] = True
             explicit_object_query = True
         elif key == "interaction_min":
             try:
