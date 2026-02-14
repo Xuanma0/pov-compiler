@@ -4,7 +4,16 @@ from pov_compiler.streaming.budget_policy import (
     BudgetSpec,
     FixedBudgetPolicy,
     RecommendedBudgetPolicy,
+    SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
+)
+from pov_compiler.streaming.interventions import (
+    ACTION_ORDER_BY_ATTRIBUTION,
+    InterventionState,
+    apply_intervention_action,
+    choose_intervention_action,
+    infer_failure_attribution,
+    policy_action_order,
 )
 from pov_compiler.streaming.runner import StreamingConfig, run_streaming
 
@@ -17,4 +26,11 @@ __all__ = [
     "RecommendedBudgetPolicy",
     "AdaptiveMinBudgetPolicy",
     "SafetyLatencyBudgetPolicy",
+    "SafetyLatencyInterventionBudgetPolicy",
+    "ACTION_ORDER_BY_ATTRIBUTION",
+    "InterventionState",
+    "infer_failure_attribution",
+    "choose_intervention_action",
+    "apply_intervention_action",
+    "policy_action_order",
 ]

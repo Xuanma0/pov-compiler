@@ -282,3 +282,19 @@ Key outputs:
 - `data/outputs/streaming_budget_v19/figures/fig_policy_safety_vs_latency.png`
 - `data/outputs/streaming_budget_v19/report.md`
 - `data/outputs/streaming_budget_v19/snapshot.json`
+
+## Streaming Safety Intervention Policy (v1.10)
+
+Intervention policy with attribution-driven online repair chain (`relax_constraints/switch_rerank_cfg/expand_candidates/escalate_budget`):
+
+```text
+python scripts\streaming_budget_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_budget_v110_demo --policy safety_latency_intervention --step-s 8 --budgets "20/50/4,60/200/12,120/400/24" --max-trials 5 --query "anchor=turn_head top_k=6" --query "token=TURN_HEAD top_k=6" --query "decision=ATTENTION_TURN_HEAD top_k=6"
+```
+
+Key outputs:
+- `steps.csv`, `queries.csv`, `interventions.csv`
+- `figures/fig_policy_interventions_over_queries.png`
+- `figures/fig_policy_intervention_breakdown.png`
+- `figures/fig_policy_budget_over_queries.png`
+- `figures/fig_policy_safety_vs_latency.png`
+- `report.md`, `snapshot.json`

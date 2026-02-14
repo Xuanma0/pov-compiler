@@ -27,7 +27,16 @@ from pov_compiler.streaming.budget_policy import (
     BudgetSpec,
     FixedBudgetPolicy,
     RecommendedBudgetPolicy,
+    SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
+)
+from pov_compiler.streaming.interventions import (
+    InterventionState,
+    STOP_ACTIONS,
+    apply_intervention_action,
+    choose_intervention_action,
+    infer_failure_attribution,
+    policy_action_order,
 )
 
 
@@ -329,6 +338,52 @@ def _derive_safety_for_trial(metrics: dict[str, Any], budget: BudgetSpec) -> tup
     return 1, reason
 
 
+def _hard_cfg_for_stage(base: HardConstraintConfig, stage: int) -> HardConstraintConfig:
+    cfg = HardConstraintConfig.from_dict(base.to_dict())
+    level = max(0, int(stage))
+    if level >= 1:
+        cfg.enable_after_scene_change = False
+    if level >= 2:
+        cfg.enable_first_last = False
+    if level >= 3:
+        cfg.enable_type_match = False
+    return cfg
+
+
+def _rerank_cfg_for_profile(base: WeightConfig, profile: str) -> WeightConfig:
+    cfg = WeightConfig.from_dict(base.to_dict())
+    mode = str(profile or "default").strip().lower()
+    if mode == "anti_distractor":
+        cfg.name = "anti_distractor"
+        cfg.penalty_distractor_near = min(5.0, float(cfg.penalty_distractor_near) * 1.8)
+        cfg.distractor_near_window_s = min(30.0, float(cfg.distractor_near_window_s) * 1.5)
+        cfg.bonus_conf_scale = max(-5.0, float(cfg.bonus_conf_scale) * 0.8)
+        cfg.bonus_boundary_scale = max(-5.0, float(cfg.bonus_boundary_scale) * 0.8)
+        return cfg.validate()
+    cfg.name = "default"
+    return cfg.validate()
+
+
+def _initial_budget_index(
+    *,
+    budgets_sorted: list[BudgetSpec],
+    cfg: StreamingConfig,
+) -> int:
+    if bool(cfg.prefer_lower_budget):
+        return 0
+    if cfg.recommend_dir:
+        try:
+            rp = RecommendedBudgetPolicy(cfg.recommend_dir)
+            rec_key = str(getattr(rp, "_top1_budget_key", "") or "").strip()
+            if rec_key:
+                for i, b in enumerate(budgets_sorted):
+                    if b.key == rec_key:
+                        return i
+        except Exception:
+            pass
+    return max(0, int(len(budgets_sorted) // 2))
+
+
 @dataclass
 class StreamingConfig:
     step_s: float = 5.0
@@ -352,6 +407,8 @@ class StreamingConfig:
     nlq_n_decision: int = 10
     latency_cap_ms: float = 25.0
     max_trials_per_query: int = 3
+    strict_threshold: float = 1.0
+    max_top1_in_distractor_rate: float = 0.2
     prefer_lower_budget: bool = True
     escalate_on_reasons: list[str] | None = None
     deescalate_on_latency: bool = True
@@ -524,6 +581,15 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
     policy_name = str(cfg.budget_policy or "fixed").strip().lower()
     if policy_name == "recommend":
         policy = RecommendedBudgetPolicy(cfg.recommend_dir or "")
+    elif policy_name == "safety_latency_intervention":
+        policy = SafetyLatencyInterventionBudgetPolicy(
+            budgets=budgets_sorted,
+            latency_cap_ms=float(cfg.latency_cap_ms),
+            max_trials_per_query=int(cfg.max_trials_per_query),
+            strict_threshold=float(cfg.strict_threshold),
+            max_top1_in_distractor_rate=float(cfg.max_top1_in_distractor_rate),
+            prefer_lower_budget=bool(cfg.prefer_lower_budget),
+        )
     elif policy_name == "safety_latency":
         policy = SafetyLatencyBudgetPolicy(
             budgets=budgets_sorted,
@@ -623,13 +689,20 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
             trial_cache: dict[str, dict[str, Any]] = {}
             trial_records: list[dict[str, Any]] = []
 
-            def _eval_budget(budget: BudgetSpec) -> dict[str, Any]:
-                key = budget.key
+            def _eval_budget(
+                budget: BudgetSpec,
+                *,
+                constraints_stage: int = 0,
+                rerank_profile: str = "default",
+                expand_level: int = 0,
+                widen_window: bool = False,
+            ) -> dict[str, Any]:
+                key = f"{budget.key}|c{int(constraints_stage)}|r{str(rerank_profile)}|e{int(expand_level)}|w{int(bool(widen_window))}"
                 cached = trial_cache.get(key)
                 if cached is not None:
                     return dict(cached)
-                if key not in budgeted_cache:
-                    budgeted_cache[key] = apply_budget(
+                if budget.key not in budgeted_cache:
+                    budgeted_cache[budget.key] = apply_budget(
                         window_output,
                         budget={
                             "max_total_s": float(budget.max_total_s),
@@ -638,14 +711,25 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                         },
                     )
                 eval_start = time.perf_counter()
+                hard_cfg_eval = _hard_cfg_for_stage(hard_cfg, constraints_stage)
+                rerank_cfg_eval = _rerank_cfg_for_profile(rerank_cfg, rerank_profile)
+                sample_eval = NLQSample(
+                    qid=str(sample.qid),
+                    query=str(sample.query),
+                    query_type=str(sample.query_type),
+                    gt_span=(float(sample.gt_span[0]), float(sample.gt_span[1])),
+                    top_k=max(1, int(sample.top_k) + max(0, int(expand_level)) * 2),
+                    distractors=list(sample.distractors),
+                    meta=dict(sample.meta),
+                )
                 metrics = _evaluate_sample_once(
-                    sample=sample,
-                    output=budgeted_cache[key],
+                    sample=sample_eval,
+                    output=budgeted_cache[budget.key],
                     index=event_index,
                     retrieval_config=dict(cfg.retrieval_config or {}),
-                    hard_cfg=hard_cfg,
-                    rerank_cfg=rerank_cfg,
-                    allow_gt_fallback=bool(cfg.allow_gt_fallback),
+                    hard_cfg=hard_cfg_eval,
+                    rerank_cfg=rerank_cfg_eval,
+                    allow_gt_fallback=bool(cfg.allow_gt_fallback) or bool(widen_window),
                 )
                 eval_ms = float((time.perf_counter() - eval_start) * 1000.0)
                 retrieval_ms = float(metrics.get("retrieval_ms", eval_ms))
@@ -657,14 +741,113 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                 metrics["safety_reason"] = safety_reason
                 metrics["strict_hit_at_k"] = float(metrics.get("hit_at_k_strict", 0.0))
                 metrics["strict_hit_at_1"] = float(metrics.get("hit_at_1_strict", 0.0))
+                metrics["constraints_stage"] = int(constraints_stage)
+                metrics["rerank_profile"] = str(rerank_profile)
+                metrics["expand_level"] = int(expand_level)
+                metrics["widen_evidence_window"] = bool(widen_window)
+                metrics["hard_cfg"] = hard_cfg_eval.to_dict()
+                metrics["rerank_cfg_name"] = str(rerank_cfg_eval.name)
+                metrics["rerank_cfg_hash"] = str(rerank_cfg_eval.short_hash())
                 trial_cache[key] = dict(metrics)
                 return dict(metrics)
 
-            selection: BudgetSelection = policy.select(
-                budgets=budgets_sorted,
-                evaluate_budget=_eval_budget,
-                query_context={"qid": sample.qid, "query_type": sample.query_type},
-            )
+            if policy_name == "safety_latency_intervention":
+                state = InterventionState(budget_idx=_initial_budget_index(budgets_sorted=budgets_sorted, cfg=cfg))
+                final_metrics: dict[str, Any] = {}
+                status = "no_budget_passed"
+                reason = "max_trials_reached"
+                action_final = "give_up_max_trials"
+                action_reason_final = "max_trials_reached"
+                chosen_budget = budgets_sorted[state.budget_idx]
+                for trial_idx in range(1, max(1, int(cfg.max_trials_per_query)) + 1):
+                    budget_before = budgets_sorted[state.budget_idx]
+                    config_before = state.to_config()
+                    metrics = _eval_budget(
+                        budget_before,
+                        constraints_stage=int(state.constraints_stage),
+                        rerank_profile=str(state.rerank_profile),
+                        expand_level=int(state.expand_level),
+                        widen_window=bool(state.widen_evidence_window),
+                    )
+                    strict_hit = float(metrics.get("hit_at_k_strict", 0.0) or 0.0) >= float(cfg.strict_threshold)
+                    top1_rate = float(metrics.get("top1_in_distractor_rate", 1.0) or 1.0)
+                    latency_now = float(metrics.get("latency_e2e_ms", 0.0) or 0.0)
+                    attribution = infer_failure_attribution(metrics, budget_before)
+                    action, action_reason = choose_intervention_action(
+                        state=state,
+                        attribution=attribution,
+                        strict_hit=strict_hit,
+                        top1_in_distractor_rate=top1_rate,
+                        latency_e2e_ms=latency_now,
+                        latency_cap_ms=float(cfg.latency_cap_ms),
+                        trial_idx=int(trial_idx),
+                        max_trials=max(1, int(cfg.max_trials_per_query)),
+                        max_top1_in_distractor_rate=float(cfg.max_top1_in_distractor_rate),
+                        budgets=budgets_sorted,
+                    )
+                    updated_state = apply_intervention_action(
+                        state=state,
+                        action=action,
+                        budgets=budgets_sorted,
+                    )
+                    budget_after = budgets_sorted[updated_state.budget_idx]
+                    success = bool(
+                        strict_hit
+                        and top1_rate <= float(cfg.max_top1_in_distractor_rate)
+                        and latency_now <= float(cfg.latency_cap_ms)
+                    )
+                    trial_records.append(
+                        {
+                            "trial_index": int(trial_idx),
+                            "budget_key": str(budget_before.key),
+                            "budget_seconds": float(budget_before.seconds),
+                            "budget_before": str(budget_before.key),
+                            "budget_after": str(budget_after.key),
+                            "config_before": config_before,
+                            "config_after": updated_state.to_config(),
+                            "action": str(action),
+                            "action_reason": str(action_reason),
+                            "attribution": str(attribution or ""),
+                            "status": "success" if success else "retry",
+                            "success": 1 if success else 0,
+                            "metrics": dict(metrics),
+                        }
+                    )
+                    final_metrics = dict(metrics)
+                    chosen_budget = budget_after if action in {"escalate_budget", "deescalate_budget"} else budget_before
+                    action_final = str(action)
+                    action_reason_final = str(action_reason)
+                    if success:
+                        status = "ok"
+                        reason = "intervention_success"
+                        break
+                    if action in {"accept"}:
+                        status = "ok"
+                        reason = "accepted_without_threshold"
+                        break
+                    if action in STOP_ACTIONS:
+                        status = "no_budget_passed"
+                        reason = str(action_reason)
+                        break
+                    state = updated_state
+                selection = BudgetSelection(
+                    chosen_budget_key=str(chosen_budget.key),
+                    chosen_budget_seconds=float(chosen_budget.seconds),
+                    trials_count=len(trial_records),
+                    tried_budget_keys=[str(x.get("budget_key", "")) for x in trial_records],
+                    status=str(status),
+                    reason=str(reason),
+                    metrics=final_metrics,
+                    action=action_final,
+                    action_reason=action_reason_final,
+                    trial_records=trial_records,
+                )
+            else:
+                selection = policy.select(
+                    budgets=budgets_sorted,
+                    evaluate_budget=_eval_budget,
+                    query_context={"qid": sample.qid, "query_type": sample.query_type},
+                )
             selected_metrics = dict(selection.metrics)
             q_e2e_ms = float((time.perf_counter() - query_started) * 1000.0)
             selected_metrics["query_total_e2e_ms"] = q_e2e_ms
@@ -717,7 +900,10 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "budget_key": bkey,
                     "chosen_budget_key": str(selection.chosen_budget_key),
                     "chosen_budget_seconds": float(selection.chosen_budget_seconds),
+                    "budget_before": str(trial.get("budget_before", bkey)),
+                    "budget_after": str(trial.get("budget_after", bkey)),
                     "trial_index": trial_index,
+                    "trial_idx": trial_index,
                     "trial_count_for_query": int(selection.trials_count),
                     "trials_count": int(selection.trials_count),
                     "status": str(selection.status),
@@ -725,6 +911,10 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "tried_budget_keys": json.dumps(selection.tried_budget_keys, ensure_ascii=False),
                     "action": str(trial.get("action", "accept")),
                     "action_reason": str(trial.get("action_reason", selection.reason)),
+                    "intervention_action": str(trial.get("action", "accept")),
+                    "attribution": str(trial.get("attribution", trial_metrics.get("safety_reason", ""))),
+                    "config_before": json.dumps(trial.get("config_before", {}), ensure_ascii=False),
+                    "config_after": json.dumps(trial.get("config_after", {}), ensure_ascii=False),
                     "strict_hit_at_k": float(trial_metrics.get("strict_hit_at_k", trial_metrics.get("hit_at_k_strict", 0.0))),
                     "strict_hit_at_1": float(trial_metrics.get("strict_hit_at_1", trial_metrics.get("hit_at_1_strict", 0.0))),
                     "hit_at_k_strict": float(trial_metrics.get("hit_at_k_strict", 0.0)),
@@ -741,7 +931,38 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "latency_e2e_ms": float(trial_metrics.get("latency_e2e_ms", trial_metrics.get("query_total_e2e_ms", 0.0))),
                     "retrieval_ms": float(trial_metrics.get("retrieval_ms", 0.0)),
                     "e2e_ms": float(trial_metrics.get("latency_e2e_ms", 0.0)),
+                    "success": int(
+                        trial.get(
+                            "success",
+                            1
+                            if (
+                                float(trial_metrics.get("hit_at_k_strict", 0.0)) >= float(cfg.strict_threshold)
+                                and float(trial_metrics.get("top1_in_distractor_rate", 1.0))
+                                <= float(cfg.max_top1_in_distractor_rate)
+                            )
+                            else 0,
+                        )
+                    ),
                     "final_trial": 1 if trial_index == final_trial_idx else 0,
+                    "final_trial_idx": int(final_trial_idx),
+                    "final_action": str(selection.action),
+                    "final_budget": str(selection.chosen_budget_key),
+                    "final_success": (
+                        int(
+                            trial.get(
+                                "success",
+                                1
+                                if (
+                                    float(trial_metrics.get("hit_at_k_strict", 0.0)) >= float(cfg.strict_threshold)
+                                    and float(trial_metrics.get("top1_in_distractor_rate", 1.0))
+                                    <= float(cfg.max_top1_in_distractor_rate)
+                                )
+                                else 0,
+                            )
+                        )
+                        if trial_index == final_trial_idx
+                        else 0
+                    ),
                 }
                 step_query_rows.append(row)
                 query_rows.append(dict(row))
@@ -801,11 +1022,17 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
     final_query_rows = [r for r in query_rows if int(r.get("final_trial", 0)) == 1]
     metric_rows = final_query_rows if final_query_rows else query_rows
     action_counts: dict[str, int] = {}
+    attribution_counts: dict[str, int] = {}
     for row in query_rows:
         action = str(row.get("action", "")).strip()
         if not action:
             continue
         action_counts[action] = action_counts.get(action, 0) + 1
+        attr = str(row.get("attribution", "")).strip()
+        if attr:
+            attribution_counts[attr] = attribution_counts.get(attr, 0) + 1
+    intervention_rows = [r for r in query_rows if str(r.get("action", "")) not in {"", "accept"}]
+    intervention_success = _mean([float(r.get("success", 0.0)) for r in intervention_rows]) if intervention_rows else 0.0
     summary = {
         "video_id": str(output.video_id),
         "duration_s": float(duration_s),
@@ -838,11 +1065,17 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "num_deescalate": int(sum(v for k, v in action_counts.items() if str(k).startswith("deescalate_"))),
         "num_accept": int(action_counts.get("accept", 0)),
         "num_give_up": int(sum(v for k, v in action_counts.items() if str(k).startswith("give_up"))),
+        "intervention_trials_total": int(len(intervention_rows)),
+        "intervention_success_rate": float(intervention_success),
+        "attribution_counts": attribution_counts,
         "budgets": [b.key for b in budgets_sorted],
         "latency_cap_ms": float(cfg.latency_cap_ms),
         "max_trials_per_query": int(cfg.max_trials_per_query),
         "escalate_on_reasons": list(cfg.escalate_on_reasons or ["budget_insufficient"]),
         "policy_action_counts": action_counts,
+        "policy_action_order": policy_action_order() if policy_name == "safety_latency_intervention" else {},
+        "strict_threshold": float(cfg.strict_threshold),
+        "max_top1_in_distractor_rate": float(cfg.max_top1_in_distractor_rate),
     }
     return {"summary": summary, "step_rows": step_rows, "query_rows": query_rows, "progressive_rows": progressive_rows}
 

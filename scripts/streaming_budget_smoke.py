@@ -80,6 +80,9 @@ def _write_report(path: Path, payload: dict[str, Any], policy_gates: dict[str, A
     lines.append(f"- num_deescalate: {int(summary.get('num_deescalate', 0))}")
     lines.append(f"- num_accept: {int(summary.get('num_accept', 0))}")
     lines.append(f"- num_give_up: {int(summary.get('num_give_up', 0))}")
+    lines.append(f"- intervention_trials_total: {int(summary.get('intervention_trials_total', 0))}")
+    lines.append(f"- intervention_success_rate: {float(summary.get('intervention_success_rate', 0.0)):.4f}")
+    lines.append(f"- policy_action_order: `{json.dumps(summary.get('policy_action_order', {}), ensure_ascii=False, sort_keys=True)}`")
     lines.append(
         "- e2e_includes: step slicing + events_v1 incremental update + index update + policy trials + retrieval + rerank + metrics + write"
     )
@@ -172,6 +175,77 @@ def _make_figures(out_dir: Path, query_rows: list[dict[str, Any]], formats: list
         plt.savefig(p)
         all_paths.append(str(p))
     plt.close()
+
+    # 3) intervention trial count / actions over queries
+    p3 = out_fig / "fig_policy_interventions_over_queries"
+    trials_by_query: dict[str, int] = {}
+    action_by_query: dict[str, str] = {}
+    for r in rows:
+        qid = str(r.get("query_id", ""))
+        if not qid:
+            continue
+        trials_by_query[qid] = max(int(trials_by_query.get(qid, 0)), int(r.get("trial_index", 0) or 0))
+        if int(r.get("final_trial", 0)) == 1:
+            action_by_query[qid] = str(r.get("action", ""))
+    qids = sorted(trials_by_query.keys())
+    xq = list(range(1, len(qids) + 1))
+    ytr = [int(trials_by_query[q]) for q in qids]
+    plt.figure(figsize=(8.2, 4.4))
+    plt.bar(xq, ytr)
+    for i, qid in enumerate(qids, start=1):
+        act = action_by_query.get(qid, "")
+        if act:
+            plt.text(i, ytr[i - 1] + 0.05, act, rotation=45, ha="left", va="bottom", fontsize=7)
+    plt.xlabel("Query Index")
+    plt.ylabel("Trials Count")
+    plt.title("Policy Interventions Over Queries")
+    plt.grid(True, axis="y", alpha=0.35)
+    plt.tight_layout()
+    for ext in formats:
+        p = p3.with_suffix(f".{ext}")
+        plt.savefig(p)
+        all_paths.append(str(p))
+    plt.close()
+
+    # 4) intervention attribution/action breakdown
+    p4 = out_fig / "fig_policy_intervention_breakdown"
+    finals = [r for r in rows if int(r.get("final_trial", 0)) == 1]
+    keys: list[str] = []
+    counts: dict[str, int] = {}
+    succ: dict[str, float] = {}
+    for r in finals:
+        key = f"{str(r.get('attribution', '') or 'none')}->{str(r.get('action', '') or 'none')}"
+        if key not in counts:
+            keys.append(key)
+            counts[key] = 0
+            succ[key] = 0.0
+        counts[key] += 1
+        succ[key] += float(r.get("success", 0.0) or 0.0)
+    keys = sorted(keys)
+    xk = list(range(len(keys)))
+    ycnt = [counts[k] for k in keys]
+    ysucc = [(succ[k] / max(1, counts[k])) for k in keys]
+    plt.figure(figsize=(9.2, 4.8))
+    if keys:
+        plt.bar(xk, ycnt, label="count")
+        ax2 = plt.gca().twinx()
+        ax2.plot(xk, ysucc, marker="o", linestyle="--", label="success_rate")
+        plt.gca().set_xticks(xk)
+        plt.gca().set_xticklabels(keys, rotation=35, ha="right", fontsize=8)
+        plt.gca().set_ylabel("Count")
+        ax2.set_ylabel("Success Rate")
+        l1, lab1 = plt.gca().get_legend_handles_labels()
+        l2, lab2 = ax2.get_legend_handles_labels()
+        plt.gca().legend(l1 + l2, lab1 + lab2, loc="upper right")
+    else:
+        plt.text(0.5, 0.5, "no interventions", ha="center", va="center")
+    plt.title("Policy Intervention Breakdown")
+    plt.tight_layout()
+    for ext in formats:
+        p = p4.with_suffix(f".{ext}")
+        plt.savefig(p)
+        all_paths.append(str(p))
+    plt.close()
     return all_paths
 
 
@@ -187,7 +261,7 @@ def parse_args() -> argparse.Namespace:
         "--budget-policy",
         "--policy",
         dest="budget_policy",
-        choices=["fixed", "recommend", "adaptive", "safety_latency"],
+        choices=["fixed", "recommend", "adaptive", "safety_latency", "safety_latency_intervention"],
         default="fixed",
     )
     parser.add_argument("--fixed-budget", default="40/100/8", help="Budget key for fixed policy")
@@ -195,7 +269,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-gates-json", default=None, help="JSON string/path for adaptive gate constraints")
     parser.add_argument("--policy-targets-json", default=None, help="JSON string/path for adaptive targets")
     parser.add_argument("--latency-cap-ms", type=float, default=25.0, help="Latency cap for safety_latency policy")
-    parser.add_argument("--max-trials-per-query", type=int, default=3, help="Max trials per query for safety_latency")
+    parser.add_argument("--max-trials-per-query", "--max-trials", dest="max_trials_per_query", type=int, default=3, help="Max trials per query for safety policies")
+    parser.add_argument("--strict-threshold", type=float, default=1.0, help="Strict hit@k threshold for safety intervention success")
+    parser.add_argument("--max-top1-in-distractor-rate", type=float, default=0.2, help="Risk threshold for intervention success")
     group_pref = parser.add_mutually_exclusive_group()
     group_pref.add_argument("--prefer-lower-budget", dest="prefer_lower_budget", action="store_true")
     group_pref.add_argument("--prefer-higher-budget", dest="prefer_lower_budget", action="store_false")
@@ -241,6 +317,8 @@ def main() -> int:
             policy_targets=targets,
             latency_cap_ms=float(args.latency_cap_ms),
             max_trials_per_query=int(args.max_trials_per_query),
+            strict_threshold=float(args.strict_threshold),
+            max_top1_in_distractor_rate=float(args.max_top1_in_distractor_rate),
             prefer_lower_budget=bool(args.prefer_lower_budget),
             escalate_on_reasons=[str(x).strip() for x in list(args.escalate_on_reason or []) if str(x).strip()]
             or ["budget_insufficient"],
@@ -258,11 +336,14 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     steps_csv = out_dir / "steps.csv"
     queries_csv = out_dir / "queries.csv"
+    interventions_csv = out_dir / "interventions.csv"
     report_md = out_dir / "report.md"
     snapshot_json = out_dir / "snapshot.json"
 
     _write_csv(steps_csv, list(payload.get("step_rows", [])))
-    _write_csv(queries_csv, list(payload.get("query_rows", [])))
+    qrows = list(payload.get("query_rows", []))
+    _write_csv(queries_csv, qrows)
+    _write_csv(interventions_csv, [r for r in qrows if str(r.get("action", "")) not in {"", "accept"}])
     _write_report(report_md, payload, policy_gates=gates, policy_targets=targets)
     figure_paths = _make_figures(
         out_dir=out_dir,
@@ -286,9 +367,19 @@ def main() -> int:
             "policy_targets": targets,
             "latency_cap_ms": float(args.latency_cap_ms),
             "max_trials_per_query": int(args.max_trials_per_query),
+            "strict_threshold": float(args.strict_threshold),
+            "max_top1_in_distractor_rate": float(args.max_top1_in_distractor_rate),
             "prefer_lower_budget": bool(args.prefer_lower_budget),
             "escalate_on_reasons": [str(x).strip() for x in list(args.escalate_on_reason or []) if str(x).strip()]
             or ["budget_insufficient"],
+            "action_order": summary.get("policy_action_order", {}),
+            "action_set": sorted(
+                {
+                    str(k)
+                    for k in (summary.get("policy_action_counts", {}) or {}).keys()
+                    if str(k)
+                }
+            ),
             "top_k": int(args.top_k),
             "seed": int(args.seed),
         },
@@ -296,6 +387,7 @@ def main() -> int:
         "outputs": {
             "steps_csv": str(steps_csv),
             "queries_csv": str(queries_csv),
+            "interventions_csv": str(interventions_csv),
             "figures": figure_paths,
             "report_md": str(report_md),
         },
@@ -309,6 +401,7 @@ def main() -> int:
     print(f"avg_trials_per_query={float(summary.get('avg_trials_per_query', 0.0)):.4f}")
     print(f"saved_steps={steps_csv}")
     print(f"saved_queries={queries_csv}")
+    print(f"saved_interventions={interventions_csv}")
     print(f"saved_figures={figure_paths}")
     print(f"saved_report={report_md}")
     print(f"saved_snapshot={snapshot_json}")

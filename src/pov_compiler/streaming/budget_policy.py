@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from pov_compiler.streaming.interventions import policy_action_order
 
 @dataclass(frozen=True)
 class BudgetSpec:
@@ -485,6 +486,40 @@ class SafetyLatencyBudgetPolicy:
             action_reason=final_action_reason,
             trial_records=trial_records,
         )
+
+
+class SafetyLatencyInterventionBudgetPolicy:
+    name = "safety_latency_intervention"
+
+    def __init__(
+        self,
+        *,
+        budgets: list[BudgetSpec],
+        latency_cap_ms: float,
+        max_trials_per_query: int = 5,
+        strict_threshold: float = 1.0,
+        max_top1_in_distractor_rate: float = 0.2,
+        prefer_lower_budget: bool = True,
+    ):
+        self.budgets = sorted(list(budgets), key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
+        self.latency_cap_ms = float(latency_cap_ms)
+        self.max_trials_per_query = max(1, int(max_trials_per_query))
+        self.strict_threshold = float(strict_threshold)
+        self.max_top1_in_distractor_rate = float(max_top1_in_distractor_rate)
+        self.prefer_lower_budget = bool(prefer_lower_budget)
+        self.action_order = policy_action_order()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": str(self.name),
+            "latency_cap_ms": float(self.latency_cap_ms),
+            "max_trials_per_query": int(self.max_trials_per_query),
+            "strict_threshold": float(self.strict_threshold),
+            "max_top1_in_distractor_rate": float(self.max_top1_in_distractor_rate),
+            "prefer_lower_budget": bool(self.prefer_lower_budget),
+            "budgets": [b.key for b in self.budgets],
+            "action_order": self.action_order,
+        }
 
 
 def parse_budget_keys(raw: str) -> list[BudgetSpec]:
