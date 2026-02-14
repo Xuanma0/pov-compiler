@@ -147,6 +147,24 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "stream_intervention_sweep" / "figures" / "fig_objective_vs_latency.pdf").write_bytes(b"PDF")
     (compare_dir / "stream_intervention_sweep" / "figures" / "fig_pareto_frontier.png").write_bytes(b"PNG")
     (compare_dir / "stream_intervention_sweep" / "figures" / "fig_pareto_frontier.pdf").write_bytes(b"PDF")
+    # Optional reranker sweep input.
+    (compare_dir / "reranker_sweep" / "aggregate").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "reranker_sweep" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "reranker_sweep" / "aggregate" / "metrics_by_weights.csv").write_text(
+        "weights_id,cfg_name,objective,mrr_strict,top1_in_distractor_rate,critical_fn_rate\n1,default,0.12,0.20,0.30,0.25\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "reranker_sweep" / "aggregate" / "metrics_by_weights.md").write_text("# sweep\n", encoding="utf-8")
+    (compare_dir / "reranker_sweep" / "best_weights.yaml").write_text("name: best\nw_trigger: 0.9\n", encoding="utf-8")
+    (compare_dir / "reranker_sweep" / "best_report.md").write_text("# best reranker\n", encoding="utf-8")
+    (compare_dir / "reranker_sweep" / "snapshot.json").write_text(
+        json.dumps({"best": {"cfg_name": "best", "cfg_hash": "def456", "objective": 0.2}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "reranker_sweep" / "figures" / "fig_objective_vs_weights_id.png").write_bytes(b"PNG")
+    (compare_dir / "reranker_sweep" / "figures" / "fig_objective_vs_weights_id.pdf").write_bytes(b"PDF")
+    (compare_dir / "reranker_sweep" / "figures" / "fig_tradeoff_strict_vs_distractor.png").write_bytes(b"PNG")
+    (compare_dir / "reranker_sweep" / "figures" / "fig_tradeoff_strict_vs_distractor.pdf").write_bytes(b"PDF")
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -162,6 +180,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "stream_policy_cmp"),
         "--streaming-intervention-sweep-dir",
         str(compare_dir / "stream_intervention_sweep"),
+        "--reranker-sweep-dir",
+        str(compare_dir / "reranker_sweep"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -193,6 +213,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "streaming_intervention_sweep" / "best_report.md").exists()
     assert (out_dir / "figures" / "fig_objective_vs_latency.png").exists()
     assert (out_dir / "figures" / "fig_pareto_frontier.png").exists()
+    assert (out_dir / "reranker_sweep" / "metrics_by_weights.csv").exists()
+    assert (out_dir / "reranker_sweep" / "best_weights.yaml").exists()
+    assert (out_dir / "figures" / "fig_objective_vs_weights_id.png").exists()
+    assert (out_dir / "figures" / "fig_tradeoff_strict_vs_distractor.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

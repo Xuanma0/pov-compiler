@@ -58,6 +58,12 @@ reranker:
   distractor_near_window_s: 5.0
   bonus_conf_scale: 0.2
   bonus_boundary_scale: 0.15
+  w_trigger: 0.3
+  w_action: 0.35
+  w_constraint: 0.2
+  w_outcome: 0.1
+  w_evidence: 0.15
+  w_semantic: 1.0
 hard_constraints:
   enable_after_scene_change: true
   enable_first_last: true

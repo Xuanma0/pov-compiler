@@ -67,6 +67,14 @@ class WeightConfig:
     bonus_priority_scale: float = 0.05
     bonus_priority_cap: float = 3.0
 
+    # Decision-aligned reranking weights.
+    w_trigger: float = 0.3
+    w_action: float = 0.35
+    w_constraint: float = 0.2
+    w_outcome: float = 0.1
+    w_evidence: float = 0.15
+    w_semantic: float = 1.0
+
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, allow_out_of_range: bool = False) -> "WeightConfig":
         valid = {f.name for f in fields(cls)}
@@ -152,6 +160,12 @@ class WeightConfig:
             "bonus_conf_scale",
             "bonus_boundary_scale",
             "bonus_priority_scale",
+            "w_trigger",
+            "w_action",
+            "w_constraint",
+            "w_outcome",
+            "w_evidence",
+            "w_semantic",
         ]
         for field_name in ranged_fields:
             _clamp(field_name, -5.0, 5.0)

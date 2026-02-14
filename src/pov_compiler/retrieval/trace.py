@@ -62,6 +62,13 @@ def trace_query(
         context=output,
         cfg=weights,
         distractors=[],
+        constraint_trace={
+            "applied_constraints": list(constraint_result.applied),
+            "constraints_relaxed": list(constraint_result.relaxed),
+            "filtered_hits_before": int(constraint_result.filtered_before),
+            "filtered_hits_after": int(constraint_result.filtered_after),
+            "used_fallback": bool(constraint_result.used_fallback),
+        },
     )
     scored = explain_scores(
         reranked_hits,
@@ -106,6 +113,11 @@ def trace_query(
                 "linked_events_v1": linked_events,
                 "distractor_flag": bool(float(breakdown.get("distractor_penalty", 0.0)) < 0.0),
                 "score_breakdown": breakdown,
+                "score_decomposition": {
+                    "semantic_score": float(breakdown.get("semantic_score", 0.0)),
+                    "decision_align_score": float(breakdown.get("decision_align_score", 0.0)),
+                    "final_score": float(breakdown.get("total", 0.0)),
+                },
                 "evidence_spans": evidence_spans,
             }
         )
@@ -130,4 +142,3 @@ def trace_query(
         "top1_kind": str(hit_rows[0]["kind"]) if hit_rows else "",
         "hits": hit_rows,
     }
-

@@ -98,7 +98,7 @@ docs/
 | `scripts\inspect_ego4d_dir.py` | Directory tree and MP4 distribution report | `--root --depth --out` | markdown report |
 | `scripts\perception_smoke.py` | Single-video perception/events_v0 sanity run | `--video --out_dir --perception-backend --perception-strict` | `perception.json`, `events_v0.json`, `report.md` |
 | `scripts\make_paper_figures.py` | Generate paper figures/tables | `--cross_dir --nlq_csv --out_dir --macro_avg/--macro-avg --compare_dir` | `figures/*`, `tables/*`, `snapshot.json` |
-| `scripts\sweep_reranker.py` | Search reranker weights for strict objective | `--json_dir --index_dir --mode hard_pseudo_nlq --trials --metric` | `results_sweep.csv`, `best_config.yaml`, `best_report.md` |
+| `scripts\sweep_reranker.py` | Sweep decision-aligned reranker weights (strict+distractor+safety objective) | `--run_dir (or --json --index) --nlq-mode --grid/--w-*-list --alpha --beta` | `aggregate/metrics_by_weights.*`, `best_weights.yaml`, `best_report.md`, `figures/fig_tradeoff_*`, `snapshot.json` |
 | `scripts\debug_rerank.py` | Score decomposition debug for reranker | `--json --index --out --rerank-cfg` | debug CSV + summary logs |
 | `scripts\export_bye_events.py` / `scripts\bye_regression_smoke.py` | BYE offline injection export and optional lint/report/regression loop | `--json/--pov_json --out_dir --bye_root --strict` | `events/events_v1.jsonl`, `run_package/`, `logs/`, `snapshot.json` |
 | `scripts\sweep_bye_budgets.py` | BYE metrics over budget points (strict UID matching by default) | `--pov-json-dir --uids-file --budgets --out-dir [--strict-uids]` | `aggregate/metrics_by_budget.*`, `figures/fig_bye_*`, `snapshot.json` |
@@ -106,12 +106,12 @@ docs/
 | `scripts\sweep_nlq_budgets.py` | NLQ hard/pseudo evaluation over explicit budget points (strict UID matching by default) | `--json_dir --index_dir --uids-file --budgets --out_dir` | `aggregate/metrics_by_budget.*`, `figures/fig_nlq_*`, `snapshot.json` |
 | `scripts\sweep_streaming_budgets.py` | Streaming online simulation budget sweep (fixed/adaptive) | `--json_dir --uids-file --budgets --out_dir --policy` | `aggregate/metrics_by_budget.*`, `figures/fig_streaming_quality_*`, `snapshot.json` |
 | `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
-| `scripts\export_paper_ready.py` | Unified BYE/NLQ/Streaming budget panel export (paper-ready tables/figures) | `--compare_dir --out_dir --label_a --label_b` | `tables/table_budget_panel*`, `figures/fig_budget_*`, `report.md`, `snapshot.json` |
+| `scripts\export_paper_ready.py` | Unified BYE/NLQ/Streaming budget panel export (paper-ready tables/figures) | `--compare_dir --out_dir --label_a --label_b [--reranker-sweep-dir]` | `tables/table_budget_panel*`, `figures/fig_budget_*`, `report.md`, `snapshot.json` |
 | `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive/safety_latency/safety_latency_intervention`) with strict+safety metrics and switch traces | `--json --out_dir --budgets --policy [--fixed-budget|--recommend-dir|--latency-cap-ms|--intervention-cfg]` | `steps.csv`, `queries.csv`, `figures/fig_policy_*`, `report.md`, `snapshot.json` |
 | `scripts\run_streaming_policy_compare.py` | One-click baseline vs intervention streaming compare harness (`safety_latency` vs `safety_latency_intervention`) | `--json --out_dir --budgets --query ... --max-trials` | `run_a/*`, `run_b/*`, `compare/tables/table_streaming_policy_compare.*`, `compare/figures/fig_streaming_policy_compare_*`, `compare_summary.json`, `snapshot.json` |
 | `scripts\sweep_streaming_interventions.py` | Random/grid sweep over intervention config to optimize strict+safety+latency objective | `--json --out_dir --budgets --trials --base-cfg --query ...` | `results_sweep.csv`, `best_config.yaml`, `best_report.md`, `figures/fig_objective_vs_latency*`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
-| `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ budget sweeps and budget recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-budget-recommend` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/budget_recommend/*` |
+| `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ/streaming budget sweeps, reranker sweep, and recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-reranker-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/reranker_sweep/*`, `compare/budget_recommend/*` |
 
 ## Output Directory Contract
 
@@ -325,3 +325,23 @@ Key outputs:
 - `compare/figures/fig_streaming_policy_compare_safety_latency.png`
 - `compare/figures/fig_streaming_policy_compare_delta.png`
 - `compare/compare_summary.json`, `compare/snapshot.json`, `compare/commands.sh`
+
+## Decision-Aligned Reranker (v1.13)
+
+Trace one query with semantic vs decision-aligned decomposition:
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --index data\outputs\ego4d_ab_real_n6\cache\<uid> --query "decision=ATTENTION_TURN_HEAD top_k=6" --out_dir data\outputs\trace_v113
+```
+
+Sweep decision-aligned weights:
+
+```text
+python scripts\sweep_reranker.py --run_dir data\outputs\ego4d_ab_real_n6 --out_dir data\outputs\reranker_sweep_demo --nlq-mode hard_pseudo_nlq --grid "w_trigger=0.2,0.6;w_action=0.2,0.6;w_constraint=0.1,0.3;w_outcome=0.1;w_evidence=0.1,0.3;w_semantic=1.0" --top-k 6 --seed 0
+```
+
+Optional AB hook:
+
+```text
+python scripts\run_ab_bye_compare.py --root "<YOUR_EGO4D_ROOT>" --uids-file data\outputs\uids.txt --out_dir data\outputs\ab_v113 --with-nlq --with-reranker-sweep --reranker-sweep-grid "w_trigger=0.2,0.8;w_action=0.3"
+```

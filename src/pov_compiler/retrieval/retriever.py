@@ -667,6 +667,20 @@ class Retriever:
             dp = decision_map.get(did)
             if dp is None:
                 continue
+            trigger = dict(getattr(dp, "trigger", {}) or {})
+            action = dict(getattr(dp, "action", {}) or {})
+            outcome = dict(getattr(dp, "outcome", {}) or {})
+            state = dict(getattr(dp, "state", {}) or {})
+            constraints = list(getattr(dp, "constraints", []) or [])
+            trigger_anchor_types = trigger.get("anchor_types", [])
+            if not isinstance(trigger_anchor_types, list):
+                trigger_anchor_types = [trigger_anchor_types] if trigger_anchor_types else []
+            evidence_ids = state.get("evidence", {}).get("token_ids", [])
+            if not isinstance(evidence_ids, list):
+                evidence_ids = []
+            nearby_tokens = state.get("nearby_tokens", [])
+            if not isinstance(nearby_tokens, list):
+                nearby_tokens = []
             base = text_score_lookup.get(("decision", did), _rank_score(idx, len(selected_decisions)))
             hits.append(
                 Hit(
@@ -678,9 +692,19 @@ class Retriever:
                     source_query=query,
                     meta={
                         "conf": float(getattr(dp, "conf", 0.0)),
-                        "action_type": str(dp.action.get("type", "")),
+                        "action_type": str(action.get("type", "")),
                         "source_event": str(getattr(dp, "source_event", "")),
                         "source_highlight": getattr(dp, "source_highlight", None),
+                        "trigger_anchor_types": [str(x).lower() for x in trigger_anchor_types if str(x).strip()],
+                        "trigger_anchor_type": str(trigger.get("anchor_type", "")),
+                        "trigger_conf": float(trigger.get("conf", 0.0) or 0.0),
+                        "decision_constraints": constraints,
+                        "state_nearby_tokens": [str(x).upper() for x in nearby_tokens if str(x).strip()],
+                        "state_scene_change_nearby": bool(state.get("scene_change_nearby", False)),
+                        "state_boundary_nearby": bool(state.get("boundary_nearby", False)),
+                        "outcome_type": str(outcome.get("type", "")),
+                        "evidence_token_count": int(len(evidence_ids)),
+                        "evidence_coverage": float(min(1.0, max(0.0, len(evidence_ids) / 5.0))),
                     },
                 )
             )

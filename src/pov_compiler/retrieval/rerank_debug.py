@@ -35,6 +35,8 @@ def explain_scores(
                 "t1": float(hit["t1"]),
                 "source_query": str(hit.get("source_query", "")),
                 "base_score": float(parts["base_score"]),
+                "semantic_score": float(parts["semantic_score"]),
+                "decision_align_score": float(parts["decision_align_score"]),
                 "intent_bonus": float(parts["intent_bonus"]),
                 "match_score": float(parts["match_score"]),
                 "distractor_penalty": float(parts["distractor_penalty"]),
@@ -44,10 +46,14 @@ def explain_scores(
                 "conf_bonus": float(parts["conf_bonus"]),
                 "boundary_bonus": float(parts["boundary_bonus"]),
                 "priority_bonus": float(parts["priority_bonus"]),
+                "trigger_match": float(parts["trigger_match"]),
+                "action_match": float(parts["action_match"]),
+                "constraint_match": float(parts["constraint_match"]),
+                "outcome_match": float(parts["outcome_match"]),
+                "evidence_quality": float(parts["evidence_quality"]),
                 "total_adjustment": float(parts["total_adjustment"]),
                 "total": float(parts["total"]),
             }
         )
     rows.sort(key=lambda x: (-float(x["total"]), float(x["t0"]), str(x["kind"]), str(x["id"])))
     return rows
-

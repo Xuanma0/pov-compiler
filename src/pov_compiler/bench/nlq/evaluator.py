@@ -287,6 +287,13 @@ def evaluate_nlq_samples(
                     context=budgeted,
                     cfg=weights,
                     distractors=sample.distractors,
+                    constraint_trace={
+                        "applied_constraints": list(cresult.applied),
+                        "constraints_relaxed": list(cresult.relaxed),
+                        "filtered_hits_before": int(cresult.filtered_before),
+                        "filtered_hits_after": int(cresult.filtered_after),
+                        "used_fallback": bool(cresult.used_fallback),
+                    },
                 )
 
                 top1_kind = str(reranked_hits[0]["kind"]) if reranked_hits else "none"

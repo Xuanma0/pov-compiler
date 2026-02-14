@@ -77,6 +77,8 @@ class DecisionPoint(BaseModel):
 
 class ScoreBreakdown(BaseModel):
     base_score: float = 0.0
+    semantic_score: float = 0.0
+    decision_align_score: float = 0.0
     intent_bonus: float = 0.0
     match_score: float = 0.0
     first_last_bonus: float = 0.0
@@ -85,6 +87,11 @@ class ScoreBreakdown(BaseModel):
     conf_bonus: float = 0.0
     boundary_bonus: float = 0.0
     priority_bonus: float = 0.0
+    trigger_match: float = 0.0
+    action_match: float = 0.0
+    constraint_match: float = 0.0
+    outcome_match: float = 0.0
+    evidence_quality: float = 0.0
     total: float = 0.0
 
 

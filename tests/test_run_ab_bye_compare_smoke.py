@@ -135,6 +135,9 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
         "--streaming-step-s",
         "8",
         "--export-paper-ready",
+        "--with-reranker-sweep",
+        "--reranker-sweep-grid",
+        "w_trigger=0.2,0.8;w_action=0.3",
         "--nlq-eval-script",
         str(fake_eval),
         "--bye-root",
@@ -176,6 +179,9 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "paper_ready" / "report.md").exists()
     assert (compare_dir / "paper_ready" / "snapshot.json").exists()
     assert (compare_dir / "paper_ready" / "figures" / "fig_nlq_critical_fn_rate_vs_seconds.png").exists()
+    assert (compare_dir / "reranker_sweep" / "stub" / "aggregate" / "metrics_by_weights.csv").exists()
+    assert (compare_dir / "reranker_sweep" / "real" / "aggregate" / "metrics_by_weights.csv").exists()
+    assert (compare_dir / "paper_ready" / "reranker_sweep" / "metrics_by_weights.csv").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
 

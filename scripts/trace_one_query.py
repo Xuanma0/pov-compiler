@@ -61,16 +61,20 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append("## Top Hits")
     lines.append("")
     lines.append(
-        "| rank | kind | id | span | score | distractor_flag | source_query | "
-        "score_breakdown | linked_events_v1 |"
+        "| rank | kind | id | span | score | semantic | decision_align | final | "
+        "distractor_flag | source_query | score_breakdown | linked_events_v1 |"
     )
-    lines.append("|---:|---|---|---|---:|---:|---|---|---|")
+    lines.append("|---:|---|---|---|---:|---:|---:|---:|---:|---|---|---|")
     for hit in hits:
         span = f"{float(hit.get('t0', 0.0)):.3f}-{float(hit.get('t1', 0.0)):.3f}"
         sb = hit.get("score_breakdown", {})
+        semantic = float(sb.get("semantic_score", 0.0))
+        decision_align = float(sb.get("decision_align_score", 0.0))
+        final = float(sb.get("total", hit.get("score", 0.0)))
         lines.append(
             f"| {int(hit.get('rank', 0))} | {hit.get('kind', '')} | {hit.get('id', '')} | {span} | "
-            f"{float(hit.get('score', 0.0)):.4f} | {int(bool(hit.get('distractor_flag', False)))} | "
+            f"{float(hit.get('score', 0.0)):.4f} | {semantic:.4f} | {decision_align:.4f} | {final:.4f} | "
+            f"{int(bool(hit.get('distractor_flag', False)))} | "
             f"`{hit.get('source_query', '')}` | `{json.dumps(sb, ensure_ascii=False, sort_keys=True)}` | "
             f"`{json.dumps(hit.get('linked_events_v1', []), ensure_ascii=False)}` |"
         )
@@ -145,4 +149,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

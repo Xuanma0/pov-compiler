@@ -44,6 +44,8 @@ def parse_args() -> argparse.Namespace:
     _parse_bool_with_neg(parser, "with-figs", default=False)
     _parse_bool_with_neg(parser, "export-paper-ready", default=False)
     parser.add_argument("--paper-ready-format", choices=["md", "csv", "md+csv"], default="md+csv")
+    _parse_bool_with_neg(parser, "with-reranker-sweep", default=False)
+    parser.add_argument("--reranker-sweep-grid", default="", help="Optional grid for sweep_reranker.py")
 
     _parse_bool_with_neg(parser, "with-perception", default=False)
     parser.add_argument("--stub-perception-backend", choices=["stub", "real"], default="stub")
@@ -234,6 +236,7 @@ def _write_compare_readme(
     cmd_bye_budget: list[list[str]],
     cmd_nlq_budget: list[list[str]],
     cmd_streaming_budget: list[list[str]],
+    cmd_reranker_sweep: list[list[str]],
     cmd_budget_recommend: list[list[str]],
     cmd_paper_ready: list[list[str]],
     fig_cmds: list[list[str]],
@@ -259,6 +262,8 @@ def _write_compare_readme(
         lines.append(_render_cmd(cmd))
     for cmd in cmd_streaming_budget:
         lines.append(_render_cmd(cmd))
+    for cmd in cmd_reranker_sweep:
+        lines.append(_render_cmd(cmd))
     for cmd in cmd_budget_recommend:
         lines.append(_render_cmd(cmd))
     for cmd in cmd_paper_ready:
@@ -279,6 +284,7 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye_budget'}`",
             f"- `{out_dir / 'compare' / 'nlq_budget'}`",
             f"- `{out_dir / 'compare' / 'streaming_budget'}`",
+            f"- `{out_dir / 'compare' / 'reranker_sweep'}`",
             f"- `{out_dir / 'compare' / 'budget_recommend'}`",
             f"- `{out_dir / 'compare' / 'paper_ready'}`",
             f"- `{out_dir / 'compare' / 'commands.sh'}`",
@@ -305,6 +311,12 @@ def _write_compare_readme(
             f"- paper safety curve: `{out_dir / 'compare' / 'paper_ready' / 'figures' / 'fig_nlq_critical_fn_rate_vs_seconds.png'}`",
             "- nlq_budget now includes safety aggregation and failure attribution figures.",
             "- paper_ready auto carries NLQ safety curves when safety columns are present.",
+            "",
+            "## Reranker Sweep",
+            "",
+            f"- stub sweep: `{out_dir / 'compare' / 'reranker_sweep' / 'stub' / 'aggregate' / 'metrics_by_weights.csv'}`",
+            f"- real sweep: `{out_dir / 'compare' / 'reranker_sweep' / 'real' / 'aggregate' / 'metrics_by_weights.csv'}`",
+            "- includes decision-aligned score decomposition weights and strict+distractor objective.",
         ]
     )
     (out_dir / "compare" / "README.md").write_text("\n".join(lines), encoding="utf-8")
@@ -325,6 +337,8 @@ def main() -> int:
     compare_nlq_budget_real = compare_dir / "nlq_budget" / "real"
     compare_streaming_budget_stub = compare_dir / "streaming_budget" / "stub"
     compare_streaming_budget_real = compare_dir / "streaming_budget" / "real"
+    compare_reranker_sweep_stub = compare_dir / "reranker_sweep" / "stub"
+    compare_reranker_sweep_real = compare_dir / "reranker_sweep" / "real"
     compare_budget_recommend_stub = compare_dir / "budget_recommend" / "stub"
     compare_budget_recommend_real = compare_dir / "budget_recommend" / "real"
     compare_budget_recommend_compare = compare_dir / "budget_recommend" / "compare"
@@ -340,6 +354,8 @@ def main() -> int:
     compare_nlq_budget_real.mkdir(parents=True, exist_ok=True)
     compare_streaming_budget_stub.mkdir(parents=True, exist_ok=True)
     compare_streaming_budget_real.mkdir(parents=True, exist_ok=True)
+    compare_reranker_sweep_stub.mkdir(parents=True, exist_ok=True)
+    compare_reranker_sweep_real.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_stub.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_real.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_compare.mkdir(parents=True, exist_ok=True)
@@ -635,6 +651,50 @@ def main() -> int:
                 return rc
             streaming_budget_cmds.append(cmd)
 
+    reranker_sweep_cmds: list[list[str]] = []
+    if args.with_reranker_sweep:
+        sweep_script = ROOT / "scripts" / "sweep_reranker.py"
+        common = [
+            "--nlq-mode",
+            str(args.nlq_mode),
+            "--top-k",
+            "6",
+            "--seed",
+            "0",
+            "--search",
+            "grid",
+        ]
+        if args.nlq_eval_script:
+            common.extend(["--eval-script", str(args.nlq_eval_script)])
+        if str(args.reranker_sweep_grid).strip():
+            common.extend(["--grid", str(args.reranker_sweep_grid).strip()])
+        cmd_stub_sweep = [
+            sys.executable,
+            str(sweep_script),
+            "--run_dir",
+            str(run_stub),
+            "--out_dir",
+            str(compare_reranker_sweep_stub),
+            *common,
+        ]
+        cmd_real_sweep = [
+            sys.executable,
+            str(sweep_script),
+            "--run_dir",
+            str(run_real),
+            "--out_dir",
+            str(compare_reranker_sweep_real),
+            *common,
+        ]
+        for cmd, lp in (
+            (cmd_stub_sweep, compare_dir / "reranker_sweep_stub"),
+            (cmd_real_sweep, compare_dir / "reranker_sweep_real"),
+        ):
+            rc = _run(cmd, cwd=ROOT, log_prefix=lp, commands_file=commands_file)
+            if rc != 0:
+                return rc
+            reranker_sweep_cmds.append(cmd)
+
     budget_recommend_cmds: list[list[str]] = []
     if args.with_budget_recommend:
         if not args.with_bye_budget_sweep or not run_nlq_budget_sweep:
@@ -772,6 +832,8 @@ def main() -> int:
             str(args.paper_ready_format),
             "--with-figs",
         ]
+        if args.with_reranker_sweep:
+            cmd_paper_ready.extend(["--reranker-sweep-dir", str(compare_reranker_sweep_real)])
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
         if rc != 0:
             return rc
@@ -788,6 +850,7 @@ def main() -> int:
         cmd_bye_budget=bye_budget_cmds,
         cmd_nlq_budget=nlq_budget_cmds,
         cmd_streaming_budget=streaming_budget_cmds,
+        cmd_reranker_sweep=reranker_sweep_cmds,
         cmd_budget_recommend=budget_recommend_cmds,
         cmd_paper_ready=paper_ready_cmds,
         fig_cmds=fig_cmds,
@@ -812,6 +875,9 @@ def main() -> int:
     if args.with_streaming_budget:
         print(f"streaming_budget_stub_saved={compare_streaming_budget_stub}")
         print(f"streaming_budget_real_saved={compare_streaming_budget_real}")
+    if args.with_reranker_sweep:
+        print(f"reranker_sweep_stub_saved={compare_reranker_sweep_stub}")
+        print(f"reranker_sweep_real_saved={compare_reranker_sweep_real}")
     if args.with_budget_recommend:
         print(f"budget_recommend_stub_saved={compare_budget_recommend_stub}")
         print(f"budget_recommend_real_saved={compare_budget_recommend_real}")

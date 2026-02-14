@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional directory from sweep_streaming_interventions.py output",
     )
+    parser.add_argument(
+        "--reranker-sweep-dir",
+        default=None,
+        help="Optional directory from sweep_reranker.py output",
+    )
     parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
     _parse_bool_with_neg(parser, "with-figs", default=True)
     parser.add_argument("--png", action="store_true")
@@ -698,6 +703,59 @@ def main() -> int:
             except Exception:
                 pass
 
+    reranker_sweep: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "best_summary": {},
+    }
+    if args.reranker_sweep_dir:
+        rs_dir = Path(args.reranker_sweep_dir)
+        reranker_sweep["enabled"] = True
+        reranker_sweep["source_dir"] = str(rs_dir)
+        dst_root = out_dir / "reranker_sweep"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            rs_dir / "aggregate" / "metrics_by_weights.csv",
+            rs_dir / "aggregate" / "metrics_by_weights.md",
+            rs_dir / "best_weights.yaml",
+            rs_dir / "best_report.md",
+            rs_dir / "snapshot.json",
+            rs_dir / "figures" / "fig_objective_vs_weights_id.png",
+            rs_dir / "figures" / "fig_objective_vs_weights_id.pdf",
+            rs_dir / "figures" / "fig_tradeoff_strict_vs_distractor.png",
+            rs_dir / "figures" / "fig_tradeoff_strict_vs_distractor.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        reranker_sweep["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        snap_src = rs_dir / "snapshot.json"
+        if snap_src.exists():
+            try:
+                snap_payload = json.loads(snap_src.read_text(encoding="utf-8"))
+                if isinstance(snap_payload, dict):
+                    best = snap_payload.get("best", {})
+                    if isinstance(best, dict):
+                        reranker_sweep["best_summary"] = {
+                            "cfg_name": best.get("cfg_name", ""),
+                            "cfg_hash": best.get("cfg_hash", ""),
+                            "objective": best.get("objective", 0.0),
+                        }
+            except Exception:
+                pass
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -739,6 +797,17 @@ def main() -> int:
             )
         else:
             report_lines.append("- streaming_intervention_sweep: source provided but artifacts missing.")
+    if args.reranker_sweep_dir:
+        if reranker_sweep.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- reranker_sweep_dir: `{reranker_sweep.get('source_dir')}`",
+                    f"- reranker_sweep_files: `{reranker_sweep.get('copied_files')}`",
+                    f"- reranker_best: `{json.dumps(reranker_sweep.get('best_summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- reranker_sweep: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -768,6 +837,7 @@ def main() -> int:
             "streaming_intervention_sweep_dir": str(args.streaming_intervention_sweep_dir)
             if args.streaming_intervention_sweep_dir
             else None,
+            "reranker_sweep_dir": str(args.reranker_sweep_dir) if args.reranker_sweep_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -784,6 +854,7 @@ def main() -> int:
             "safety_figures": safety_figure_paths,
             "streaming_policy_compare": streaming_policy_compare,
             "streaming_intervention_sweep": streaming_intervention_sweep,
+            "reranker_sweep": reranker_sweep,
             "report_md": str(report_path),
         },
     }

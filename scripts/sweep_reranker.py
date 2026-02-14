@@ -5,7 +5,10 @@ import csv
 import itertools
 import json
 import random
+import shlex
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,31 +17,52 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_nlq
-from pov_compiler.bench.nlq.evaluator import evaluate_nlq_samples
-from pov_compiler.bench.nlq.sweep_utils import compute_objective, rank_rows_by_metric, summarize_variant_metrics
-from pov_compiler.retrieval.constraints import HardConstraintConfig
 from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
-from pov_compiler.schemas import Output
+
+WEIGHT_FIELDS = [
+    "w_trigger",
+    "w_action",
+    "w_constraint",
+    "w_outcome",
+    "w_evidence",
+    "w_semantic",
+]
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        import yaml  # type: ignore
+def _parse_float_list(raw: str | None) -> list[float]:
+    if raw is None:
+        return []
+    text = str(raw).strip()
+    if not text:
+        return []
+    out: list[float] = []
+    for item in text.split(","):
+        part = item.strip()
+        if not part:
+            continue
+        out.append(float(part))
+    return out
 
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}
 
-
-def _as_output(path: Path) -> Output:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if hasattr(Output, "model_validate"):
-        return Output.model_validate(payload)  # type: ignore[attr-defined]
-    return Output.parse_obj(payload)
+def _parse_grid(raw: str | None) -> dict[str, list[float]]:
+    out: dict[str, list[float]] = {}
+    if raw is None:
+        return out
+    text = str(raw).strip()
+    if not text:
+        return out
+    for seg in text.split(";"):
+        s = seg.strip()
+        if not s or "=" not in s:
+            continue
+        key, val = s.split("=", 1)
+        k = key.strip()
+        if k not in WEIGHT_FIELDS:
+            continue
+        vals = _parse_float_list(val)
+        if vals:
+            out[k] = vals
+    return out
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -49,10 +73,10 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             if key not in cols:
                 cols.append(key)
     with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=cols)
-        writer.writeheader()
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
         for row in rows:
-            writer.writerow(row)
+            w.writerow(row)
 
 
 def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
@@ -66,429 +90,519 @@ def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sweep reranker WeightConfig for strict NLQ metrics")
-    parser.add_argument("--json_dir", required=True, help="Directory containing *_v03_decisions.json")
-    parser.add_argument("--index_dir", required=True, help="Directory containing <video_uid>.index.npz/meta")
-    parser.add_argument("--pattern", default="*_v03_decisions.json")
-    parser.add_argument("--mode", choices=["hard_pseudo_nlq"], default="hard_pseudo_nlq")
-    parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"))
-    parser.add_argument("--default-cfg", default=str(ROOT / "configs" / "rerank_default.yaml"))
-    parser.add_argument("--hard-constraints", choices=["on", "off"], default="on")
-    parser.add_argument(
-        "--hard-constraints-cfg",
-        default=str(ROOT / "configs" / "hard_constraints_default.yaml"),
-    )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--n", type=int, default=10)
-    parser.add_argument("--top-k", "--topk", dest="top_k", type=int, default=6)
-    parser.add_argument("--search", choices=["grid", "random"], default="random")
-    parser.add_argument("--trials", type=int, default=30)
-    parser.add_argument(
-        "--metric",
-        choices=["hit_at_k_strict", "hit_at_1_strict", "fp_rate", "objective_combo"],
-        default="objective_combo",
-    )
-    parser.add_argument("--split-runs", type=int, default=5)
-    parser.add_argument("--out_dir", required=True)
-    return parser.parse_args()
+def _render_cmd(cmd: list[str]) -> str:
+    return " ".join(shlex.quote(str(x)) for x in cmd)
 
 
-def _discover_inputs(json_dir: Path, index_dir: Path, pattern: str) -> list[dict[str, Any]]:
+def _discover_inputs(run_dir: Path | None, json_path: Path | None, index_prefix: Path | None) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for jpath in sorted(json_dir.glob(pattern)):
-        uid = jpath.stem.replace("_v03_decisions", "")
-        index_prefix = index_dir / uid
-        if not (Path(str(index_prefix) + ".index.npz").exists() and Path(str(index_prefix) + ".index_meta.json").exists()):
-            continue
-        items.append(
-            {
-                "video_uid": uid,
-                "json_path": jpath,
-                "index_prefix": index_prefix,
-            }
-        )
+    if run_dir is not None:
+        json_dir = run_dir / "json"
+        cache_dir = run_dir / "cache"
+        if not json_dir.exists():
+            return []
+        for p in sorted(json_dir.glob("*_v03_decisions.json")):
+            uid = p.stem.replace("_v03_decisions", "")
+            prefix = cache_dir / uid
+            if not (Path(str(prefix) + ".index.npz").exists() and Path(str(prefix) + ".index_meta.json").exists()):
+                prefix = None
+            items.append(
+                {
+                    "video_uid": uid,
+                    "json_path": p,
+                    "index_prefix": prefix,
+                }
+            )
+        return items
+
+    if json_path is None:
+        return []
+    uid = json_path.stem.replace("_v03_decisions", "")
+    items.append(
+        {
+            "video_uid": uid,
+            "json_path": json_path,
+            "index_prefix": index_prefix,
+        }
+    )
     return items
 
 
-def _budget_from_config(cfg_path: Path) -> dict[str, list[float | int]]:
-    cfg = _load_yaml(cfg_path)
-    budgets_cfg = dict(cfg.get("eval", {}).get("budgets", {}))
-    max_total = max([float(x) for x in budgets_cfg.get("max_total_s", [60.0])])
-    max_tokens = max([int(x) for x in budgets_cfg.get("max_tokens", [200])])
-    max_decisions = max([int(x) for x in budgets_cfg.get("max_decisions", [12])])
+def _collect_metrics(eval_out_dir: Path) -> dict[str, Any]:
+    rows_path = eval_out_dir / "nlq_results.csv"
+    safety_path = eval_out_dir / "safety_report.json"
+    strict_values: list[float] = []
+    hit1_values: list[float] = []
+    mrr_values: list[float] = []
+    mrr_strict_values: list[float] = []
+    distractor_values: list[float] = []
+    if rows_path.exists():
+        with rows_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if str(row.get("variant", "")) != "full":
+                    continue
+                strict = float(row.get("hit_at_k_strict", 0.0) or 0.0)
+                hit1 = float(row.get("hit_at_1_strict", 0.0) or 0.0)
+                mrr = float(row.get("mrr", 0.0) or 0.0)
+                dist = float(row.get("top1_in_distractor", 0.0) or 0.0)
+                strict_values.append(strict)
+                hit1_values.append(hit1)
+                mrr_values.append(mrr)
+                mrr_strict_values.append(mrr * strict)
+                distractor_values.append(dist)
+
+    def _mean(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        return float(sum(values) / len(values))
+
+    critical_fn_rate = 0.0
+    reason_counts: dict[str, int] = {}
+    if safety_path.exists():
+        try:
+            payload = json.loads(safety_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                critical_fn_rate = float(payload.get("critical_fn_rate", 0.0) or 0.0)
+                rc = payload.get("reason_counts", {})
+                if isinstance(rc, dict):
+                    reason_counts = {str(k): int(v) for k, v in rc.items()}
+        except Exception:
+            pass
+
     return {
-        "max_total_s": [max_total],
-        "max_tokens": [max_tokens],
-        "max_decisions": [max_decisions],
+        "strict_success_rate": _mean(strict_values),
+        "hit_at_1_strict": _mean(hit1_values),
+        "mrr": _mean(mrr_values),
+        "mrr_strict": _mean(mrr_strict_values),
+        "top1_in_distractor_rate": _mean(distractor_values),
+        "critical_fn_rate": float(critical_fn_rate),
+        "reason_counts": reason_counts,
+        "rows_full": len(strict_values),
     }
 
 
-def _grid_candidates(base: WeightConfig, limit: int) -> list[WeightConfig]:
-    values = {
-        "bonus_intent_token_on_token": [0.8, 1.0, 1.2],
-        "bonus_intent_decision_on_decision": [0.8, 1.0, 1.2],
-        "penalty_distractor_near": [0.2, 0.3, 0.4],
-        "distractor_near_window_s": [4.0, 5.0],
-        "bonus_first": [0.3, 0.5, 0.7],
-        "bonus_last": [0.3, 0.5, 0.7],
+def _objective(mrr_strict: float, distractor_rate: float, critical_fn_rate: float, alpha: float, beta: float) -> float:
+    return float(mrr_strict - alpha * distractor_rate - beta * critical_fn_rate)
+
+
+def _make_figures(rows: list[dict[str, Any]], out_dir: Path) -> list[str]:
+    import matplotlib.pyplot as plt
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        return []
+    ordered = sorted(rows, key=lambda r: int(r.get("weights_id", 0)))
+    best = max(ordered, key=lambda r: float(r.get("objective", -1e9)))
+
+    paths: list[str] = []
+    # objective vs weights id
+    x = [int(r.get("weights_id", 0)) for r in ordered]
+    y = [float(r.get("objective", 0.0)) for r in ordered]
+    p1 = out_dir / "fig_objective_vs_weights_id"
+    plt.figure(figsize=(8.0, 4.2))
+    plt.plot(x, y, marker="o")
+    plt.scatter([int(best.get("weights_id", 0))], [float(best.get("objective", 0.0))], marker="*", s=150, label="best")
+    plt.xlabel("weights_id")
+    plt.ylabel("objective")
+    plt.title("Reranker Sweep Objective")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in ("png", "pdf"):
+        p = p1.with_suffix(f".{ext}")
+        plt.savefig(p)
+        paths.append(str(p))
+    plt.close()
+
+    # trade-off strict vs distractor
+    p2 = out_dir / "fig_tradeoff_strict_vs_distractor"
+    plt.figure(figsize=(7.4, 4.4))
+    xs = [float(r.get("top1_in_distractor_rate", 0.0)) for r in ordered]
+    ys = [float(r.get("mrr_strict", 0.0)) for r in ordered]
+    sizes = [max(20.0, 400.0 * float(r.get("critical_fn_rate", 0.0) + 0.02)) for r in ordered]
+    plt.scatter(xs, ys, s=sizes)
+    plt.scatter(
+        [float(best.get("top1_in_distractor_rate", 0.0))],
+        [float(best.get("mrr_strict", 0.0))],
+        marker="*",
+        s=180,
+        label="best",
+    )
+    plt.xlabel("top1_in_distractor_rate")
+    plt.ylabel("mrr_strict")
+    plt.title("Strict vs Distractor Trade-off")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in ("png", "pdf"):
+        p = p2.with_suffix(f".{ext}")
+        plt.savefig(p)
+        paths.append(str(p))
+    plt.close()
+    return paths
+
+
+def _build_grid_candidates(base: WeightConfig, args: argparse.Namespace) -> list[WeightConfig]:
+    grid = _parse_grid(args.grid)
+    explicit_lists = {
+        "w_trigger": _parse_float_list(args.w_trigger_list),
+        "w_action": _parse_float_list(args.w_action_list),
+        "w_constraint": _parse_float_list(args.w_constraint_list),
+        "w_outcome": _parse_float_list(args.w_outcome_list),
+        "w_evidence": _parse_float_list(args.w_evidence_list),
+        "w_semantic": _parse_float_list(args.w_semantic_list),
     }
-    keys = list(values.keys())
-    combos = list(itertools.product(*(values[k] for k in keys)))
-    out: list[WeightConfig] = []
+    values: dict[str, list[float]] = {}
+    for key in WEIGHT_FIELDS:
+        if key in grid and grid[key]:
+            values[key] = list(grid[key])
+        elif explicit_lists[key]:
+            values[key] = list(explicit_lists[key])
+        else:
+            values[key] = [float(getattr(base, key))]
+
+    candidates: list[WeightConfig] = []
+    combos = itertools.product(*(values[k] for k in WEIGHT_FIELDS))
+    max_cfg = max(1, int(args.max_configs))
     for i, combo in enumerate(combos, start=1):
         data = base.to_dict()
-        for k, v in zip(keys, combo):
-            data[k] = v
-        data["name"] = f"grid_{i:04d}"
-        out.append(WeightConfig.from_dict(data))
-        if len(out) >= max(1, int(limit)):
+        for key, val in zip(WEIGHT_FIELDS, combo):
+            data[key] = float(val)
+        data["name"] = f"weights_{i:04d}"
+        candidates.append(WeightConfig.from_dict(data))
+        if len(candidates) >= max_cfg:
             break
-    return out
+    return candidates
 
 
-def _random_candidates(base: WeightConfig, trials: int, seed: int) -> list[WeightConfig]:
-    rng = random.Random(int(seed))
-    out: list[WeightConfig] = []
-    for i in range(max(0, int(trials))):
+def _build_random_candidates(base: WeightConfig, args: argparse.Namespace) -> list[WeightConfig]:
+    rng = random.Random(int(args.seed))
+    out = [WeightConfig.from_dict(base.to_dict())]
+    out[0].name = "default"
+    for i in range(max(0, int(args.trials) - 1)):
         data = base.to_dict()
         data["name"] = f"rand_{i + 1:04d}"
-        data["bonus_intent_token_on_token"] = round(rng.uniform(0.5, 1.8), 4)
-        data["bonus_intent_decision_on_decision"] = round(rng.uniform(0.5, 1.8), 4)
-        data["bonus_intent_anchor_on_highlight"] = round(rng.uniform(0.6, 1.6), 4)
-        data["bonus_first"] = round(rng.uniform(0.1, 1.0), 4)
-        data["bonus_last"] = round(rng.uniform(0.1, 1.0), 4)
-        data["penalty_distractor_near"] = round(rng.uniform(0.05, 0.8), 4)
-        data["distractor_near_window_s"] = round(rng.uniform(2.0, 8.0), 4)
-        data["bonus_conf_scale"] = round(rng.uniform(0.0, 0.4), 4)
-        data["bonus_boundary_scale"] = round(rng.uniform(0.0, 0.4), 4)
-        data["penalty_before_scene_change"] = round(rng.uniform(0.0, 2.0), 4)
+        data["w_trigger"] = round(rng.uniform(0.0, 1.2), 4)
+        data["w_action"] = round(rng.uniform(0.0, 1.2), 4)
+        data["w_constraint"] = round(rng.uniform(0.0, 1.2), 4)
+        data["w_outcome"] = round(rng.uniform(0.0, 1.2), 4)
+        data["w_evidence"] = round(rng.uniform(0.0, 1.2), 4)
+        data["w_semantic"] = round(rng.uniform(0.6, 1.4), 4)
         out.append(WeightConfig.from_dict(data))
     return out
 
 
-def _split_stability(values_by_uid: dict[str, float], split_runs: int, seed: int) -> dict[str, float]:
-    uids = sorted(values_by_uid.keys())
-    if len(uids) < 2 or int(split_runs) <= 0:
-        val = float(sum(values_by_uid.values()) / max(1, len(values_by_uid)))
-        return {
-            "split_train_mean": val,
-            "split_train_std": 0.0,
-            "split_test_mean": val,
-            "split_test_std": 0.0,
-        }
-    rng = random.Random(int(seed))
-    train_scores: list[float] = []
-    test_scores: list[float] = []
-    for _ in range(int(split_runs)):
-        shuffled = list(uids)
-        rng.shuffle(shuffled)
-        cut = max(1, int(0.7 * len(shuffled)))
-        train = shuffled[:cut]
-        test = shuffled[cut:] if cut < len(shuffled) else shuffled[-1:]
-        train_scores.append(float(sum(values_by_uid[u] for u in train) / max(1, len(train))))
-        test_scores.append(float(sum(values_by_uid[u] for u in test) / max(1, len(test))))
-
-    def _mean(xs: list[float]) -> float:
-        return float(sum(xs) / max(1, len(xs)))
-
-    def _std(xs: list[float]) -> float:
-        m = _mean(xs)
-        return float((sum((x - m) ** 2 for x in xs) / max(1, len(xs))) ** 0.5)
-
-    return {
-        "split_train_mean": _mean(train_scores),
-        "split_train_std": _std(train_scores),
-        "split_test_mean": _mean(test_scores),
-        "split_test_std": _std(test_scores),
-    }
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Sweep decision-aligned reranker weights with strict+distractor objective")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--run_dir", default=None, help="Run directory containing json/ and cache/")
+    src.add_argument("--json", dest="json_path", default=None, help="Single *_v03_decisions.json input")
+    parser.add_argument("--index", default=None, help="Single index prefix for --json mode")
+    parser.add_argument("--out_dir", required=True)
+    parser.add_argument("--nlq-mode", default="hard_pseudo_nlq", choices=["hard_pseudo_nlq", "pseudo_nlq", "mock", "ego4d"])
+    parser.add_argument("--top-k", "--topk", dest="top_k", type=int, default=6)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--search", choices=["grid", "random"], default="grid")
+    parser.add_argument("--trials", type=int, default=16)
+    parser.add_argument("--grid", default="", help="Grid string, e.g. w_trigger=0.2,0.4;w_action=0.3,0.6")
+    parser.add_argument("--w-trigger-list", default="")
+    parser.add_argument("--w-action-list", default="")
+    parser.add_argument("--w-constraint-list", default="")
+    parser.add_argument("--w-outcome-list", default="")
+    parser.add_argument("--w-evidence-list", default="")
+    parser.add_argument("--w-semantic-list", default="")
+    parser.add_argument("--max-configs", type=int, default=128)
+    parser.add_argument("--alpha", type=float, default=0.5, help="Penalty coefficient for top1_in_distractor_rate")
+    parser.add_argument("--beta", type=float, default=0.5, help="Penalty coefficient for safety critical_fn_rate")
+    parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"))
+    parser.add_argument("--eval-script", default=str(ROOT / "scripts" / "eval_nlq.py"))
+    return parser.parse_args()
 
 
-def _aggregate_by_key(rows: list[dict[str, Any]], key: str, variant: str = "full") -> dict[str, dict[str, float]]:
-    out: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        if str(row.get("variant", "")) != str(variant):
-            continue
-        k = str(row.get(key, ""))
-        out.setdefault(k, []).append(row)
-    result: dict[str, dict[str, float]] = {}
-    for k, vals in out.items():
-        n = float(len(vals))
-        result[k] = {
-            "hit_at_k_strict": float(sum(float(v.get("hit_at_k_strict", 0.0)) for v in vals) / n),
-            "hit_at_1_strict": float(sum(float(v.get("hit_at_1_strict", 0.0)) for v in vals) / n),
-            "fp_rate": float(sum(float(v.get("top1_in_distractor_rate", 0.0)) for v in vals) / n),
-            "hit_at_k": float(sum(float(v.get("hit_at_k", 0.0)) for v in vals) / n),
-            "mrr": float(sum(float(v.get("mrr", 0.0)) for v in vals) / n),
-        }
-    return result
-
-
-def main() -> int:
-    args = _parse_args()
-    json_dir = Path(args.json_dir)
-    index_dir = Path(args.index_dir)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    inputs = _discover_inputs(json_dir=json_dir, index_dir=index_dir, pattern=str(args.pattern))
-    if not inputs:
-        print("error=no_inputs_found")
-        return 1
-
-    budgets = _budget_from_config(Path(args.config))
-    base_cfg = resolve_weight_config(Path(args.default_cfg))
-    base_cfg.name = "default"
-    if str(args.hard_constraints).lower() == "off":
-        hard_cfg = HardConstraintConfig(
-            enable_after_scene_change=False,
-            enable_first_last=False,
-            enable_type_match=False,
-            relax_on_empty=True,
-            relax_order=["after_scene_change", "first_last", "type_match"],
-        )
-    else:
-        hard_cfg = HardConstraintConfig.from_yaml(Path(args.hard_constraints_cfg))
-
-    prepared: list[dict[str, Any]] = []
-    for item in inputs:
-        output = _as_output(item["json_path"])
-        samples: list[NLQSample] = load_hard_pseudo_nlq(
-            output,
-            seed=int(args.seed),
-            n_highlight=max(1, int(args.n)),
-            n_token=max(1, int(args.n)),
-            n_decision=max(1, int(args.n)),
-            top_k=max(1, int(args.top_k)),
-        )
-        if not samples:
-            continue
-        prepared.append(
-            {
-                **item,
-                "output": output,
-                "samples": samples,
-            }
-        )
-    if not prepared:
-        print("error=no_samples_generated")
-        return 1
-
-    candidates: list[WeightConfig] = [base_cfg]
-    if str(args.search) == "grid":
-        candidates.extend(_grid_candidates(base_cfg, limit=max(1, int(args.trials))))
-    else:
-        candidates.extend(_random_candidates(base_cfg, trials=max(1, int(args.trials) - 1), seed=int(args.seed)))
-
-    results: list[dict[str, Any]] = []
-    default_row: dict[str, Any] | None = None
-    for idx, cfg in enumerate(candidates, start=1):
-        per_video_objective: dict[str, float] = {}
-        collected_overall: list[dict[str, Any]] = []
-        collected_by_type: list[dict[str, Any]] = []
-        for entry in prepared:
-            output = entry["output"]
-            samples = entry["samples"]
-            result = evaluate_nlq_samples(
-                output=output,
-                samples=samples,
-                budgets=budgets,
-                sweep=False,
-                retriever_config={},
-                index_prefix=entry["index_prefix"],
-                rerank_cfg=cfg,
-                hard_constraints_cfg=hard_cfg,
-                allow_gt_fallback=False,
-            )
-            overall_rows = result["overall_rows"]
-            by_type_rows = result["by_query_type_rows"]
-            collected_overall.extend(overall_rows)
-            collected_by_type.extend(by_type_rows)
-
-            m_full = summarize_variant_metrics(overall_rows, variant="full")
-            objective = compute_objective(
-                hit_at_k_strict=float(m_full["hit_at_k_strict"]),
-                hit_at_1_strict=float(m_full["hit_at_1_strict"]),
-                fp_rate=float(m_full["fp_rate"]),
-                metric=str(args.metric),
-            )
-            per_video_objective[str(entry["video_uid"])] = float(objective)
-
-        full = summarize_variant_metrics(collected_overall, variant="full")
-        highlights_only = summarize_variant_metrics(collected_overall, variant="highlights_only")
-        objective = compute_objective(
-            hit_at_k_strict=float(full["hit_at_k_strict"]),
-            hit_at_1_strict=float(full["hit_at_1_strict"]),
-            fp_rate=float(full["fp_rate"]),
-            metric=str(args.metric),
-        )
-        stability = _split_stability(per_video_objective, split_runs=int(args.split_runs), seed=int(args.seed) + idx)
-        by_query = _aggregate_by_key(collected_by_type, "query_type", variant="full")
-        by_bucket = _aggregate_by_key(collected_by_type, "duration_bucket", variant="full")
-        fallback_rate = (
-            float(sum(float(r.get("fallback_rate", 0.0)) for r in collected_overall) / max(1, len(collected_overall)))
-            if collected_overall
-            else 0.0
-        )
-        relax_after_scene = (
-            float(
-                sum(float(r.get("relax_rate_after_scene_change", 0.0)) for r in collected_overall)
-                / max(1, len(collected_overall))
-            )
-            if collected_overall
-            else 0.0
-        )
-        relax_first_last = (
-            float(sum(float(r.get("relax_rate_first_last", 0.0)) for r in collected_overall) / max(1, len(collected_overall)))
-            if collected_overall
-            else 0.0
-        )
-        relax_type_match = (
-            float(sum(float(r.get("relax_rate_type_match", 0.0)) for r in collected_overall) / max(1, len(collected_overall)))
-            if collected_overall
-            else 0.0
-        )
-
-        row = {
-            "trial_id": idx,
-            "search": str(args.search),
-            "metric": str(args.metric),
-            "cfg_name": str(cfg.name),
-            "cfg_hash": str(cfg.short_hash()),
-            "hard_constraints_enabled": str(args.hard_constraints).lower() == "on",
-            "objective": float(objective),
-            "full_hit_at_k_strict": float(full["hit_at_k_strict"]),
-            "full_hit_at_1_strict": float(full["hit_at_1_strict"]),
-            "full_fp_rate": float(full["fp_rate"]),
-            "full_hit_at_k": float(full["hit_at_k"]),
-            "full_mrr": float(full["mrr"]),
-            "hl_only_hit_at_k_strict": float(highlights_only["hit_at_k_strict"]),
-            "hl_only_fp_rate": float(highlights_only["fp_rate"]),
-            "delta_hit_at_k_strict_vs_hl_only": float(full["hit_at_k_strict"] - highlights_only["hit_at_k_strict"]),
-            "delta_fp_rate_vs_hl_only": float(full["fp_rate"] - highlights_only["fp_rate"]),
-            "num_videos": len(prepared),
-            "split_train_mean": float(stability["split_train_mean"]),
-            "split_train_std": float(stability["split_train_std"]),
-            "split_test_mean": float(stability["split_test_mean"]),
-            "split_test_std": float(stability["split_test_std"]),
-            "fallback_rate": float(fallback_rate),
-            "relax_rate_after_scene_change": float(relax_after_scene),
-            "relax_rate_first_last": float(relax_first_last),
-            "relax_rate_type_match": float(relax_type_match),
-            "by_query_type_json": json.dumps(by_query, ensure_ascii=False, sort_keys=True),
-            "by_duration_bucket_json": json.dumps(by_bucket, ensure_ascii=False, sort_keys=True),
-            "cfg_json": json.dumps(cfg.to_dict(), ensure_ascii=False, sort_keys=True),
-            "hard_constraints_cfg_json": json.dumps(hard_cfg.to_dict(), ensure_ascii=False, sort_keys=True),
-        }
-        results.append(row)
-        if str(cfg.name) == "default":
-            default_row = row
-        print(
-            f"trial={idx}/{len(candidates)} cfg={cfg.name} objective={objective:.4f} "
-            f"full_strict={full['hit_at_k_strict']:.4f} fp={full['fp_rate']:.4f}"
-        )
-
-    ranked = rank_rows_by_metric(results, metric=str(args.metric))
-    best = ranked[0]
-    best_cfg = WeightConfig.from_dict(json.loads(str(best["cfg_json"])))
-    if not best_cfg.name:
-        best_cfg.name = "best"
-
-    results_csv = out_dir / "results_sweep.csv"
-    _write_csv(results_csv, results)
-    best_cfg_path = out_dir / "best_config.yaml"
-    _write_yaml(best_cfg_path, best_cfg.to_dict())
-
-    default_obj = float(default_row["objective"]) if default_row else 0.0
-    best_obj = float(best["objective"])
-    best_report = out_dir / "best_report.md"
-    lines: list[str] = []
-    lines.append("# Reranker Sweep Report")
-    lines.append("")
-    lines.append(f"- metric: {args.metric}")
-    lines.append(f"- search: {args.search}")
-    lines.append(f"- trials: {len(results)}")
-    lines.append(f"- videos: {len(prepared)}")
-    lines.append(f"- hard_constraints_enabled: {str(args.hard_constraints).lower() == 'on'}")
-    lines.append(f"- hard_constraints_cfg: `{json.dumps(hard_cfg.to_dict(), ensure_ascii=False, sort_keys=True)}`")
-    lines.append(f"- budget: {budgets}")
-    lines.append(f"- default_objective: {default_obj:.4f}")
-    lines.append(f"- best_objective: {best_obj:.4f}")
-    lines.append(f"- delta_best_minus_default: {best_obj - default_obj:+.4f}")
-    lines.append("")
-    lines.append("## Best Config")
-    lines.append("")
-    lines.append(f"- name: {best_cfg.name}")
-    lines.append(f"- hash: {best_cfg.short_hash()}")
-    lines.append("```yaml")
+def _load_base_cfg(config_path: Path) -> WeightConfig:
+    if not config_path.exists():
+        return WeightConfig()
     try:
         import yaml  # type: ignore
 
-        lines.append(yaml.safe_dump(best_cfg.to_dict(), sort_keys=False, allow_unicode=True).strip())
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, dict):
+            reranker = payload.get("reranker", {})
+            if isinstance(reranker, dict):
+                return resolve_weight_config(reranker)
     except Exception:
-        lines.append(json.dumps(best_cfg.to_dict(), ensure_ascii=False, indent=2))
-    lines.append("```")
-    lines.append("")
-    lines.append("## Stability")
-    lines.append("")
-    lines.append(
-        f"- split_train_mean/std: {float(best['split_train_mean']):.4f} / {float(best['split_train_std']):.4f}"
-    )
-    lines.append(f"- split_test_mean/std: {float(best['split_test_mean']):.4f} / {float(best['split_test_std']):.4f}")
-    lines.append("")
-    lines.append("## Best vs Default")
-    lines.append("")
-    lines.append("| metric | default | best | delta |")
-    lines.append("|---|---:|---:|---:|")
+        pass
+    return WeightConfig()
 
-    def _dv(key: str) -> float:
-        return float(default_row.get(key, 0.0)) if default_row else 0.0
 
-    def _bv(key: str) -> float:
-        return float(best.get(key, 0.0))
-
-    for key in ["full_hit_at_k_strict", "full_hit_at_1_strict", "full_fp_rate", "full_hit_at_k", "full_mrr", "objective"]:
-        d = _dv(key)
-        b = _bv(key)
-        lines.append(f"| {key} | {d:.4f} | {b:.4f} | {b - d:+.4f} |")
-    lines.append(
-        f"| fallback_rate | {float(default_row.get('fallback_rate', 0.0)) if default_row else 0.0:.4f} | "
-        f"{float(best.get('fallback_rate', 0.0)):.4f} | "
-        f"{float(best.get('fallback_rate', 0.0)) - (float(default_row.get('fallback_rate', 0.0)) if default_row else 0.0):+.4f} |"
-    )
-    lines.append("")
-
-    lines.append("## Per Query Type (Best, Full Variant)")
-    lines.append("")
-    lines.append("| query_type | hit@k_strict | hit@1_strict | fp_rate |")
-    lines.append("|---|---:|---:|---:|")
-    best_query = json.loads(str(best["by_query_type_json"]))
-    for qtype in sorted(best_query.keys()):
-        item = best_query[qtype]
-        lines.append(
-            f"| {qtype} | {float(item.get('hit_at_k_strict', 0.0)):.4f} | "
-            f"{float(item.get('hit_at_1_strict', 0.0)):.4f} | {float(item.get('fp_rate', 0.0)):.4f} |"
+def _git_commit() -> str:
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    lines.append("")
+        if res.returncode == 0:
+            return str(res.stdout).strip()
+    except Exception:
+        pass
+    return ""
 
-    lines.append("## Per Duration Bucket (Best, Full Variant)")
-    lines.append("")
-    lines.append("| duration_bucket | hit@k_strict | hit@1_strict | fp_rate |")
-    lines.append("|---|---:|---:|---:|")
-    best_bucket = json.loads(str(best["by_duration_bucket_json"]))
-    for bucket in sorted(best_bucket.keys()):
-        item = best_bucket[bucket]
-        lines.append(
-            f"| {bucket} | {float(item.get('hit_at_k_strict', 0.0)):.4f} | "
-            f"{float(item.get('hit_at_1_strict', 0.0)):.4f} | {float(item.get('fp_rate', 0.0)):.4f} |"
+
+def main() -> int:
+    args = parse_args()
+    out_dir = Path(args.out_dir)
+    run_root = out_dir / "runs"
+    cfg_root = out_dir / "configs"
+    agg_root = out_dir / "aggregate"
+    fig_root = out_dir / "figures"
+    logs_root = out_dir / "logs"
+    for d in (out_dir, run_root, cfg_root, agg_root, fig_root, logs_root):
+        d.mkdir(parents=True, exist_ok=True)
+
+    run_dir = Path(args.run_dir) if args.run_dir else None
+    json_path = Path(args.json_path) if args.json_path else None
+    index_prefix = Path(args.index) if args.index else None
+    eval_script = Path(args.eval_script)
+    inputs = _discover_inputs(run_dir, json_path, index_prefix)
+    if not inputs:
+        print("error=no_inputs")
+        return 2
+    if not eval_script.exists():
+        print(f"error=eval_script_missing path={eval_script}")
+        return 2
+
+    base_cfg = _load_base_cfg(Path(args.config))
+    base_cfg.name = str(base_cfg.name or "default")
+    if str(args.search).lower() == "random":
+        candidates = _build_random_candidates(base_cfg, args)
+    else:
+        candidates = _build_grid_candidates(base_cfg, args)
+        if not candidates:
+            candidates = [base_cfg]
+            candidates[0].name = "default"
+
+    commands_path = logs_root / "commands.sh"
+    commands_path.write_text("#!/usr/bin/env text\n\n", encoding="utf-8")
+
+    rows: list[dict[str, Any]] = []
+    default_objective: float | None = None
+    for idx, cfg in enumerate(candidates, start=1):
+        cfg_id = f"weights_{idx:04d}"
+        cfg_path = cfg_root / f"{cfg_id}.yaml"
+        _write_yaml(cfg_path, cfg.to_dict())
+
+        strict_values: list[float] = []
+        hit1_values: list[float] = []
+        mrr_values: list[float] = []
+        mrr_strict_values: list[float] = []
+        dist_values: list[float] = []
+        crit_values: list[float] = []
+        reason_totals: dict[str, int] = {}
+        rc_all = 0
+
+        for item in inputs:
+            uid = str(item["video_uid"])
+            per_out = run_root / cfg_id / uid
+            per_out.mkdir(parents=True, exist_ok=True)
+            cmd = [
+                sys.executable,
+                str(eval_script),
+                "--json",
+                str(item["json_path"]),
+                "--out_dir",
+                str(per_out),
+                "--mode",
+                str(args.nlq_mode),
+                "--seed",
+                str(int(args.seed)),
+                "--top-k",
+                str(int(args.top_k)),
+                "--rerank-cfg",
+                str(cfg_path),
+                "--no-allow-gt-fallback",
+                "--no-safety-gate",
+            ]
+            if item.get("index_prefix") is not None:
+                cmd.extend(["--index", str(item["index_prefix"])])
+            with commands_path.open("a", encoding="utf-8") as f:
+                f.write(f"# {cfg_id}::{uid}\n{_render_cmd(cmd)}\n\n")
+            proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+            (logs_root / f"{cfg_id}__{uid}.stdout.log").write_text(proc.stdout or "", encoding="utf-8")
+            (logs_root / f"{cfg_id}__{uid}.stderr.log").write_text(proc.stderr or "", encoding="utf-8")
+            rc_all = max(rc_all, int(proc.returncode))
+            metrics = _collect_metrics(per_out)
+            strict_values.append(float(metrics["strict_success_rate"]))
+            hit1_values.append(float(metrics["hit_at_1_strict"]))
+            mrr_values.append(float(metrics["mrr"]))
+            mrr_strict_values.append(float(metrics["mrr_strict"]))
+            dist_values.append(float(metrics["top1_in_distractor_rate"]))
+            crit_values.append(float(metrics["critical_fn_rate"]))
+            for k, v in dict(metrics.get("reason_counts", {})).items():
+                reason_totals[str(k)] = reason_totals.get(str(k), 0) + int(v)
+
+        def _mean(values: list[float]) -> float:
+            if not values:
+                return 0.0
+            return float(sum(values) / len(values))
+
+        strict = _mean(strict_values)
+        hit1 = _mean(hit1_values)
+        mrr = _mean(mrr_values)
+        mrr_strict = _mean(mrr_strict_values)
+        dist = _mean(dist_values)
+        crit = _mean(crit_values)
+        obj = _objective(mrr_strict, dist, crit, alpha=float(args.alpha), beta=float(args.beta))
+        if str(cfg.name) == "default":
+            default_objective = float(obj)
+        row = {
+            "weights_id": idx,
+            "cfg_id": cfg_id,
+            "cfg_name": str(cfg.name),
+            "cfg_hash": str(cfg.short_hash()),
+            "objective": float(obj),
+            "strict_success_rate": float(strict),
+            "hit_at_1_strict": float(hit1),
+            "mrr": float(mrr),
+            "mrr_strict": float(mrr_strict),
+            "top1_in_distractor_rate": float(dist),
+            "critical_fn_rate": float(crit),
+            "num_videos": len(inputs),
+            "returncode": int(rc_all),
+            "reason_counts_json": json.dumps(reason_totals, ensure_ascii=False, sort_keys=True),
+        }
+        for field in WEIGHT_FIELDS:
+            row[field] = float(getattr(cfg, field))
+        rows.append(row)
+        print(
+            f"weights_id={idx} cfg={cfg.name} objective={obj:.6f} "
+            f"mrr_strict={mrr_strict:.4f} distractor={dist:.4f} critical_fn={crit:.4f}"
         )
-    lines.append("")
 
-    best_report.write_text("\n".join(lines), encoding="utf-8")
+    rows.sort(key=lambda r: (-float(r.get("objective", -1e9)), int(r.get("weights_id", 0))))
+    best = rows[0]
+    best_cfg = next((cfg for cfg in candidates if cfg.short_hash() == str(best["cfg_hash"])), candidates[0])
+    if default_objective is None:
+        default_objective = float(rows[-1]["objective"])
 
-    print(f"results_saved={results_csv}")
-    print(f"best_config_saved={best_cfg_path}")
-    print(f"best_report_saved={best_report}")
+    metrics_csv = agg_root / "metrics_by_weights.csv"
+    _write_csv(metrics_csv, rows)
+    metrics_md = agg_root / "metrics_by_weights.md"
+    md_lines = [
+        "# Reranker Decision-Align Sweep",
+        "",
+        f"- inputs: {len(inputs)}",
+        f"- nlq_mode: {args.nlq_mode}",
+        f"- alpha: {float(args.alpha):.4f}",
+        f"- beta: {float(args.beta):.4f}",
+        f"- objective: mrr_strict - alpha*top1_in_distractor_rate - beta*critical_fn_rate",
+        "",
+        "| weights_id | cfg_name | objective | mrr_strict | top1_in_distractor_rate | critical_fn_rate | "
+        "w_trigger | w_action | w_constraint | w_outcome | w_evidence | w_semantic |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in rows:
+        md_lines.append(
+            f"| {int(row['weights_id'])} | {row['cfg_name']} | {float(row['objective']):.6f} | "
+            f"{float(row['mrr_strict']):.4f} | {float(row['top1_in_distractor_rate']):.4f} | "
+            f"{float(row['critical_fn_rate']):.4f} | {float(row['w_trigger']):.3f} | {float(row['w_action']):.3f} | "
+            f"{float(row['w_constraint']):.3f} | {float(row['w_outcome']):.3f} | "
+            f"{float(row['w_evidence']):.3f} | {float(row['w_semantic']):.3f} |"
+        )
+    metrics_md.write_text("\n".join(md_lines), encoding="utf-8")
+
+    best_cfg_path = out_dir / "best_weights.yaml"
+    _write_yaml(best_cfg_path, best_cfg.to_dict())
+
+    best_reason_counts = json.loads(str(best.get("reason_counts_json", "{}")))
+    top_reason_pairs = sorted(best_reason_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[:5]
+    best_report = out_dir / "best_report.md"
+    report_lines = [
+        "# Best Reranker Weights Report",
+        "",
+        f"- best_cfg_name: {best_cfg.name}",
+        f"- best_cfg_hash: {best_cfg.short_hash()}",
+        f"- default_objective: {float(default_objective):.6f}",
+        f"- best_objective: {float(best['objective']):.6f}",
+        f"- delta: {float(best['objective']) - float(default_objective):+.6f}",
+        "",
+        "## Best Metrics",
+        "",
+        f"- mrr_strict: {float(best['mrr_strict']):.4f}",
+        f"- top1_in_distractor_rate: {float(best['top1_in_distractor_rate']):.4f}",
+        f"- critical_fn_rate: {float(best['critical_fn_rate']):.4f}",
+        "",
+        "## Failure Reasons Top-N",
+        "",
+    ]
+    if top_reason_pairs:
+        report_lines.append("| reason | count |")
+        report_lines.append("|---|---:|")
+        for reason, count in top_reason_pairs:
+            report_lines.append(f"| {reason} | {int(count)} |")
+    else:
+        report_lines.append("- none")
+    report_lines.extend(["", "## Best Weights", "", "```yaml"])
+    try:
+        import yaml  # type: ignore
+
+        report_lines.append(yaml.safe_dump(best_cfg.to_dict(), sort_keys=False, allow_unicode=True).strip())
+    except Exception:
+        report_lines.append(json.dumps(best_cfg.to_dict(), ensure_ascii=False, indent=2))
+    report_lines.append("```")
+    best_report.write_text("\n".join(report_lines), encoding="utf-8")
+
+    figure_paths = _make_figures(rows, fig_root)
+    snapshot_path = out_dir / "snapshot.json"
+    snapshot = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "git_commit": _git_commit(),
+        "inputs": {
+            "run_dir": str(run_dir) if run_dir else None,
+            "json": str(json_path) if json_path else None,
+            "index": str(index_prefix) if index_prefix else None,
+            "nlq_mode": str(args.nlq_mode),
+            "top_k": int(args.top_k),
+            "seed": int(args.seed),
+            "search": str(args.search),
+            "trials": int(args.trials),
+            "grid": str(args.grid),
+            "alpha": float(args.alpha),
+            "beta": float(args.beta),
+            "eval_script": str(eval_script),
+        },
+        "weights": {
+            "fields": list(WEIGHT_FIELDS),
+            "num_candidates": len(candidates),
+        },
+        "best": {
+            "cfg_name": str(best_cfg.name),
+            "cfg_hash": str(best_cfg.short_hash()),
+            "objective": float(best["objective"]),
+            "row": best,
+        },
+        "outputs": {
+            "metrics_csv": str(metrics_csv),
+            "metrics_md": str(metrics_md),
+            "best_weights": str(best_cfg_path),
+            "best_report": str(best_report),
+            "figures": list(figure_paths),
+            "commands_log": str(commands_path),
+        },
+    }
+    snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"default_objective={float(default_objective):.6f}")
+    print(f"best_objective={float(best['objective']):.6f}")
+    print(f"saved_metrics_csv={metrics_csv}")
+    print(f"saved_metrics_md={metrics_md}")
+    print(f"saved_best_config={best_cfg_path}")
+    print(f"saved_best_report={best_report}")
+    print(f"saved_figures={figure_paths}")
+    print(f"saved_snapshot={snapshot_path}")
     return 0
 
 
