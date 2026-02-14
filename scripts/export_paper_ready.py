@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label_a", default="stub")
     parser.add_argument("--label_b", default="real")
     parser.add_argument("--primary_metrics_json", default=None)
+    parser.add_argument(
+        "--streaming-policy-compare-dir",
+        default=None,
+        help="Optional directory from run_streaming_policy_compare.py compare/ output",
+    )
     parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
     _parse_bool_with_neg(parser, "with-figs", default=True)
     parser.add_argument("--png", action="store_true")
@@ -45,6 +51,14 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return []
     with path.open("r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
+
+
+def _copy_if_exists(src: Path, dst: Path) -> str | None:
+    if not src.exists():
+        return None
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+    return str(dst)
 
 
 def _parse_json_arg(raw: str | None) -> dict[str, Any]:
@@ -592,6 +606,39 @@ def main() -> int:
     )
     figure_paths = list(figure_paths) + list(safety_figure_paths)
 
+    streaming_policy_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_tables": [],
+        "copied_figures": [],
+        "copied_summary": None,
+    }
+    if args.streaming_policy_compare_dir:
+        spc_dir = Path(args.streaming_policy_compare_dir)
+        streaming_policy_compare["enabled"] = True
+        streaming_policy_compare["source_dir"] = str(spc_dir)
+        table_src_csv = spc_dir / "tables" / "table_streaming_policy_compare.csv"
+        table_src_md = spc_dir / "tables" / "table_streaming_policy_compare.md"
+        fig_src_png = spc_dir / "figures" / "fig_streaming_policy_compare_safety_latency.png"
+        fig_src_pdf = spc_dir / "figures" / "fig_streaming_policy_compare_safety_latency.pdf"
+        fig_delta_png = spc_dir / "figures" / "fig_streaming_policy_compare_delta.png"
+        fig_delta_pdf = spc_dir / "figures" / "fig_streaming_policy_compare_delta.pdf"
+        summary_src = spc_dir / "compare_summary.json"
+
+        copied_table_csv = _copy_if_exists(table_src_csv, tables_dir / table_src_csv.name)
+        copied_table_md = _copy_if_exists(table_src_md, tables_dir / table_src_md.name)
+        copied_summary = _copy_if_exists(summary_src, out_dir / summary_src.name)
+        copied_figures = [
+            _copy_if_exists(fig_src_png, figures_dir / fig_src_png.name),
+            _copy_if_exists(fig_src_pdf, figures_dir / fig_src_pdf.name),
+            _copy_if_exists(fig_delta_png, figures_dir / fig_delta_png.name),
+            _copy_if_exists(fig_delta_pdf, figures_dir / fig_delta_pdf.name),
+        ]
+        streaming_policy_compare["copied_tables"] = [x for x in [copied_table_csv, copied_table_md] if x]
+        streaming_policy_compare["copied_figures"] = [x for x in copied_figures if x]
+        streaming_policy_compare["copied_summary"] = copied_summary
+        figure_paths.extend(streaming_policy_compare["copied_figures"])
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -610,13 +657,28 @@ def main() -> int:
         f"- primary_metrics: `{json.dumps(chosen_primary, ensure_ascii=False, sort_keys=True)}`",
         f"- recommend_points: `{json.dumps(recommend_points, ensure_ascii=False, sort_keys=True)}`",
         safety_line,
+    ]
+    if args.streaming_policy_compare_dir:
+        if streaming_policy_compare.get("copied_tables") or streaming_policy_compare.get("copied_figures"):
+            report_lines.extend(
+                [
+                    f"- streaming_policy_compare_dir: `{streaming_policy_compare.get('source_dir')}`",
+                    f"- streaming_policy_compare_tables: `{streaming_policy_compare.get('copied_tables')}`",
+                    f"- streaming_policy_compare_figures: `{streaming_policy_compare.get('copied_figures')}`",
+                ]
+            )
+        else:
+            report_lines.append("- streaming_policy_compare: source provided but artifacts missing.")
+    report_lines.extend(
+        [
         "",
         "## Artifacts",
         "",
         f"- panel table: `{panel_csv}`",
         f"- delta table: `{delta_csv}`",
         f"- figures: `{figure_paths}`",
-    ]
+        ]
+    )
     report_path.write_text("\n".join(report_lines), encoding="utf-8")
 
     snapshot_path = out_dir / "snapshot.json"
@@ -630,6 +692,9 @@ def main() -> int:
             "format": str(args.format),
             "with_figs": bool(args.with_figs),
             "formats": formats,
+            "streaming_policy_compare_dir": str(args.streaming_policy_compare_dir)
+            if args.streaming_policy_compare_dir
+            else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -644,6 +709,7 @@ def main() -> int:
             "table_budget_panel_delta_md": str(delta_md),
             "figures": figure_paths,
             "safety_figures": safety_figure_paths,
+            "streaming_policy_compare": streaming_policy_compare,
             "report_md": str(report_path),
         },
     }

@@ -108,6 +108,7 @@ docs/
 | `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
 | `scripts\export_paper_ready.py` | Unified BYE/NLQ/Streaming budget panel export (paper-ready tables/figures) | `--compare_dir --out_dir --label_a --label_b` | `tables/table_budget_panel*`, `figures/fig_budget_*`, `report.md`, `snapshot.json` |
 | `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive/safety_latency`) with strict+safety metrics and switch traces | `--json --out_dir --budgets --policy [--fixed-budget|--recommend-dir|--latency-cap-ms]` | `steps.csv`, `queries.csv`, `figures/fig_policy_*`, `report.md`, `snapshot.json` |
+| `scripts\run_streaming_policy_compare.py` | One-click baseline vs intervention streaming compare harness (`safety_latency` vs `safety_latency_intervention`) | `--json --out_dir --budgets --query ... --max-trials` | `run_a/*`, `run_b/*`, `compare/tables/table_streaming_policy_compare.*`, `compare/figures/fig_streaming_policy_compare_*`, `compare_summary.json`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ budget sweeps and budget recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-budget-sweep --with-nlq-budget-sweep --with-budget-recommend` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/budget_recommend/*` |
 
@@ -298,3 +299,19 @@ Key outputs:
 - `figures/fig_policy_budget_over_queries.png`
 - `figures/fig_policy_safety_vs_latency.png`
 - `report.md`, `snapshot.json`
+
+## Streaming Policy Compare Harness (v1.11)
+
+Run baseline vs intervention on the same input/query/budget setup:
+
+```text
+python scripts\run_streaming_policy_compare.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_policy_compare_v111 --step-s 8 --budgets "20/50/4,60/200/12,120/400/24" --max-trials 5 --query "anchor=turn_head top_k=6" --query "token=TURN_HEAD top_k=6" --query "decision=ATTENTION_TURN_HEAD top_k=6"
+```
+
+Key outputs:
+- `run_a/` (baseline policy run)
+- `run_b/` (intervention policy run)
+- `compare/tables/table_streaming_policy_compare.csv`
+- `compare/figures/fig_streaming_policy_compare_safety_latency.png`
+- `compare/figures/fig_streaming_policy_compare_delta.png`
+- `compare/compare_summary.json`, `compare/snapshot.json`, `compare/commands.sh`

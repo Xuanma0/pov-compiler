@@ -110,6 +110,25 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"top1_budget_key": "40/100/8"}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional streaming policy compare input.
+    (compare_dir / "stream_policy_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_policy_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_policy_cmp" / "tables" / "table_streaming_policy_compare.csv").write_text(
+        "policy_a,policy_b,strict_success_rate_a,strict_success_rate_b\nsafety_latency,safety_latency_intervention,0.50,0.62\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_policy_cmp" / "tables" / "table_streaming_policy_compare.md").write_text(
+        "# compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_safety_latency.png").write_bytes(b"PNG")
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_safety_latency.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_delta.png").write_bytes(b"PNG")
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_policy_cmp" / "compare_summary.json").write_text(
+        json.dumps({"policy_a": "safety_latency", "policy_b": "safety_latency_intervention"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -121,6 +140,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(out_dir),
         "--format",
         "md+csv",
+        "--streaming-policy-compare-dir",
+        str(compare_dir / "stream_policy_cmp"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -144,6 +165,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_budget_latency_vs_seconds_streaming.png").exists()
     assert (out_dir / "figures" / "fig_nlq_critical_fn_rate_vs_seconds.png").exists()
     assert (out_dir / "figures" / "fig_nlq_failure_attribution_vs_seconds.png").exists()
+    assert (out_dir / "tables" / "table_streaming_policy_compare.csv").exists()
+    assert (out_dir / "tables" / "table_streaming_policy_compare.md").exists()
+    assert (out_dir / "figures" / "fig_streaming_policy_compare_safety_latency.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_policy_compare_delta.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header
