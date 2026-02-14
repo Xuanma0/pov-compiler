@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pov_compiler.context.context_builder import build_context
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.retrieval.constraints import HardConstraintConfig, apply_constraints_detailed
 from pov_compiler.retrieval.query_planner import QueryPlan, plan as plan_query
@@ -42,6 +43,7 @@ def trace_query(
     rerank_cfg: WeightConfig | dict[str, Any] | str | Path | None = None,
     top_k: int = 6,
     enable_constraints: bool = True,
+    use_repo: bool = False,
 ) -> dict[str, Any]:
     output = ensure_events_v1(_as_output(output_json))
     retriever = Retriever(output_json=output, index=index_prefix, config=dict(retrieval_config or {}))
@@ -135,6 +137,53 @@ def trace_query(
             }
         )
 
+    selected_events_for_repo: list[str] = []
+    selected_highlights_for_repo: list[str] = []
+    selected_tokens_for_repo: list[str] = []
+    selected_decisions_for_repo: list[str] = []
+    for hit in hit_rows[: max(1, int(top_k))]:
+        kind = str(hit.get("kind", ""))
+        hid = str(hit.get("id", ""))
+        if not hid:
+            continue
+        if kind == "event":
+            selected_events_for_repo.append(hid)
+        elif kind == "highlight":
+            selected_highlights_for_repo.append(hid)
+        elif kind == "token":
+            selected_tokens_for_repo.append(hid)
+        elif kind == "decision":
+            selected_decisions_for_repo.append(hid)
+    repo_selection: dict[str, Any] = {}
+    if bool(use_repo):
+        repo_ctx = build_context(
+            output_json=output,
+            mode="repo_only",
+            budget={
+                "use_repo": True,
+                "repo_read_policy": "query_aware",
+                "repo_strategy": "query_aware",
+                "repo_query": str(query),
+                "max_repo_chunks": max(6, int(top_k) * 4),
+                "max_repo_tokens": 240,
+            },
+            selected_events=sorted(set(selected_events_for_repo)) or None,
+            selected_highlights=sorted(set(selected_highlights_for_repo)) or None,
+            selected_tokens=sorted(set(selected_tokens_for_repo)) or None,
+            selected_decisions=sorted(set(selected_decisions_for_repo)) or None,
+            query_info={
+                "query": str(query),
+                "plan_intent": str(plan.intent),
+                "parsed_constraints": dict(plan.constraints),
+                "top_k": int(top_k),
+            },
+        )
+        repo_selection = {
+            "enabled": True,
+            "selected_chunks": list(repo_ctx.get("repo_chunks", [])),
+            "trace": dict(repo_ctx.get("repo_trace", {})),
+        }
+
     place_counts: dict[str, int] = {}
     interaction_rows: list[dict[str, Any]] = []
     for hit in hit_rows[: max(1, int(top_k))]:
@@ -186,5 +235,6 @@ def trace_query(
         "top1_kind": str(hit_rows[0]["kind"]) if hit_rows else "",
         "place_segment_distribution": place_distribution,
         "interaction_topk": interaction_rows,
+        "repo_selection": repo_selection,
         "hits": hit_rows,
     }

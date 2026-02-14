@@ -200,6 +200,33 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_quality_vs_budget_seconds.pdf").write_bytes(b"PDF")
     (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_size_vs_budget_seconds.png").write_bytes(b"PNG")
     (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_size_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    # Optional repo query selection sweep input.
+    (compare_dir / "repo_query_selection_sweep" / "aggregate").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_query_selection_sweep" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_query_selection_sweep" / "aggregate" / "metrics_by_policy_budget.csv").write_text(
+        "policy,budget_key,mrr_strict,top1_in_distractor_rate\nbudgeted_topk,20/50/4,0.30,0.40\nquery_aware,20/50/4,0.42,0.28\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_query_selection_sweep" / "aggregate" / "metrics_by_policy_budget.md").write_text("# repo query\n", encoding="utf-8")
+    (compare_dir / "repo_query_selection_sweep" / "best_report.md").write_text("# best repo query\n", encoding="utf-8")
+    (compare_dir / "repo_query_selection_sweep" / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "outputs": {
+                    "best": {"policy": "query_aware", "mrr_strict": 0.42, "top1_in_distractor_rate": 0.28},
+                    "baseline_best": {"policy": "budgeted_topk", "mrr_strict": 0.30, "top1_in_distractor_rate": 0.40},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_quality_vs_budget.png").write_bytes(b"PNG")
+    (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_quality_vs_budget.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_distractor_vs_budget.png").write_bytes(b"PNG")
+    (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_distractor_vs_budget.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_chunks_by_level.png").write_bytes(b"PNG")
+    (compare_dir / "repo_query_selection_sweep" / "figures" / "fig_repo_query_selection_chunks_by_level.pdf").write_bytes(b"PDF")
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -221,6 +248,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "reranker_sweep"),
         "--repo-policy-sweep-dir",
         str(compare_dir / "repo_policy_sweep"),
+        "--repo-query-selection-sweep-dir",
+        str(compare_dir / "repo_query_selection_sweep"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -264,6 +293,11 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "repo_policy" / "best_report.md").exists()
     assert (out_dir / "figures" / "fig_repo_quality_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_repo_size_vs_budget_seconds.png").exists()
+    assert (out_dir / "repo_query_selection" / "metrics_by_policy_budget.csv").exists()
+    assert (out_dir / "repo_query_selection" / "best_report.md").exists()
+    assert (out_dir / "figures" / "fig_repo_query_selection_quality_vs_budget.png").exists()
+    assert (out_dir / "figures" / "fig_repo_query_selection_distractor_vs_budget.png").exists()
+    assert (out_dir / "figures" / "fig_repo_query_selection_chunks_by_level.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

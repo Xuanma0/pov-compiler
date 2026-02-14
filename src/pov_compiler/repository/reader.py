@@ -11,7 +11,9 @@ def select_chunks_for_query(
     query: str,
     budget: dict[str, Any] | None = None,
     cfg: dict[str, Any] | None = None,
-) -> list[RepoChunk]:
+    query_info: dict[str, Any] | None = None,
+    return_trace: bool = False,
+) -> list[RepoChunk] | tuple[list[RepoChunk], dict[str, Any]]:
     budget = dict(budget or {})
     cfg = dict(cfg or {})
     policy_cfg = dict(cfg.get("read_policy", {}))
@@ -37,7 +39,17 @@ def select_chunks_for_query(
                     continue
                 selected.append(chunk)
                 used_tokens += token_est
-            return sorted(selected, key=lambda c: (float(c.t0), float(c.t1), str(c.id)))
+            selected_sorted = sorted(selected, key=lambda c: (float(c.t0), float(c.t1), str(c.id)))
+            if return_trace:
+                return selected_sorted, {
+                    "policy_name": "recency_greedy",
+                    "policy_hash": "",
+                    "selected_chunk_ids": [str(c.id) for c in selected_sorted],
+                    "selected_breakdown_by_level": {},
+                    "per_chunk_score_fields": {},
+                    "dropped_topN": [],
+                }
+            return selected_sorted
         policy_cfg = {
             "name": "budgeted_topk",
             "max_chunks": int(budget.get("max_repo_chunks", 16)),
@@ -46,6 +58,26 @@ def select_chunks_for_query(
         }
 
     policy = build_read_policy(policy_cfg)
-    selected = policy.select(list(repo_chunks), query=query, budget_cfg=budget)
+    if hasattr(policy, "select_with_trace"):
+        selected, trace = policy.select_with_trace(
+            list(repo_chunks),
+            query=query,
+            budget_cfg=budget,
+            query_info=query_info,
+        )
+    else:
+        selected = policy.select(list(repo_chunks), query=query, budget_cfg=budget, query_info=query_info)
+        trace = {
+            "policy_name": str(getattr(policy, "name", "")),
+            "policy_hash": str(getattr(policy, "stable_hash", lambda: "")()),
+            "selected_chunk_ids": [str(c.id) for c in selected],
+            "selected_breakdown_by_level": {},
+            "per_chunk_score_fields": {},
+            "dropped_topN": [],
+        }
     selected.sort(key=lambda c: (float(c.t0), float(c.t1), str(c.id)))
+    if return_trace:
+        trace = dict(trace or {})
+        trace["selected_chunk_ids_time_sorted"] = [str(c.id) for c in selected]
+        return selected, trace
     return selected

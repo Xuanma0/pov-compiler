@@ -12,6 +12,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from pov_compiler.context.context_builder import build_context
+from pov_compiler.retrieval.query_parser import parse_query
+from pov_compiler.retrieval.query_planner import plan as plan_query
 from pov_compiler.retrieval.retriever import Retriever
 
 
@@ -67,10 +69,28 @@ def main() -> int:
     selected_highlights: list[str] | None = None
     selected_tokens: list[str] | None = None
     selected_decisions: list[str] | None = None
+    query_info: dict[str, Any] | None = None
 
     mode = args.mode or context_cfg.get("mode", "highlights")
 
     if args.query:
+        parsed = parse_query(str(args.query))
+        plan = plan_query(str(args.query))
+        parsed_constraints: dict[str, Any] = dict(plan.constraints)
+        if parsed.place is not None:
+            parsed_constraints.setdefault("place", parsed.place)
+        if parsed.place_segment_ids:
+            parsed_constraints.setdefault("place_segment_id", list(parsed.place_segment_ids))
+        if parsed.interaction_min is not None:
+            parsed_constraints.setdefault("interaction_min", parsed.interaction_min)
+        if parsed.interaction_object:
+            parsed_constraints.setdefault("interaction_object", parsed.interaction_object)
+        query_info = {
+            "query": str(args.query),
+            "plan_intent": str(plan.intent),
+            "parsed_constraints": parsed_constraints,
+            "top_k": int(parsed.top_k if parsed.top_k is not None else retrieval_cfg.get("default_top_k", 8)),
+        }
         retriever = Retriever(
             output_json=Path(args.json),
             index=Path(args.index) if args.index else None,
@@ -117,6 +137,7 @@ def main() -> int:
         selected_highlights=selected_highlights,
         selected_tokens=selected_tokens,
         selected_decisions=selected_decisions,
+        query_info=query_info,
     )
 
     out_path = Path(args.out)

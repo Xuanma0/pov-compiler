@@ -114,6 +114,7 @@ docs/
 | `scripts\place_interaction_smoke.py` | AMEGO-style place-segment and interaction-signature smoke summary (`events_v1` focus) | `--json --out_dir [--n --seed]` | `place_segments.json`, `interaction_summary.csv`, `report.md`, `snapshot.json` |
 | `scripts\repo_policy_smoke.py` | RepoV1 write/read/dedup smoke with configurable policies (`fixed_interval/event_triggered/novelty` + `budgeted_topk/diverse`) | `--json --out_dir [--repo-cfg] [--query ...]` | `repo_chunks.jsonl`, `repo_selected.jsonl`, `context.txt`, `report.md`, `snapshot.json` |
 | `scripts\sweep_repo_policies.py` | RepoV1 policy × budget sweep (`write_policy × read_policy × budgets`) | `--pov-json-dir --uids-file --budgets --out_dir --write-policies --read-policies` | `aggregate/metrics_by_setting.*`, `figures/fig_repo_*`, `best_report.md`, `snapshot.json` |
+| `scripts\sweep_repo_query_selection.py` | Repo query-time selection sweep (`baseline` vs `query_aware`) with strict+distractor-style metrics | `--pov-json-dir --uids-file --budgets --policies --queries-file --out_dir` | `aggregate/metrics_by_policy_budget.*`, `figures/fig_repo_query_selection_*`, `best_report.md`, `snapshot.json` |
 | `scripts\repo_smoke.py` | RepoV0 legacy smoke (kept for backward compatibility) | `--json --out_dir [--query]` | `repo_chunks.jsonl`, `repo_selected.jsonl`, `report.md`, `snapshot.json` |
 | `scripts\sweep_repo_budgets.py` | RepoV0 legacy budget sweep | `--json --out_dir --budgets` | `aggregate/metrics_by_budget.*`, `figures/fig_repo_quality_vs_budget_seconds.*`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
@@ -378,6 +379,26 @@ Paper-ready integration (optional):
 
 ```text
 python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v17_demo\compare --out_dir data\outputs\ab_v17_demo\compare\paper_ready --repo-policy-sweep-dir data\outputs\repo_policy_sweep_v116_demo
+```
+
+## Repo Query-Aware Selection (v1.17)
+
+Trace with query-aware repo read policy and selection reasons:
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --query "place=first interaction_min=0.30 interaction_object=door top_k=6" --out_dir data\outputs\trace_repo_queryaware_v117_demo --use-repo
+```
+
+Sweep baseline vs query-aware under the same budgets and queries:
+
+```text
+python scripts\sweep_repo_query_selection.py --pov-json-dir data\outputs\ego4d_ab_real_n6\json --uids-file data\outputs\uids_match_repo_v116.txt --out_dir data\outputs\repo_query_selection_sweep_v117_demo --budgets "20/50/4,60/200/12" --policies "baseline,query_aware" --top-k 6
+```
+
+Paper-ready integration (optional):
+
+```text
+python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v17_demo\compare --out_dir data\outputs\ab_v17_demo\compare\paper_ready --repo-query-selection-sweep-dir data\outputs\repo_query_selection_sweep_v117_demo
 ```
 
 ## Place + Interaction IR (v1.14)

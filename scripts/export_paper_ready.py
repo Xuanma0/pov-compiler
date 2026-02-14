@@ -45,6 +45,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from sweep_repo_policies.py output",
     )
     parser.add_argument(
+        "--repo-query-selection-sweep-dir",
+        default=None,
+        help="Optional directory from sweep_repo_query_selection.py output",
+    )
+    parser.add_argument(
         "--reranker-sweep-dir",
         default=None,
         help="Optional directory from sweep_reranker.py output",
@@ -850,6 +855,59 @@ def main() -> int:
             if str(p).endswith(".png") or str(p).endswith(".pdf"):
                 figure_paths.append(str(p))
 
+    repo_query_selection_sweep: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "best_summary": {},
+    }
+    if args.repo_query_selection_sweep_dir:
+        rq_dir = Path(args.repo_query_selection_sweep_dir)
+        repo_query_selection_sweep["enabled"] = True
+        repo_query_selection_sweep["source_dir"] = str(rq_dir)
+        dst_root = out_dir / "repo_query_selection"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            rq_dir / "aggregate" / "metrics_by_policy_budget.csv",
+            rq_dir / "aggregate" / "metrics_by_policy_budget.md",
+            rq_dir / "best_report.md",
+            rq_dir / "snapshot.json",
+            rq_dir / "figures" / "fig_repo_query_selection_quality_vs_budget.png",
+            rq_dir / "figures" / "fig_repo_query_selection_quality_vs_budget.pdf",
+            rq_dir / "figures" / "fig_repo_query_selection_distractor_vs_budget.png",
+            rq_dir / "figures" / "fig_repo_query_selection_distractor_vs_budget.pdf",
+            rq_dir / "figures" / "fig_repo_query_selection_chunks_by_level.png",
+            rq_dir / "figures" / "fig_repo_query_selection_chunks_by_level.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        repo_query_selection_sweep["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        snap_src = rq_dir / "snapshot.json"
+        if snap_src.exists():
+            try:
+                snap_payload = json.loads(snap_src.read_text(encoding="utf-8"))
+                if isinstance(snap_payload, dict):
+                    best = snap_payload.get("outputs", {}).get("best", {})
+                    baseline = snap_payload.get("outputs", {}).get("baseline_best", {})
+                    if isinstance(best, dict):
+                        repo_query_selection_sweep["best_summary"]["best"] = best
+                    if isinstance(baseline, dict):
+                        repo_query_selection_sweep["best_summary"]["baseline"] = baseline
+            except Exception:
+                pass
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -922,6 +980,17 @@ def main() -> int:
             )
         else:
             report_lines.append("- repo_policy_sweep: source provided but artifacts missing.")
+    if args.repo_query_selection_sweep_dir:
+        if repo_query_selection_sweep.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- repo_query_selection_sweep_dir: `{repo_query_selection_sweep.get('source_dir')}`",
+                    f"- repo_query_selection_sweep_files: `{repo_query_selection_sweep.get('copied_files')}`",
+                    f"- repo_query_selection_summary: `{json.dumps(repo_query_selection_sweep.get('best_summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- repo_query_selection_sweep: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -956,6 +1025,9 @@ def main() -> int:
             else None,
             "reranker_sweep_dir": str(args.reranker_sweep_dir) if args.reranker_sweep_dir else None,
             "repo_policy_sweep_dir": str(args.repo_policy_sweep_dir) if args.repo_policy_sweep_dir else None,
+            "repo_query_selection_sweep_dir": str(args.repo_query_selection_sweep_dir)
+            if args.repo_query_selection_sweep_dir
+            else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -975,6 +1047,7 @@ def main() -> int:
             "streaming_codec_sweep": streaming_codec_sweep,
             "reranker_sweep": reranker_sweep,
             "repo_policy_sweep": repo_policy_sweep,
+            "repo_query_selection_sweep": repo_query_selection_sweep,
             "report_md": str(report_path),
         },
     }

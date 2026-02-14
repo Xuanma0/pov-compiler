@@ -132,6 +132,13 @@ repo:
     max_chunks: 16
     max_tokens: 200
     max_seconds: null
+  query_aware_read_policy:
+    name: query_aware
+    max_chunks: 16
+    max_tokens: 200
+    recency_weight: 0.1
+    redundancy_penalty: 0.2
+    dedup_sim_threshold: 0.92
   window_s: 30.0
   min_segment_s: 5.0
   scales:

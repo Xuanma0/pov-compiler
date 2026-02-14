@@ -394,6 +394,7 @@ def build_context(
     selected_highlights: list[str] | None = None,
     selected_tokens: list[str | dict[str, Any] | Token] | None = None,
     selected_decisions: list[str | dict[str, Any] | DecisionPoint] | None = None,
+    query_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mode = str(mode).lower()
     if mode not in {"timeline", "highlights", "decisions", "full", "repo_only", "events_plus_repo"}:
@@ -487,14 +488,18 @@ def build_context(
     repo_cfg = dict((output.repository or {}).get("cfg", {}) if isinstance(output.repository, dict) else {})
     repo_chunks = _load_repo_chunks(output, repo_cfg=repo_cfg) if use_repo else []
     repo_selected: list[dict[str, Any]] = []
+    repo_selection_trace: dict[str, Any] = {}
     if use_repo and repo_chunks:
         repo_models = [
             RepoChunk.model_validate(chunk) if hasattr(RepoChunk, "model_validate") else RepoChunk.parse_obj(chunk)
             for chunk in repo_chunks
         ]
-        repo_selected_models = select_chunks_for_query(
+        repo_query = str((budget or {}).get("repo_query", ""))
+        if not repo_query and query_info and str(query_info.get("query", "")).strip():
+            repo_query = str(query_info.get("query", "")).strip()
+        repo_selected_models, repo_selection_trace = select_chunks_for_query(
             repo_models,
-            query=str((budget or {}).get("repo_query", "")),
+            query=repo_query,
             budget={
                 "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
                 "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
@@ -508,6 +513,8 @@ def build_context(
                     "name": str(merged_budget.get("repo_read_policy", merged_budget.get("repo_strategy", "importance_greedy")))
                 },
             },
+            query_info=query_info,
+            return_trace=True,
         )
         repo_selected = [_model_dump(chunk) for chunk in repo_selected_models]
     repo_trace = {
@@ -524,6 +531,7 @@ def build_context(
         "repo_before": len(repo_chunks),
         "repo_after": len(repo_selected),
         "repo_chars_after": int(sum(len(str(c.get("text", ""))) for c in repo_selected)),
+        "selection_trace": repo_selection_trace,
     }
 
     if mode == "repo_only":

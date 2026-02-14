@@ -119,8 +119,33 @@ class ReadPolicy(ABC):
         query: str,
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
+        query_info: dict[str, Any] | None = None,
     ) -> list[RepoChunk]:
         raise NotImplementedError
+
+    def select_with_trace(
+        self,
+        chunks: list[RepoChunk],
+        query: str,
+        budget_cfg: dict[str, Any] | None = None,
+        rng: random.Random | None = None,
+        query_info: dict[str, Any] | None = None,
+    ) -> tuple[list[RepoChunk], dict[str, Any]]:
+        selected = self.select(
+            chunks=chunks,
+            query=query,
+            budget_cfg=budget_cfg,
+            rng=rng,
+            query_info=query_info,
+        )
+        return selected, {
+            "policy_name": self.name,
+            "policy_hash": self.stable_hash(),
+            "selected_chunk_ids": [str(c.id) for c in selected],
+            "selected_breakdown_by_level": {},
+            "per_chunk_score_fields": {},
+            "dropped_topN": [],
+        }
 
 
 class FixedIntervalWritePolicy(WritePolicy):
@@ -266,6 +291,7 @@ class BudgetedTopKReadPolicy(ReadPolicy):
         query: str,
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
+        query_info: dict[str, Any] | None = None,
     ) -> list[RepoChunk]:
         max_chunks, max_tokens, max_seconds = self._effective_budget(budget_cfg)
         ranked = sorted(
@@ -309,6 +335,7 @@ class DiverseReadPolicy(BudgetedTopKReadPolicy):
         query: str,
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
+        query_info: dict[str, Any] | None = None,
     ) -> list[RepoChunk]:
         max_chunks, max_tokens, max_seconds = self._effective_budget(budget_cfg)
         ranked = sorted(
@@ -337,6 +364,257 @@ class DiverseReadPolicy(BudgetedTopKReadPolicy):
             used_tokens += token_est
         chosen.sort(key=lambda c: (float(c.t0), float(c.t1), str(c.id)))
         return chosen
+
+
+class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
+    def __init__(
+        self,
+        *,
+        max_chunks: int = 16,
+        max_tokens: int = 200,
+        max_seconds: float | None = None,
+        level_priors: dict[str, float] | None = None,
+        intent_level_boost: dict[str, dict[str, float]] | None = None,
+        constraint_level_boost: dict[str, dict[str, float]] | None = None,
+        recency_weight: float = 0.1,
+        redundancy_penalty: float = 0.2,
+        max_chunks_per_level: dict[str, int] | None = None,
+        dedup_sim_threshold: float = 0.92,
+        dropped_topn: int = 8,
+    ) -> None:
+        super().__init__(max_chunks=max_chunks, max_tokens=max_tokens, max_seconds=max_seconds)
+        self.name = "query_aware"
+        self.level_priors = {str(k).lower(): float(v) for k, v in (level_priors or {}).items()}
+        if not self.level_priors:
+            self.level_priors = {"event": 0.25, "decision": 0.45, "place": 0.35, "segment": 0.2, "window": 0.15}
+        self.intent_level_boost = {
+            str(intent).lower(): {str(k).lower(): float(v) for k, v in dict(levels).items()}
+            for intent, levels in dict(intent_level_boost or {}).items()
+        }
+        if not self.intent_level_boost:
+            self.intent_level_boost = {
+                "event": {"event": 0.3, "segment": 0.12},
+                "decision": {"decision": 0.45, "event": 0.15},
+                "token": {"segment": 0.2, "window": 0.2, "event": 0.1},
+                "anchor": {"place": 0.25, "event": 0.2, "decision": 0.15},
+                "mixed": {"event": 0.12, "decision": 0.12, "place": 0.12},
+            }
+        self.constraint_level_boost = {
+            str(key).lower(): {str(k).lower(): float(v) for k, v in dict(levels).items()}
+            for key, levels in dict(constraint_level_boost or {}).items()
+        }
+        if not self.constraint_level_boost:
+            self.constraint_level_boost = {
+                "place": {"place": 0.35, "event": 0.2},
+                "place_segment_id": {"place": 0.4, "event": 0.15},
+                "interaction_min": {"place": 0.25, "decision": 0.2, "event": 0.15},
+                "interaction_object": {"place": 0.3, "decision": 0.2, "event": 0.1},
+                "anchor_type": {"decision": 0.2, "event": 0.2},
+                "decision_type": {"decision": 0.3},
+                "token_type": {"segment": 0.2, "window": 0.15, "event": 0.1},
+                "time_range": {"window": 0.15, "segment": 0.15, "event": 0.1},
+            }
+        self.recency_weight = float(recency_weight)
+        self.redundancy_penalty = float(redundancy_penalty)
+        self.max_chunks_per_level = {str(k).lower(): int(v) for k, v in dict(max_chunks_per_level or {}).items()}
+        self.dedup_sim_threshold = float(dedup_sim_threshold)
+        self.dropped_topn = int(max(1, dropped_topn))
+        self.params.update(
+            {
+                "name": self.name,
+                "level_priors": self.level_priors,
+                "intent_level_boost": self.intent_level_boost,
+                "constraint_level_boost": self.constraint_level_boost,
+                "recency_weight": self.recency_weight,
+                "redundancy_penalty": self.redundancy_penalty,
+                "max_chunks_per_level": self.max_chunks_per_level,
+                "dedup_sim_threshold": self.dedup_sim_threshold,
+                "dropped_topn": self.dropped_topn,
+            }
+        )
+
+    @staticmethod
+    def _safe_query_info(query: str, query_info: dict[str, Any] | None) -> dict[str, Any]:
+        out = dict(query_info or {})
+        parsed_constraints = out.get("parsed_constraints")
+        if not isinstance(parsed_constraints, dict):
+            parsed = parse_query(query)
+            parsed_constraints = {
+                "place": parsed.place,
+                "place_segment_id": list(parsed.place_segment_ids),
+                "interaction_min": parsed.interaction_min,
+                "interaction_object": parsed.interaction_object,
+                "anchor_type": list(parsed.anchor_types),
+                "decision_type": list(parsed.decision_types),
+                "token_type": list(parsed.token_types),
+                "time_range": parsed.time_range,
+            }
+        cleaned_constraints: dict[str, Any] = {}
+        for key, value in dict(parsed_constraints).items():
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, list) and not value:
+                continue
+            cleaned_constraints[str(key).lower()] = value
+        out["parsed_constraints"] = cleaned_constraints
+        out["plan_intent"] = str(out.get("plan_intent", "mixed")).lower()
+        if out["plan_intent"] not in {"event", "token", "decision", "anchor", "mixed"}:
+            out["plan_intent"] = "mixed"
+        try:
+            out["top_k"] = int(out.get("top_k", 6))
+        except Exception:
+            out["top_k"] = 6
+        return out
+
+    def _score_chunks(
+        self,
+        *,
+        chunks: list[RepoChunk],
+        query: str,
+        budget_cfg: dict[str, Any] | None,
+        query_info: dict[str, Any],
+    ) -> tuple[list[tuple[RepoChunk, dict[str, float]]], dict[str, dict[str, float]]]:
+        t1_max = max((float(c.t1) for c in chunks), default=1.0)
+        intent = str(query_info.get("plan_intent", "mixed")).lower()
+        constraints = dict(query_info.get("parsed_constraints", {}))
+        per_chunk: dict[str, dict[str, float]] = {}
+        scored_rows: list[tuple[RepoChunk, dict[str, float]]] = []
+        for chunk in chunks:
+            level = str(chunk.level or chunk.scale).lower()
+            base_score = float(chunk.importance) + _query_bonus(chunk, query)
+            level_boost = float(self.level_priors.get(level, 0.0))
+            intent_boost = float(self.intent_level_boost.get(intent, {}).get(level, 0.0))
+            constraint_boost = 0.0
+            for ckey in constraints.keys():
+                constraint_boost += float(self.constraint_level_boost.get(str(ckey).lower(), {}).get(level, 0.0))
+            recency = float(self.recency_weight) * float(max(0.0, min(1.0, float(chunk.t1) / max(1e-9, t1_max))))
+            final = base_score + level_boost + intent_boost + constraint_boost + recency
+            fields = {
+                "base_score": float(base_score),
+                "level_boost": float(level_boost),
+                "intent_boost": float(intent_boost),
+                "constraint_boost": float(constraint_boost),
+                "recency_boost": float(recency),
+                "dedup_penalty": 0.0,
+                "final_score": float(final),
+            }
+            per_chunk[str(chunk.id)] = fields
+            scored_rows.append((chunk, fields))
+        scored_rows.sort(
+            key=lambda item: (
+                -float(item[1]["final_score"]),
+                -float(item[0].importance),
+                float(item[0].t0),
+                str(item[0].id),
+            )
+        )
+        return scored_rows, per_chunk
+
+    def select_with_trace(
+        self,
+        chunks: list[RepoChunk],
+        query: str,
+        budget_cfg: dict[str, Any] | None = None,
+        rng: random.Random | None = None,
+        query_info: dict[str, Any] | None = None,
+    ) -> tuple[list[RepoChunk], dict[str, Any]]:
+        budget = dict(budget_cfg or {})
+        max_chunks, max_tokens, max_seconds = self._effective_budget(budget)
+        info = self._safe_query_info(query, query_info)
+        ranked, per_chunk = self._score_chunks(chunks=list(chunks), query=query, budget_cfg=budget, query_info=info)
+
+        selected: list[RepoChunk] = []
+        selected_words: list[set[str]] = []
+        selected_ids: list[str] = []
+        by_level: dict[str, int] = {}
+        dropped: list[dict[str, Any]] = []
+        used_tokens = 0
+        level_caps = dict(self.max_chunks_per_level)
+        if "max_chunks_per_level" in budget and isinstance(budget.get("max_chunks_per_level"), dict):
+            for key, value in dict(budget.get("max_chunks_per_level", {})).items():
+                try:
+                    level_caps[str(key).lower()] = int(value)
+                except Exception:
+                    continue
+
+        for chunk, fields in ranked:
+            cid = str(chunk.id)
+            level = str(chunk.level or chunk.scale).lower()
+            reason = ""
+            token_est = int(chunk.meta.get("token_est", _estimate_tokens(chunk.text)))
+            if max_seconds is not None and float(chunk.t0) > float(max_seconds):
+                reason = "budget_exceeded"
+            elif len(selected) >= max_chunks:
+                reason = "budget_exceeded"
+            elif used_tokens + token_est > max_tokens:
+                reason = "budget_exceeded"
+            elif level in level_caps and by_level.get(level, 0) >= int(level_caps[level]):
+                reason = "level_cap"
+            else:
+                words = _norm_words(chunk.text) | {str(x).lower() for x in (chunk.tags or [])}
+                if selected_words:
+                    max_sim = max(_jaccard(words, w) for w in selected_words)
+                    if max_sim >= float(self.dedup_sim_threshold):
+                        reason = "dedup"
+                        penalty = float(self.redundancy_penalty) * float(max_sim)
+                        fields["dedup_penalty"] = -penalty
+                        fields["final_score"] = float(fields["final_score"]) - penalty
+                if not reason:
+                    selected.append(chunk)
+                    selected_words.append(words)
+                    selected_ids.append(cid)
+                    by_level[level] = by_level.get(level, 0) + 1
+                    used_tokens += token_est
+
+            if reason and len(dropped) < int(self.dropped_topn):
+                dropped.append(
+                    {
+                        "chunk_id": cid,
+                        "level": level,
+                        "reason": reason,
+                        "final_score": float(fields.get("final_score", 0.0)),
+                    }
+                )
+
+        selected_sorted = sorted(selected, key=lambda c: (float(c.t0), float(c.t1), str(c.id)))
+        trace = {
+            "policy_name": self.name,
+            "policy_hash": self.stable_hash(),
+            "selected_chunk_ids": selected_ids,
+            "selected_breakdown_by_level": dict(sorted(by_level.items())),
+            "per_chunk_score_fields": per_chunk,
+            "dropped_topN": dropped,
+            "budget_used": {
+                "max_chunks": int(max_chunks),
+                "max_tokens": int(max_tokens),
+                "max_seconds": None if max_seconds is None else float(max_seconds),
+            },
+            "query_info": {
+                "plan_intent": str(info.get("plan_intent", "mixed")),
+                "parsed_constraints": dict(info.get("parsed_constraints", {})),
+                "top_k": int(info.get("top_k", 6)),
+            },
+        }
+        return selected_sorted, trace
+
+    def select(
+        self,
+        chunks: list[RepoChunk],
+        query: str,
+        budget_cfg: dict[str, Any] | None = None,
+        rng: random.Random | None = None,
+        query_info: dict[str, Any] | None = None,
+    ) -> list[RepoChunk]:
+        selected, _ = self.select_with_trace(
+            chunks=chunks,
+            query=query,
+            budget_cfg=budget_cfg,
+            rng=rng,
+            query_info=query_info,
+        )
+        return selected
 
 
 def build_write_policy(cfg: dict[str, Any] | None = None) -> WritePolicy:
@@ -377,6 +655,20 @@ def build_read_policy(cfg: dict[str, Any] | None = None) -> ReadPolicy:
             max_tokens=int(payload.get("max_tokens", payload.get("max_repo_tokens", 200))),
             max_seconds=payload.get("max_seconds", None),
             diversity_threshold=float(payload.get("diversity_threshold", payload.get("dedup_threshold", 0.88))),
+        )
+    if name in {"query_aware", "query_aware_v0", "queryaware"}:
+        return QueryAwareReadPolicyV0(
+            max_chunks=int(payload.get("max_chunks", payload.get("max_repo_chunks", 16))),
+            max_tokens=int(payload.get("max_tokens", payload.get("max_repo_tokens", 200))),
+            max_seconds=payload.get("max_seconds", None),
+            level_priors=dict(payload.get("level_priors", {})),
+            intent_level_boost=dict(payload.get("intent_level_boost", {})),
+            constraint_level_boost=dict(payload.get("constraint_level_boost", {})),
+            recency_weight=float(payload.get("recency_weight", 0.1)),
+            redundancy_penalty=float(payload.get("redundancy_penalty", 0.2)),
+            max_chunks_per_level=dict(payload.get("max_chunks_per_level", {})),
+            dedup_sim_threshold=float(payload.get("dedup_sim_threshold", 0.92)),
+            dropped_topn=int(payload.get("dropped_topn", 8)),
         )
     if name in {"recency_greedy", "recency"}:
         # Backward-compat alias; implemented as budgeted top-k over recency by assigning importance externally.
@@ -431,4 +723,3 @@ def dump_policy_yaml(path: str | Path, payload: dict[str, Any]) -> None:
 
 def policy_cfg_hash(payload: dict[str, Any]) -> str:
     return _stable_hash(dict(payload))
-
