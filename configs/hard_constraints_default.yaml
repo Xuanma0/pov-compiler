@@ -1,8 +1,10 @@
 enable_after_scene_change: true
 enable_first_last: true
 enable_type_match: false
+enable_object_match: true
 relax_on_empty: true
 relax_order:
   - after_scene_change
+  - object_match
   - first_last
   - type_match

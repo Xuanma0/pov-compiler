@@ -494,3 +494,29 @@ Outputs:
 - `figures/fig_streaming_quality_vs_k.*`
 - `figures/fig_streaming_safety_vs_k.*`
 - `figures/fig_streaming_latency_vs_k.*`
+
+## Active Memory / Lost Object (v1.21)
+
+Build object memory from perception and generate/evaluate lost-object queries:
+
+```text
+python scripts\object_memory_smoke.py --pov_json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\object_memory_smoke_v121_demo --n 1 --seed 0
+```
+
+Trace a structured lost-object query with constraints:
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --query "lost_object=door top_k=6" --out_dir data\outputs\trace_lost_object_v121 --enable-constraints
+```
+
+Key outputs:
+- `<out_dir>/<uid>/object_memory.json`
+- `<out_dir>/<uid>/lost_object_queries.json`
+- `<out_dir>/nlq_report.md`
+- `<out_dir>/snapshot.json`
+
+Optional paper-ready integration:
+
+```text
+python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v17_demo\compare --out_dir data\outputs\ab_v17_demo\compare\paper_ready --lost-object-panel-dir data\outputs\ab_v17_demo\compare\nlq_budget\real\aggregate
+```

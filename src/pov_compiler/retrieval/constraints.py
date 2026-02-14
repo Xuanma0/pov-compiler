@@ -16,6 +16,7 @@ class HardConstraintConfig:
     enable_first_last: bool = True
     enable_type_match: bool = False
     enable_interaction: bool = True
+    enable_object_match: bool = True
     enable_place: bool = True
     relax_on_empty: bool = True
     relax_order: list[str] = None  # type: ignore[assignment]
@@ -25,6 +26,7 @@ class HardConstraintConfig:
             self.relax_order = [
                 "after_scene_change",
                 "interaction_object",
+                "object_match",
                 "interaction_min",
                 "place_first_last",
                 "type_match",
@@ -38,6 +40,7 @@ class HardConstraintConfig:
             "enable_first_last": bool(self.enable_first_last),
             "enable_type_match": bool(self.enable_type_match),
             "enable_interaction": bool(self.enable_interaction),
+            "enable_object_match": bool(self.enable_object_match),
             "enable_place": bool(self.enable_place),
             "relax_on_empty": bool(self.relax_on_empty),
             "relax_order": list(self.relax_order),
@@ -51,12 +54,13 @@ class HardConstraintConfig:
             enable_first_last=bool(payload.get("enable_first_last", True)),
             enable_type_match=bool(payload.get("enable_type_match", False)),
             enable_interaction=bool(payload.get("enable_interaction", True)),
+            enable_object_match=bool(payload.get("enable_object_match", True)),
             enable_place=bool(payload.get("enable_place", True)),
             relax_on_empty=bool(payload.get("relax_on_empty", True)),
             relax_order=list(
                 payload.get(
                     "relax_order",
-                    ["after_scene_change", "interaction_object", "interaction_min", "place_first_last", "type_match", "first_last"],
+                    ["after_scene_change", "object_match", "interaction_object", "interaction_min", "place_first_last", "type_match", "first_last"],
                 )
             ),
         )
@@ -153,6 +157,37 @@ def _match_interaction_object(hit: Hit, target: str) -> bool:
     return tgt in value or value in tgt
 
 
+def _match_object_name(hit: Hit, target: str) -> bool:
+    tgt = str(target).strip().lower()
+    if not tgt:
+        return True
+    meta = hit.get("meta", {})
+    values = [
+        meta.get("interaction_primary_object", ""),
+        meta.get("object_name", ""),
+        meta.get("active_object_top1", ""),
+        meta.get("label", ""),
+        meta.get("name", ""),
+    ]
+    source = meta.get("source", {})
+    if isinstance(source, dict):
+        values.extend(
+            [
+                source.get("interaction_primary_object", ""),
+                source.get("object_name", ""),
+                source.get("active_object_top1", ""),
+                source.get("label", ""),
+            ]
+        )
+    for value in values:
+        norm = str(value).strip().lower()
+        if not norm:
+            continue
+        if tgt in norm or norm in tgt:
+            return True
+    return False
+
+
 def _match_interaction_min(hit: Hit, threshold: float) -> bool:
     try:
         score = float(hit.get("meta", {}).get("interaction_score", 0.0))
@@ -193,9 +228,17 @@ def _apply_once(
 
     if "interaction_object" in enabled and bool(cfg.enable_interaction):
         target_obj = str(constraints.get("interaction_object", "")).strip().lower()
-        if target_obj:
+        if target_obj and not str(constraints.get("object_name", "")).strip():
             working = [h for h in working if _match_interaction_object(h, target_obj)]
             applied.append("interaction_object")
+
+    if "object_match" in enabled and bool(cfg.enable_object_match):
+        target_obj = str(
+            constraints.get("object_name", constraints.get("lost_object", constraints.get("object_last_seen", "")))
+        ).strip().lower()
+        if target_obj:
+            working = [h for h in working if _match_object_name(h, target_obj)]
+            applied.append("object_match")
 
     if "interaction_min" in enabled and bool(cfg.enable_interaction):
         if constraints.get("interaction_min", None) is not None:
@@ -265,6 +308,8 @@ def apply_constraints_detailed(
     if bool(resolved.enable_interaction):
         enabled.add("interaction_object")
         enabled.add("interaction_min")
+    if bool(resolved.enable_object_match):
+        enabled.add("object_match")
     if bool(resolved.enable_place):
         enabled.add("place_first_last")
         enabled.add("place_segment_id")

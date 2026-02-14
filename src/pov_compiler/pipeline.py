@@ -16,6 +16,7 @@ from pov_compiler.l2_tokens.token_codec import TokenCodecCompiler
 from pov_compiler.l3_decisions.decision_compiler import DecisionCompiler
 from pov_compiler.ir.events_v1 import convert_output_to_events_v1
 from pov_compiler.memory.decision_sampling import build_highlights
+from pov_compiler.perception.object_memory_v0 import build_object_memory_v0
 from pov_compiler.perception.runner import run_perception
 from pov_compiler.repository import build_repo_chunks, deduplicate_chunks, policy_cfg_hash
 from pov_compiler.schemas import Output
@@ -93,6 +94,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "events_v1": {
         "enabled": True,
+    },
+    "object_memory": {
+        "enabled": True,
+        "contact_threshold": 0.6,
     },
     "repo": {
         "enable": False,
@@ -351,6 +356,16 @@ class OfflinePipeline:
         events_v1_cfg = self.config.get("events_v1", {})
         if bool(events_v1_cfg.get("enabled", True)):
             output.events_v1 = convert_output_to_events_v1(output)
+
+        object_memory_cfg = dict(self.config.get("object_memory", {}))
+        if bool(object_memory_cfg.get("enabled", True)):
+            output.object_memory_v0 = build_object_memory_v0(
+                perception=output.perception,
+                events_v1=list(output.events_v1),
+                contact_threshold=float(object_memory_cfg.get("contact_threshold", 0.6)),
+            )
+        else:
+            output.object_memory_v0 = []
 
         repo_cfg = dict(self.config.get("repo", {}))
         if bool(repo_cfg.get("enable", False)):

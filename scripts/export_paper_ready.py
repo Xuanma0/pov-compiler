@@ -65,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from compare_bye_report_metrics.py output",
     )
     parser.add_argument(
+        "--lost-object-panel-dir",
+        default=None,
+        help="Optional directory containing table_lost_object_budget.(csv/md) and optional figures",
+    )
+    parser.add_argument(
         "--reranker-sweep-dir",
         default=None,
         help="Optional directory from sweep_reranker.py output",
@@ -1047,6 +1052,39 @@ def main() -> int:
             except Exception:
                 pass
 
+    lost_object_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    if args.lost_object_panel_dir:
+        lo_dir = Path(args.lost_object_panel_dir)
+        lost_object_panel["enabled"] = True
+        lost_object_panel["source_dir"] = str(lo_dir)
+        dst_root = out_dir / "lost_object_panel"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            lo_dir / "table_lost_object_budget.csv",
+            lo_dir / "table_lost_object_budget.md",
+            lo_dir / "figures" / "fig_lost_object_budget.png",
+            lo_dir / "figures" / "fig_lost_object_budget.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        lost_object_panel["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -1163,6 +1201,16 @@ def main() -> int:
             )
         else:
             report_lines.append("- bye_report_compare: source provided but artifacts missing.")
+    if args.lost_object_panel_dir:
+        if lost_object_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- lost_object_panel_dir: `{lost_object_panel.get('source_dir')}`",
+                    f"- lost_object_panel_files: `{lost_object_panel.get('copied_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- lost_object_panel: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -1205,6 +1253,7 @@ def main() -> int:
             else None,
             "component_attribution_dir": str(args.component_attribution_dir) if args.component_attribution_dir else None,
             "bye_report_compare_dir": str(args.bye_report_compare_dir) if args.bye_report_compare_dir else None,
+            "lost_object_panel_dir": str(args.lost_object_panel_dir) if args.lost_object_panel_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -1228,6 +1277,7 @@ def main() -> int:
             "repo_query_selection_sweep": repo_query_selection_sweep,
             "component_attribution": component_attribution,
             "bye_report_compare": bye_report_compare,
+            "lost_object_panel": lost_object_panel,
             "report_md": str(report_path),
         },
     }

@@ -68,8 +68,9 @@ hard_constraints:
   enable_after_scene_change: true
   enable_first_last: true
   enable_type_match: false
+  enable_object_match: true
   relax_on_empty: true
-  relax_order: ["after_scene_change", "first_last", "type_match"]
+  relax_order: ["after_scene_change", "object_match", "first_last", "type_match"]
 safety:
   enabled: true
   max_critical_fn: 0
@@ -78,6 +79,7 @@ safety:
     - hard_pseudo_anchor
     - hard_pseudo_contact
     - hard_pseudo_decision
+    - hard_pseudo_lost_object
     - hard_pseudo_token
     - pseudo_anchor
     - pseudo_decision
@@ -121,6 +123,9 @@ event_v0:
   append_to_events: false
 events_v1:
   enabled: true
+object_memory:
+  enabled: true
+  contact_threshold: 0.6
 repo:
   enable: false
   write_policy:

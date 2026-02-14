@@ -8,6 +8,7 @@ DEFAULT_CRITICAL_QUERY_TYPES = [
     "hard_pseudo_anchor",
     "hard_pseudo_contact",
     "hard_pseudo_decision",
+    "hard_pseudo_lost_object",
     "hard_pseudo_token",
     "pseudo_anchor",
     "pseudo_decision",

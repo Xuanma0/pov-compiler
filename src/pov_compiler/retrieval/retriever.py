@@ -491,6 +491,33 @@ class Retriever:
             )
             reasons.append(f"interaction_object={object_key}")
 
+        if parsed.which in {"first", "last"}:
+            events_candidates = set(current_events if current_events is not None else {event.id for event in event_pool})
+            if events_candidates:
+                ordered = sorted(
+                    [event for event in event_pool if event.id in events_candidates],
+                    key=lambda ev: (float(ev.t0), float(ev.t1), str(ev.id)),
+                )
+                if ordered:
+                    pick = ordered[0] if parsed.which == "first" else ordered[-1]
+                    kept_events = {str(pick.id)}
+                    highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in kept_events}
+                    tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in kept_events}
+                    decisions_new = {
+                        decision.id for decision in self.output.decision_points if decision.source_event in kept_events
+                    }
+                    current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
+                        current_events,
+                        current_highlights,
+                        current_tokens,
+                        current_decisions,
+                        kept_events,
+                        highlights_new,
+                        tokens_new,
+                        decisions_new,
+                    )
+                    reasons.append(f"which={parsed.which}")
+
         if parsed.text:
             if self.index is None:
                 reasons.append("text query ignored: index not provided")

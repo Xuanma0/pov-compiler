@@ -163,7 +163,14 @@ def _extract_constraints(text_raw: str) -> tuple[dict[str, Any], dict[str, bool]
     for name in object_vocab:
         if f" {name}" in f" {text}" or f"{name} " in f"{text} ":
             constraints.setdefault("interaction_object", name)
+            constraints.setdefault("object_name", name)
             break
+
+    if "last seen" in text or "last touch" in text or "last interacted" in text:
+        constraints.setdefault("which", "last")
+    if "lost object" in text:
+        constraints.setdefault("which", "last")
+        constraints.setdefault("prefer_contact", True)
 
     if _contains_any(text, time_keywords):
         flags["time"] = True
@@ -215,6 +222,7 @@ def plan(query_text: str) -> QueryPlan:
         parts = shlex.split(text_raw)
     except Exception:
         parts = text_raw.split()
+    explicit_object_query = False
     for part in parts:
         if "=" not in part:
             continue
@@ -230,11 +238,32 @@ def plan(query_text: str) -> QueryPlan:
             constraints["place_segment_ids"] = [x.strip() for x in value.split(",") if x.strip()]
         elif key == "interaction_object":
             constraints["interaction_object"] = value.lower()
+            constraints.setdefault("object_name", value.lower())
+            explicit_object_query = True
+        elif key == "object":
+            constraints["object_name"] = value.lower()
+            constraints.setdefault("interaction_object", value.lower())
+            explicit_object_query = True
+        elif key == "lost_object":
+            constraints["object_name"] = value.lower()
+            constraints.setdefault("interaction_object", value.lower())
+            constraints["which"] = "last"
+            constraints["prefer_contact"] = True
+            explicit_object_query = True
+        elif key == "object_last_seen":
+            constraints["object_name"] = value.lower()
+            constraints.setdefault("interaction_object", value.lower())
+            constraints["which"] = "last"
+            explicit_object_query = True
         elif key == "interaction_min":
             try:
                 constraints["interaction_min"] = float(value)
             except Exception:
                 pass
+        elif key == "which":
+            which = value.lower()
+            if which in {"first", "last"}:
+                constraints["which"] = which
         elif key == "decision":
             constraints["decision_type"] = value.upper()
             flags["decision"] = True
@@ -250,6 +279,12 @@ def plan(query_text: str) -> QueryPlan:
                 flags["anchor"] = True
         elif key == "time":
             flags["time"] = True
+
+    if explicit_object_query:
+        # Explicit object-memory queries should not be hijacked by generic scene keywords like "door".
+        constraints.pop("token_type", None)
+        constraints.pop("event_label", None)
+        flags["token"] = False
 
     intent = _infer_intent(constraints, flags, text_raw)
 
@@ -279,6 +314,23 @@ def plan(query_text: str) -> QueryPlan:
             f"interaction_object={str(constraints['interaction_object'])} top_k=8",
             "interaction object hint",
             11,
+        )
+    if constraints.get("object_name"):
+        obj = str(constraints["object_name"])
+        which = str(constraints.get("which", "last")).lower()
+        _append(
+            candidates,
+            seen,
+            f"object={obj} which={which} top_k=8",
+            "object memory hint",
+            9,
+        )
+        _append(
+            candidates,
+            seen,
+            f"lost_object={obj} top_k=8",
+            "lost-object hint",
+            8,
         )
     if constraints.get("interaction_min") is not None:
         _append(

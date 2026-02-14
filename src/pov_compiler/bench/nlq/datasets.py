@@ -303,6 +303,14 @@ def load_hard_pseudo_nlq(
         "When was I actively interacting with an object?",
         "When did I handle something with my hands?",
     ]
+    lost_object_contact_templates = [
+        "When did I last interact with the {obj}?",
+        "Find the moment I last touched the {obj}.",
+    ]
+    lost_object_seen_templates = [
+        "When did I last see the {obj}?",
+        "Find the last moment the {obj} appeared.",
+    ]
 
     hl_turn: list[Any] = []
     hl_stop: list[Any] = []
@@ -708,6 +716,82 @@ def load_hard_pseudo_nlq(
                     "interaction_object": obj,
                     "interaction_score": float(getattr(ev, "interaction_score", 0.0) or 0.0),
                     "gt_place_segment_id": str(getattr(ev, "place_segment_id", "") or ""),
+                },
+            )
+        )
+
+    # hard_pseudo_lost_object: last seen/contact object-memory queries.
+    object_memory_items = sorted(
+        list(getattr(output, "object_memory_v0", []) or []),
+        key=lambda x: (
+            int(getattr(x, "last_contact_t_ms", 0) or 0),
+            int(getattr(x, "last_seen_t_ms", 0) or 0),
+            str(getattr(x, "object_name", "")),
+        ),
+        reverse=True,
+    )
+    duration_s = float(output.meta.get("duration_s", 0.0) or 0.0)
+    lost_budget = max(1, min(len(object_memory_items), max(1, int(n_highlight // 3))))
+    for idx in _sample_indices(len(object_memory_items), lost_budget, rng):
+        item = object_memory_items[idx]
+        object_name = str(getattr(item, "object_name", "")).strip().lower()
+        if not object_name:
+            continue
+        anchor_ms_raw = getattr(item, "last_contact_t_ms", None)
+        prefer_contact = anchor_ms_raw is not None
+        if anchor_ms_raw is None:
+            anchor_ms_raw = getattr(item, "last_seen_t_ms", None)
+        if anchor_ms_raw is None:
+            continue
+        anchor_s = float(anchor_ms_raw) / 1000.0
+        t0 = max(0.0, anchor_s - 2.0)
+        t1 = anchor_s + 2.0
+        if duration_s > 0:
+            t1 = min(duration_s, t1)
+        if t1 <= t0:
+            t1 = t0 + 0.5
+        gt = (float(t0), float(t1))
+
+        event_pool = []
+        for ev in output.events_v1:
+            obj = str(getattr(ev, "interaction_primary_object", "") or "").strip().lower()
+            if obj and (object_name in obj or obj in object_name):
+                event_pool.append((float(ev.t0), float(ev.t1)))
+        if not event_pool:
+            event_pool = [(float(ev.t0), float(ev.t1)) for ev in output.events_v1]
+
+        distractors = _pick_distractors(
+            gt_span=gt,
+            pool=event_pool,
+            rng=rng,
+            min_gap_s=max(3.0, float(distractor_min_gap_s) * 0.5),
+            max_count=int(max_distractors),
+        )
+        if not distractors:
+            continue
+
+        if prefer_contact:
+            query = str(rng.choice(lost_object_contact_templates)).format(obj=object_name)
+            query = f"{query} lost_object={object_name}"
+        else:
+            query = str(rng.choice(lost_object_seen_templates)).format(obj=object_name)
+            query = f"{query} object_last_seen={object_name}"
+
+        samples.append(
+            NLQSample(
+                qid=f"hnlq_{len(samples) + 1:06d}",
+                query=query,
+                query_type="hard_pseudo_lost_object",
+                gt_span=gt,
+                top_k=int(top_k),
+                distractors=distractors,
+                meta={
+                    "source_kind": "object_memory_v0",
+                    "object_name": object_name,
+                    "last_contact_t_ms": int(getattr(item, "last_contact_t_ms", 0) or 0),
+                    "last_seen_t_ms": int(getattr(item, "last_seen_t_ms", 0) or 0),
+                    "prefer_contact": bool(prefer_contact),
+                    "last_place_id": str(getattr(item, "last_place_id", "") or ""),
                 },
             )
         )

@@ -213,6 +213,24 @@ def trace_query(
         {"place_segment_id": key, "count": int(value)}
         for key, value in sorted(place_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
     ]
+    object_memory_summary = [
+        {
+            "object_name": str(item.object_name),
+            "last_seen_t_ms": int(item.last_seen_t_ms),
+            "last_contact_t_ms": int(item.last_contact_t_ms) if item.last_contact_t_ms is not None else None,
+            "last_place_id": str(item.last_place_id or ""),
+            "score": float(item.score),
+        }
+        for item in sorted(
+            list(output.object_memory_v0),
+            key=lambda x: (
+                int(x.last_contact_t_ms or 0),
+                int(x.last_seen_t_ms or 0),
+                float(x.score),
+            ),
+            reverse=True,
+        )[:10]
+    ]
 
     return {
         "video_id": output.video_id,
@@ -233,6 +251,7 @@ def trace_query(
         },
         "rerank_cfg_hash": str(weights.short_hash()),
         "top1_kind": str(hit_rows[0]["kind"]) if hit_rows else "",
+        "object_memory_summary": object_memory_summary,
         "place_segment_distribution": place_distribution,
         "interaction_topk": interaction_rows,
         "repo_selection": repo_selection,

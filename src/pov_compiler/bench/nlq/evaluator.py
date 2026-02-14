@@ -25,6 +25,7 @@ _CONSTRAINT_KEYS = (
     "after_scene_change",
     "first_last",
     "type_match",
+    "object_match",
     "interaction_object",
     "interaction_min",
     "place_first_last",
@@ -92,6 +93,14 @@ def _constraint_present_flags(plan_constraints: dict[str, Any]) -> dict[str, boo
         "first_last": str(constraints.get("which", "")).lower() in {"first", "last"},
         "type_match": any(
             bool(str(constraints.get(key, "")).strip()) for key in ("anchor_type", "token_type", "decision_type")
+        ),
+        "object_match": bool(
+            str(
+                constraints.get(
+                    "object_name",
+                    constraints.get("lost_object", constraints.get("object_last_seen", "")),
+                )
+            ).strip()
         ),
         "interaction_object": bool(str(constraints.get("interaction_object", "")).strip()),
         "interaction_min": constraints.get("interaction_min", None) is not None,

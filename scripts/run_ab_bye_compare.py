@@ -304,6 +304,7 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye_report' / 'figures' / 'fig_bye_critical_fn_delta.png'}`",
             f"- `{out_dir / 'compare' / 'bye_budget'}`",
             f"- `{out_dir / 'compare' / 'nlq_budget'}`",
+            f"- `{out_dir / 'compare' / 'nlq_budget' / 'real' / 'aggregate' / 'table_lost_object_budget.csv'}`",
             f"- `{out_dir / 'compare' / 'streaming_budget'}`",
             f"- `{out_dir / 'compare' / 'reranker_sweep'}`",
             f"- `{out_dir / 'compare' / 'budget_recommend'}`",
@@ -896,6 +897,8 @@ def main() -> int:
             cmd_paper_ready.extend(["--bye-report-compare-dir", str(compare_bye_report_dir)])
         if args.with_reranker_sweep:
             cmd_paper_ready.extend(["--reranker-sweep-dir", str(compare_reranker_sweep_real)])
+        if run_nlq_budget_sweep:
+            cmd_paper_ready.extend(["--lost-object-panel-dir", str(compare_nlq_budget_real / "aggregate")])
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
         if rc != 0:
             return rc

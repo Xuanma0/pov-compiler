@@ -163,6 +163,16 @@ class EventV1(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class ObjectMemoryItemV0(BaseModel):
+    object_name: str
+    last_seen_t_ms: int
+    last_contact_t_ms: int | None = None
+    last_place_id: str | None = None
+    evidence_event_ids: list[str] = Field(default_factory=list)
+    score: float = 0.0
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
 class ContextSchema(BaseModel):
     video_id: str
     meta: dict[str, Any] = Field(default_factory=dict)
@@ -189,6 +199,7 @@ class Output(BaseModel):
     events_v1: list[EventV1] = Field(default_factory=list)
     decision_points: list[DecisionPoint] = Field(default_factory=list)
     perception: dict[str, Any] = Field(default_factory=dict)
+    object_memory_v0: list[ObjectMemoryItemV0] = Field(default_factory=list)
     repository: dict[str, Any] = Field(default_factory=dict)
     debug: dict[str, Any] = Field(
         default_factory=lambda: {

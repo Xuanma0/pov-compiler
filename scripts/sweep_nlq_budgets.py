@@ -294,6 +294,21 @@ def _extract_uid_metrics(uid_dir: Path, include_safety: bool) -> dict[str, Any]:
     )
     out["nlq_full_fp_rate"] = out["nlq_full_top1_in_distractor_rate"]
     out["nlq_full_mrr"] = _mean([_to_float(r.get("mrr")) or 0.0 for r in full_rows])
+    summary_rows = _read_csv(uid_dir / "nlq_summary.csv")
+    lost_rows = [
+        r
+        for r in summary_rows
+        if str(r.get("variant", "")) == "full" and str(r.get("query_type", "")) == "hard_pseudo_lost_object"
+    ]
+    if lost_rows:
+        out["lost_object_hit_at_k_strict"] = _mean([_to_float(r.get("hit_at_k_strict")) or 0.0 for r in lost_rows])
+        out["lost_object_mrr"] = _mean([_to_float(r.get("mrr")) or 0.0 for r in lost_rows])
+        out["lost_object_top1_in_distractor_rate"] = _mean(
+            [_to_float(r.get("top1_in_distractor_rate")) or 0.0 for r in lost_rows]
+        )
+        out["lost_object_critical_fn_rate"] = _mean(
+            [_to_float(r.get("critical_fn_rate")) or 0.0 for r in lost_rows]
+        )
     if include_safety:
         out.update(_zero_safety_metrics())
         safety_path = uid_dir / "safety_report.json"
@@ -416,6 +431,41 @@ def _make_figures(rows: list[dict[str, Any]], out_dir: Path, formats: list[str])
     plt.close()
 
     return out_paths
+
+
+def _write_lost_object_tables(rows: list[dict[str, Any]], out_dir: Path) -> tuple[Path, Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table_rows: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda r: float(r.get("budget_seconds", 0.0))):
+        table_rows.append(
+            {
+                "budget_key": str(row.get("budget_key", "")),
+                "budget_seconds": float(row.get("budget_seconds", 0.0)),
+                "lost_object_hit_at_k_strict": float(_to_float(row.get("lost_object_hit_at_k_strict")) or 0.0),
+                "lost_object_mrr": float(_to_float(row.get("lost_object_mrr")) or 0.0),
+                "lost_object_top1_in_distractor_rate": float(
+                    _to_float(row.get("lost_object_top1_in_distractor_rate")) or 0.0
+                ),
+                "lost_object_critical_fn_rate": float(_to_float(row.get("lost_object_critical_fn_rate")) or 0.0),
+            }
+        )
+    csv_path = out_dir / "table_lost_object_budget.csv"
+    md_path = out_dir / "table_lost_object_budget.md"
+    _write_csv(csv_path, table_rows)
+    _write_md(
+        md_path,
+        table_rows,
+        {
+            "selection_mode": "budget_aggregate",
+            "uids_file_path": "",
+            "uids_requested": "",
+            "uids_found": "",
+            "uids_missing_count": "",
+            "uids_missing_sample": [],
+            "dir_uids_sample": [],
+        },
+    )
+    return csv_path, md_path
 
 
 def main() -> int:
@@ -609,6 +659,10 @@ def main() -> int:
             "nlq_full_top1_in_distractor_rate",
             "nlq_full_fp_rate",
             "nlq_full_mrr",
+            "lost_object_hit_at_k_strict",
+            "lost_object_mrr",
+            "lost_object_top1_in_distractor_rate",
+            "lost_object_critical_fn_rate",
             "safety_critical_fn_denominator",
             "safety_critical_fn_count",
             "safety_critical_fn_rate",
@@ -629,6 +683,7 @@ def main() -> int:
     metrics_md = agg_dir / "metrics_by_budget.md"
     _write_csv(metrics_csv, aggregate_rows)
     _write_md(metrics_md, aggregate_rows, selection)
+    lost_csv, lost_md = _write_lost_object_tables(aggregate_rows, agg_dir)
     figure_paths = _make_figures(aggregate_rows, fig_dir, formats)
 
     snapshot = {
@@ -654,6 +709,8 @@ def main() -> int:
         "outputs": {
             "metrics_by_budget_csv": str(metrics_csv),
             "metrics_by_budget_md": str(metrics_md),
+            "lost_object_table_csv": str(lost_csv),
+            "lost_object_table_md": str(lost_md),
             "figures": figure_paths,
             "safety_figures": [
                 x
@@ -669,6 +726,7 @@ def main() -> int:
     print(f"budgets={len(budgets)}")
     print(f"saved_metrics_csv={metrics_csv}")
     print(f"saved_metrics_md={metrics_md}")
+    print(f"saved_lost_object_table={lost_csv}")
     print(f"saved_figures={figure_paths}")
     print(f"saved_snapshot={snapshot_path}")
     return 0

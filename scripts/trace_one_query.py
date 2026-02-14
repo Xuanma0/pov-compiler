@@ -64,6 +64,25 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- filtered_hits_after: {int(ctrace.get('filtered_hits_after', 0))}")
     lines.append(f"- used_fallback: {str(bool(ctrace.get('used_fallback', False))).lower()}")
     lines.append("")
+    lines.append("## Object Memory V0")
+    lines.append("")
+    obj_rows = trace.get("object_memory_summary", [])
+    if isinstance(obj_rows, list) and obj_rows:
+        lines.append("| object_name | last_seen_t_ms | last_contact_t_ms | last_place_id | score |")
+        lines.append("|---|---:|---:|---|---:|")
+        for item in obj_rows:
+            if not isinstance(item, dict):
+                continue
+            lc = item.get("last_contact_t_ms", "")
+            lines.append(
+                f"| {item.get('object_name', '')} | {int(item.get('last_seen_t_ms', 0))} | "
+                f"{'' if lc is None else int(lc)} | {item.get('last_place_id', '')} | "
+                f"{float(item.get('score', 0.0)):.4f} |"
+            )
+    else:
+        lines.append("- object_memory_summary: []")
+    lines.append("")
+
     lines.append("## Place Segment")
     lines.append("")
     place_dist = trace.get("place_segment_distribution", [])

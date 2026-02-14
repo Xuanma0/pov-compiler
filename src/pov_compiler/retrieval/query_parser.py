@@ -20,6 +20,11 @@ class ParsedQuery:
     place_segment_ids: list[str] = field(default_factory=list)
     interaction_min: float | None = None
     interaction_object: str | None = None
+    object_name: str | None = None
+    lost_object: str | None = None
+    object_last_seen: str | None = None
+    which: str | None = None
+    prefer_contact: bool = False
     text: str | None = None
     top_k: int | None = None
     mode: str | None = None
@@ -122,6 +127,36 @@ def parse_query(query: str) -> ParsedQuery:
             parsed.interaction_object = str(value).strip().lower()
             if parsed.interaction_object:
                 parsed.filters_applied.append("interaction_object")
+        elif key == "which":
+            which = str(value).strip().lower()
+            if which in {"first", "last"}:
+                parsed.which = which
+                parsed.filters_applied.append("which")
+            else:
+                _warn(parsed, f"invalid_which={value}")
+        elif key == "lost_object":
+            obj = str(value).strip().lower()
+            if obj:
+                parsed.lost_object = obj
+                parsed.object_name = obj
+                parsed.interaction_object = obj
+                parsed.which = "last"
+                parsed.prefer_contact = True
+                parsed.filters_applied.append("lost_object")
+        elif key == "object_last_seen":
+            obj = str(value).strip().lower()
+            if obj:
+                parsed.object_last_seen = obj
+                parsed.object_name = obj
+                parsed.interaction_object = obj
+                parsed.which = "last"
+                parsed.filters_applied.append("object_last_seen")
+        elif key == "object":
+            obj = str(value).strip().lower()
+            if obj:
+                parsed.object_name = obj
+                parsed.interaction_object = obj
+                parsed.filters_applied.append("object")
         elif key == "text":
             parsed.text = value
             parsed.filters_applied.append("text")
