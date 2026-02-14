@@ -184,6 +184,105 @@ def _mean(values: list[float]) -> float:
     return float(sum(values) / len(values))
 
 
+def _to_int(v: Any) -> int | None:
+    f = _to_float(v)
+    if f is None:
+        return None
+    return int(round(float(f)))
+
+
+def _normalize_reason(name: str) -> str:
+    key = str(name or "").strip().lower()
+    mapping = {
+        "budget_insufficient": "budget_insufficient",
+        "evidence_missing": "evidence_missing",
+        "constraints_over_filtered": "constraints_over_filtered",
+        "constraints_overfilter": "constraints_over_filtered",
+        "retrieval_distractor": "retrieval_distractor",
+        "retrieval_distractors": "retrieval_distractor",
+        "distractor": "retrieval_distractor",
+    }
+    return mapping.get(key, "other")
+
+
+def _parse_reason_counts(payload: dict[str, Any]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    rc = payload.get("reason_counts")
+    if isinstance(rc, dict):
+        for key, value in rc.items():
+            reason = _normalize_reason(str(key))
+            val = _to_int(value) or 0
+            out[reason] = out.get(reason, 0) + int(val)
+    elif isinstance(rc, list):
+        for item in rc:
+            if not isinstance(item, dict):
+                continue
+            reason = _normalize_reason(str(item.get("reason", item.get("name", ""))))
+            val = _to_int(item.get("count", item.get("value", 0))) or 0
+            out[reason] = out.get(reason, 0) + int(val)
+
+    # Fallback: derive from critical_failures list.
+    if not out:
+        failures = payload.get("critical_failures", [])
+        if isinstance(failures, list):
+            for item in failures:
+                if not isinstance(item, dict):
+                    continue
+                reason = _normalize_reason(str(item.get("reason", "")))
+                out[reason] = out.get(reason, 0) + 1
+    return out
+
+
+def _extract_safety_metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    denom = _to_int(payload.get("critical_fn_denominator"))
+    if denom is None:
+        denom = _to_int(payload.get("evaluated_critical_queries"))
+    denom = int(denom or 0)
+    count = int(_to_int(payload.get("critical_fn_count")) or 0)
+    rate = _to_float(payload.get("critical_fn_rate"))
+    if rate is None:
+        rate = float(count / max(1, denom))
+    gran = str(payload.get("count_granularity", "row=(variant,budget,query)"))
+
+    reason_counts = _parse_reason_counts(payload)
+    b_cnt = int(reason_counts.get("budget_insufficient", 0))
+    e_cnt = int(reason_counts.get("evidence_missing", 0))
+    c_cnt = int(reason_counts.get("constraints_over_filtered", 0))
+    r_cnt = int(reason_counts.get("retrieval_distractor", 0))
+    known_sum = b_cnt + e_cnt + c_cnt + r_cnt
+    other_cnt = max(0, int(sum(reason_counts.values()) - known_sum))
+    if known_sum == 0 and sum(reason_counts.values()) == 0 and count > 0:
+        other_cnt = int(count)
+
+    return {
+        "safety_count_granularity": gran,
+        "safety_critical_fn_denominator": int(denom),
+        "safety_critical_fn_count": int(count),
+        "safety_critical_fn_rate": float(rate),
+        "safety_reason_budget_insufficient_rate": float(b_cnt / max(1, denom)),
+        "safety_reason_evidence_missing_rate": float(e_cnt / max(1, denom)),
+        "safety_reason_constraints_over_filtered_rate": float(c_cnt / max(1, denom)),
+        "safety_reason_retrieval_distractor_rate": float(r_cnt / max(1, denom)),
+        "safety_reason_other_rate": float(other_cnt / max(1, denom)),
+        "safety_budget_insufficient_share": float(b_cnt / max(1, count)),
+    }
+
+
+def _zero_safety_metrics() -> dict[str, Any]:
+    return {
+        "safety_count_granularity": "row=(variant,budget,query)",
+        "safety_critical_fn_denominator": 0,
+        "safety_critical_fn_count": 0,
+        "safety_critical_fn_rate": 0.0,
+        "safety_reason_budget_insufficient_rate": 0.0,
+        "safety_reason_evidence_missing_rate": 0.0,
+        "safety_reason_constraints_over_filtered_rate": 0.0,
+        "safety_reason_retrieval_distractor_rate": 0.0,
+        "safety_reason_other_rate": 0.0,
+        "safety_budget_insufficient_share": 0.0,
+    }
+
+
 def _extract_uid_metrics(uid_dir: Path, include_safety: bool) -> dict[str, Any]:
     out: dict[str, Any] = {}
     results_rows = _read_csv(uid_dir / "nlq_results.csv")
@@ -196,19 +295,26 @@ def _extract_uid_metrics(uid_dir: Path, include_safety: bool) -> dict[str, Any]:
     out["nlq_full_fp_rate"] = out["nlq_full_top1_in_distractor_rate"]
     out["nlq_full_mrr"] = _mean([_to_float(r.get("mrr")) or 0.0 for r in full_rows])
     if include_safety:
+        out.update(_zero_safety_metrics())
         safety_path = uid_dir / "safety_report.json"
-        safety_rate = 0.0
         if safety_path.exists():
             try:
                 payload = json.loads(safety_path.read_text(encoding="utf-8"))
-                var_stats = payload.get("variant_stats", {}) if isinstance(payload, dict) else {}
-                if isinstance(var_stats, dict) and isinstance(var_stats.get("full"), dict):
-                    safety_rate = float(var_stats["full"].get("critical_fn_rate", 0.0))
-                else:
-                    safety_rate = float(payload.get("critical_fn_rate", 0.0)) if isinstance(payload, dict) else 0.0
+                if isinstance(payload, dict):
+                    # prefer full variant stats when available, fall back to global fields.
+                    var_stats = payload.get("variant_stats", {})
+                    if isinstance(var_stats, dict) and isinstance(var_stats.get("full"), dict):
+                        full_payload = dict(payload)
+                        full_payload["critical_fn_rate"] = float(var_stats["full"].get("critical_fn_rate", 0.0))
+                        full_payload["critical_fn_count"] = int(var_stats["full"].get("critical_fn_count", 0))
+                        full_payload["critical_fn_denominator"] = int(
+                            var_stats["full"].get("critical_fn_denominator", payload.get("critical_fn_denominator", 0))
+                        )
+                        out.update(_extract_safety_metrics(full_payload))
+                    else:
+                        out.update(_extract_safety_metrics(payload))
             except Exception:
-                safety_rate = 0.0
-        out["safety_critical_fn_rate_full"] = float(safety_rate)
+                out.update(_zero_safety_metrics())
     return out
 
 
@@ -221,6 +327,18 @@ def _make_figures(rows: list[dict[str, Any]], out_dir: Path, formats: list[str])
     y_quality = [float(r.get("nlq_full_mrr", 0.0)) for r in sorted_rows]
     y_hitk = [float(r.get("nlq_full_hit_at_k_strict", 0.0)) for r in sorted_rows]
     y_fp = [float(r.get("nlq_full_fp_rate", 0.0)) for r in sorted_rows]
+    y_critical = [float(_to_float(r.get("safety_critical_fn_rate")) or 0.0) for r in sorted_rows]
+    y_budget_ins = [
+        float(_to_float(r.get("safety_reason_budget_insufficient_rate")) or 0.0) for r in sorted_rows
+    ]
+    y_evidence = [float(_to_float(r.get("safety_reason_evidence_missing_rate")) or 0.0) for r in sorted_rows]
+    y_constraints = [
+        float(_to_float(r.get("safety_reason_constraints_over_filtered_rate")) or 0.0) for r in sorted_rows
+    ]
+    y_distractor = [
+        float(_to_float(r.get("safety_reason_retrieval_distractor_rate")) or 0.0) for r in sorted_rows
+    ]
+    y_other = [float(_to_float(r.get("safety_reason_other_rate")) or 0.0) for r in sorted_rows]
 
     out_paths: list[str] = []
 
@@ -250,6 +368,49 @@ def _make_figures(rows: list[dict[str, Any]], out_dir: Path, formats: list[str])
     plt.tight_layout()
     for ext in formats:
         path = p2.with_suffix(f".{ext}")
+        plt.savefig(path)
+        out_paths.append(str(path))
+    plt.close()
+
+    p3 = out_dir / "fig_nlq_critical_fn_rate_vs_budget_seconds"
+    plt.figure(figsize=(7.0, 4.2))
+    plt.plot(xs, y_critical, marker="o")
+    plt.xlabel("Budget Max Total Seconds")
+    plt.ylabel("safety_critical_fn_rate")
+    plt.title("NLQ Critical FN Rate vs Budget Seconds")
+    plt.grid(True, alpha=0.35)
+    plt.tight_layout()
+    for ext in formats:
+        path = p3.with_suffix(f".{ext}")
+        plt.savefig(path)
+        out_paths.append(str(path))
+    plt.close()
+
+    p4 = out_dir / "fig_nlq_failure_attribution_vs_budget_seconds"
+    plt.figure(figsize=(7.2, 4.4))
+    plt.stackplot(
+        xs,
+        y_budget_ins,
+        y_evidence,
+        y_constraints,
+        y_distractor,
+        y_other,
+        labels=[
+            "budget_insufficient",
+            "evidence_missing",
+            "constraints_over_filtered",
+            "retrieval_distractor",
+            "other",
+        ],
+    )
+    plt.xlabel("Budget Max Total Seconds")
+    plt.ylabel("Failure Attribution Rate (reason_count / denominator)")
+    plt.title("NLQ Failure Attribution vs Budget Seconds")
+    plt.grid(True, alpha=0.25)
+    plt.legend(loc="upper right", fontsize=8)
+    plt.tight_layout()
+    for ext in formats:
+        path = p4.with_suffix(f".{ext}")
         plt.savefig(path)
         out_paths.append(str(path))
     plt.close()
@@ -425,6 +586,12 @@ def main() -> int:
     for budget in budgets:
         key = budget.key
         rows = by_budget.get(key, [])
+        granularity = "row=(variant,budget,query)"
+        for row in rows:
+            maybe = str(row.get("safety_count_granularity", "")).strip()
+            if maybe:
+                granularity = maybe
+                break
         agg: dict[str, Any] = {
             "budget_key": key,
             "budget_seconds": float(budget.max_total_s),
@@ -434,6 +601,7 @@ def main() -> int:
             "num_uids": len(selected_uids),
             "runs_total": len(rows),
             "runs_ok": sum(1 for r in rows if int(r.get("returncode", 1)) == 0),
+            "safety_count_granularity": granularity,
         }
         numeric_keys = [
             "nlq_full_hit_at_k_strict",
@@ -441,7 +609,15 @@ def main() -> int:
             "nlq_full_top1_in_distractor_rate",
             "nlq_full_fp_rate",
             "nlq_full_mrr",
-            "safety_critical_fn_rate_full",
+            "safety_critical_fn_denominator",
+            "safety_critical_fn_count",
+            "safety_critical_fn_rate",
+            "safety_reason_budget_insufficient_rate",
+            "safety_reason_evidence_missing_rate",
+            "safety_reason_constraints_over_filtered_rate",
+            "safety_reason_retrieval_distractor_rate",
+            "safety_reason_other_rate",
+            "safety_budget_insufficient_share",
         ]
         for nk in numeric_keys:
             vals = [float(r[nk]) for r in rows if isinstance(r.get(nk), (int, float))]
@@ -479,6 +655,12 @@ def main() -> int:
             "metrics_by_budget_csv": str(metrics_csv),
             "metrics_by_budget_md": str(metrics_md),
             "figures": figure_paths,
+            "safety_figures": [
+                x
+                for x in figure_paths
+                if "fig_nlq_critical_fn_rate_vs_budget_seconds" in x
+                or "fig_nlq_failure_attribution_vs_budget_seconds" in x
+            ],
         },
     }
     snapshot_path = out_dir / "snapshot.json"
@@ -494,4 +676,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

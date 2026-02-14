@@ -314,6 +314,87 @@ def _make_figures(
     return figure_paths
 
 
+def _make_nlq_safety_figures(
+    *,
+    panel_rows: list[dict[str, Any]],
+    out_dir: Path,
+    label_a: str,
+    label_b: str,
+    with_figs: bool,
+    formats: list[str],
+) -> list[str]:
+    if not with_figs:
+        return []
+    import matplotlib.pyplot as plt
+
+    rows = sorted(
+        [r for r in panel_rows if str(r.get("task")) == "nlq"],
+        key=lambda x: float(x.get("budget_seconds", 0.0)),
+    )
+    if not rows:
+        return []
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    xs = [float(_to_float(r.get("budget_seconds")) or 0.0) for r in rows]
+    y_crit_a = [float(_to_float(r.get("safety_critical_fn_rate_a")) or 0.0) for r in rows]
+    y_crit_b = [float(_to_float(r.get("safety_critical_fn_rate_b")) or 0.0) for r in rows]
+    y_bi_a = [float(_to_float(r.get("safety_reason_budget_insufficient_rate_a")) or 0.0) for r in rows]
+    y_bi_b = [float(_to_float(r.get("safety_reason_budget_insufficient_rate_b")) or 0.0) for r in rows]
+    y_other_a = [
+        float(_to_float(r.get("safety_reason_evidence_missing_rate_a")) or 0.0)
+        + float(_to_float(r.get("safety_reason_constraints_over_filtered_rate_a")) or 0.0)
+        + float(_to_float(r.get("safety_reason_retrieval_distractor_rate_a")) or 0.0)
+        + float(_to_float(r.get("safety_reason_other_rate_a")) or 0.0)
+        for r in rows
+    ]
+    y_other_b = [
+        float(_to_float(r.get("safety_reason_evidence_missing_rate_b")) or 0.0)
+        + float(_to_float(r.get("safety_reason_constraints_over_filtered_rate_b")) or 0.0)
+        + float(_to_float(r.get("safety_reason_retrieval_distractor_rate_b")) or 0.0)
+        + float(_to_float(r.get("safety_reason_other_rate_b")) or 0.0)
+        for r in rows
+    ]
+
+    out_paths: list[str] = []
+    p1 = out_dir / "fig_nlq_critical_fn_rate_vs_seconds"
+    plt.figure(figsize=(7.4, 4.2))
+    plt.plot(xs, y_crit_a, marker="o", linestyle="-", label=f"{label_a}")
+    plt.plot(xs, y_crit_b, marker="o", linestyle="--", label=f"{label_b}")
+    plt.xlabel("Budget Seconds")
+    plt.ylabel("safety_critical_fn_rate")
+    plt.title("NLQ Critical FN Rate vs Budget Seconds")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = p1.with_suffix(f".{ext}")
+        plt.savefig(p)
+        out_paths.append(str(p))
+    plt.close()
+
+    p2 = out_dir / "fig_nlq_failure_attribution_vs_seconds"
+    plt.figure(figsize=(8.0, 4.4))
+    width = 1.8
+    x_left = [x - width * 0.3 for x in xs]
+    x_right = [x + width * 0.3 for x in xs]
+    plt.bar(x_left, y_bi_a, width=width * 0.6, label=f"{label_a}: budget_insufficient")
+    plt.bar(x_left, y_other_a, width=width * 0.6, bottom=y_bi_a, label=f"{label_a}: other_reasons")
+    plt.bar(x_right, y_bi_b, width=width * 0.6, label=f"{label_b}: budget_insufficient")
+    plt.bar(x_right, y_other_b, width=width * 0.6, bottom=y_bi_b, label=f"{label_b}: other_reasons")
+    plt.xlabel("Budget Seconds")
+    plt.ylabel("Failure Attribution Rate")
+    plt.title("NLQ Failure Attribution vs Budget Seconds")
+    plt.grid(True, axis="y", alpha=0.3)
+    plt.legend(fontsize=8, ncol=2)
+    plt.tight_layout()
+    for ext in formats:
+        p = p2.with_suffix(f".{ext}")
+        plt.savefig(p)
+        out_paths.append(str(p))
+    plt.close()
+    return out_paths
+
+
 def main() -> int:
     args = parse_args()
     compare_dir = Path(args.compare_dir)
@@ -354,6 +435,18 @@ def main() -> int:
     panel_rows: list[dict[str, Any]] = []
     missing_tasks: list[str] = []
     chosen_primary: dict[str, str] = {}
+    safety_fields = [
+        "safety_critical_fn_denominator",
+        "safety_critical_fn_count",
+        "safety_critical_fn_rate",
+        "safety_reason_budget_insufficient_rate",
+        "safety_reason_evidence_missing_rate",
+        "safety_reason_constraints_over_filtered_rate",
+        "safety_reason_retrieval_distractor_rate",
+        "safety_reason_other_rate",
+        "safety_budget_insufficient_share",
+    ]
+    safety_present = False
     for task, paths in task_sources.items():
         rows_a = _read_csv(Path(paths[args.label_a]))
         rows_b = _read_csv(Path(paths[args.label_b]))
@@ -388,6 +481,13 @@ def main() -> int:
             for fld in ("e2e_ms_p50", "e2e_ms_p95", "retrieval_ms_p50", "retrieval_ms_p95"):
                 row[f"{fld}_a"] = _to_float(ra.get(fld))
                 row[f"{fld}_b"] = _to_float(rb.get(fld))
+            row["safety_count_granularity_a"] = str(ra.get("safety_count_granularity", "")) if ra else ""
+            row["safety_count_granularity_b"] = str(rb.get("safety_count_granularity", "")) if rb else ""
+            for sf in safety_fields:
+                row[f"{sf}_a"] = _to_float(ra.get(sf))
+                row[f"{sf}_b"] = _to_float(rb.get(sf))
+                if task == "nlq" and (row[f"{sf}_a"] is not None or row[f"{sf}_b"] is not None):
+                    safety_present = True
             panel_rows.append(row)
 
     panel_rows.sort(key=lambda r: (str(r.get("task", "")), float(_to_float(r.get("budget_seconds")) or 0.0), str(r.get("budget_key", ""))))
@@ -421,6 +521,26 @@ def main() -> int:
         "retrieval_ms_p50_b",
         "retrieval_ms_p95_a",
         "retrieval_ms_p95_b",
+        "safety_count_granularity_a",
+        "safety_count_granularity_b",
+        "safety_critical_fn_denominator_a",
+        "safety_critical_fn_denominator_b",
+        "safety_critical_fn_count_a",
+        "safety_critical_fn_count_b",
+        "safety_critical_fn_rate_a",
+        "safety_critical_fn_rate_b",
+        "safety_reason_budget_insufficient_rate_a",
+        "safety_reason_budget_insufficient_rate_b",
+        "safety_reason_evidence_missing_rate_a",
+        "safety_reason_evidence_missing_rate_b",
+        "safety_reason_constraints_over_filtered_rate_a",
+        "safety_reason_constraints_over_filtered_rate_b",
+        "safety_reason_retrieval_distractor_rate_a",
+        "safety_reason_retrieval_distractor_rate_b",
+        "safety_reason_other_rate_a",
+        "safety_reason_other_rate_b",
+        "safety_budget_insufficient_share_a",
+        "safety_budget_insufficient_share_b",
     ]
     delta_cols = ["task", "budget_key", "budget_seconds", "primary_metric", "delta_primary"]
 
@@ -462,8 +582,25 @@ def main() -> int:
         formats=formats,
         recommend_points=recommend_points,
     )
+    safety_figure_paths = _make_nlq_safety_figures(
+        panel_rows=panel_rows,
+        out_dir=figures_dir,
+        label_a=str(args.label_a),
+        label_b=str(args.label_b),
+        with_figs=bool(args.with_figs) and bool(safety_present),
+        formats=formats,
+    )
+    figure_paths = list(figure_paths) + list(safety_figure_paths)
 
     report_path = out_dir / "report.md"
+    if safety_present:
+        safety_line = (
+            "- NLQ safety metrics detected: denominator uses `safety_count_granularity`; "
+            "failure attribution uses budget_insufficient/evidence_missing/constraints_over_filtered/"
+            "retrieval_distractor, remaining reasons are merged into `other`."
+        )
+    else:
+        safety_line = "- NLQ safety metrics missing."
     report_lines = [
         "# Paper-ready Unified Budget Panel",
         "",
@@ -472,6 +609,7 @@ def main() -> int:
         f"- missing_tasks: `{missing_tasks}`",
         f"- primary_metrics: `{json.dumps(chosen_primary, ensure_ascii=False, sort_keys=True)}`",
         f"- recommend_points: `{json.dumps(recommend_points, ensure_ascii=False, sort_keys=True)}`",
+        safety_line,
         "",
         "## Artifacts",
         "",
@@ -505,6 +643,7 @@ def main() -> int:
             "table_budget_panel_delta_csv": str(delta_csv),
             "table_budget_panel_delta_md": str(delta_md),
             "figures": figure_paths,
+            "safety_figures": safety_figure_paths,
             "report_md": str(report_path),
         },
     }

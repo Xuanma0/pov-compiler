@@ -29,15 +29,59 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     _write_csv(
         compare_dir / "nlq_budget" / "stub" / "aggregate" / "metrics_by_budget.csv",
         [
-            {"budget_key": "20/50/4", "budget_seconds": 20, "nlq_full_hit_at_k_strict": 0.4},
-            {"budget_key": "40/100/8", "budget_seconds": 40, "nlq_full_hit_at_k_strict": 0.6},
+            {
+                "budget_key": "20/50/4",
+                "budget_seconds": 20,
+                "nlq_full_hit_at_k_strict": 0.4,
+                "safety_count_granularity": "row=(variant,budget,query)",
+                "safety_critical_fn_rate": 0.30,
+                "safety_reason_budget_insufficient_rate": 0.15,
+                "safety_reason_evidence_missing_rate": 0.05,
+                "safety_reason_constraints_over_filtered_rate": 0.04,
+                "safety_reason_retrieval_distractor_rate": 0.03,
+                "safety_reason_other_rate": 0.03,
+            },
+            {
+                "budget_key": "40/100/8",
+                "budget_seconds": 40,
+                "nlq_full_hit_at_k_strict": 0.6,
+                "safety_count_granularity": "row=(variant,budget,query)",
+                "safety_critical_fn_rate": 0.20,
+                "safety_reason_budget_insufficient_rate": 0.08,
+                "safety_reason_evidence_missing_rate": 0.04,
+                "safety_reason_constraints_over_filtered_rate": 0.03,
+                "safety_reason_retrieval_distractor_rate": 0.03,
+                "safety_reason_other_rate": 0.02,
+            },
         ],
     )
     _write_csv(
         compare_dir / "nlq_budget" / "real" / "aggregate" / "metrics_by_budget.csv",
         [
-            {"budget_key": "20/50/4", "budget_seconds": 20, "nlq_full_hit_at_k_strict": 0.45},
-            {"budget_key": "40/100/8", "budget_seconds": 40, "nlq_full_hit_at_k_strict": 0.67},
+            {
+                "budget_key": "20/50/4",
+                "budget_seconds": 20,
+                "nlq_full_hit_at_k_strict": 0.45,
+                "safety_count_granularity": "row=(variant,budget,query)",
+                "safety_critical_fn_rate": 0.27,
+                "safety_reason_budget_insufficient_rate": 0.12,
+                "safety_reason_evidence_missing_rate": 0.05,
+                "safety_reason_constraints_over_filtered_rate": 0.05,
+                "safety_reason_retrieval_distractor_rate": 0.03,
+                "safety_reason_other_rate": 0.02,
+            },
+            {
+                "budget_key": "40/100/8",
+                "budget_seconds": 40,
+                "nlq_full_hit_at_k_strict": 0.67,
+                "safety_count_granularity": "row=(variant,budget,query)",
+                "safety_critical_fn_rate": 0.15,
+                "safety_reason_budget_insufficient_rate": 0.06,
+                "safety_reason_evidence_missing_rate": 0.03,
+                "safety_reason_constraints_over_filtered_rate": 0.03,
+                "safety_reason_retrieval_distractor_rate": 0.02,
+                "safety_reason_other_rate": 0.01,
+            },
         ],
     )
     # Streaming stub/real
@@ -98,6 +142,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_budget_primary_vs_seconds_panel.png").exists()
     assert (out_dir / "figures" / "fig_budget_primary_delta_vs_seconds_panel.png").exists()
     assert (out_dir / "figures" / "fig_budget_latency_vs_seconds_streaming.png").exists()
+    assert (out_dir / "figures" / "fig_nlq_critical_fn_rate_vs_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_nlq_failure_attribution_vs_seconds.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header
@@ -105,3 +151,4 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "primary_a" in header
     assert "primary_b" in header
     assert "delta_primary" in header
+    assert "safety_critical_fn_rate_a" in header

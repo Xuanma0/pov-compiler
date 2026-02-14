@@ -33,7 +33,11 @@ def parse_args() -> argparse.Namespace:
     _parse_bool_with_neg(parser, "with-eval", default=False)
     _parse_bool_with_neg(parser, "with-nlq", default=False)
     parser.add_argument("--nlq-mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "ego4d"], default="hard_pseudo_nlq")
-    _parse_bool_with_neg(parser, "with-nlq-budget-sweep", default=False)
+    nlq_budget_group = parser.add_mutually_exclusive_group()
+    nlq_budget_group.add_argument("--with-nlq-budget-sweep", dest="with_nlq_budget_sweep", action="store_true")
+    nlq_budget_group.add_argument("--no-with-nlq-budget-sweep", dest="with_nlq_budget_sweep", action="store_false")
+    # If unspecified, auto-follow --with-nlq.
+    parser.set_defaults(with_nlq_budget_sweep=None)
     parser.add_argument("--nlq-budgets", default="20/50/4,40/100/8,60/200/12")
     _parse_bool_with_neg(parser, "with-streaming-budget", default=True)
     parser.add_argument("--streaming-step-s", type=float, default=8.0)
@@ -297,6 +301,10 @@ def _write_compare_readme(
             f"- panel table: `{out_dir / 'compare' / 'paper_ready' / 'tables' / 'table_budget_panel.md'}`",
             f"- delta table: `{out_dir / 'compare' / 'paper_ready' / 'tables' / 'table_budget_panel_delta.md'}`",
             f"- primary curves: `{out_dir / 'compare' / 'paper_ready' / 'figures' / 'fig_budget_primary_vs_seconds_panel.png'}`",
+            f"- NLQ safety curve: `{out_dir / 'compare' / 'nlq_budget' / 'real' / 'figures' / 'fig_nlq_critical_fn_rate_vs_budget_seconds.png'}`",
+            f"- paper safety curve: `{out_dir / 'compare' / 'paper_ready' / 'figures' / 'fig_nlq_critical_fn_rate_vs_seconds.png'}`",
+            "- nlq_budget now includes safety aggregation and failure attribution figures.",
+            "- paper_ready auto carries NLQ safety curves when safety columns are present.",
         ]
     )
     (out_dir / "compare" / "README.md").write_text("\n".join(lines), encoding="utf-8")
@@ -304,6 +312,7 @@ def _write_compare_readme(
 
 def main() -> int:
     args = parse_args()
+    run_nlq_budget_sweep = bool(args.with_nlq_budget_sweep) if args.with_nlq_budget_sweep is not None else bool(args.with_nlq)
     out_dir = Path(args.out_dir)
     run_stub = out_dir / "run_stub"
     run_real = out_dir / "run_real"
@@ -529,7 +538,7 @@ def main() -> int:
         bye_budget_cmds.append(bye_budget_compare_cmd)
 
     nlq_budget_cmds: list[list[str]] = []
-    if args.with_nlq_budget_sweep:
+    if run_nlq_budget_sweep:
         nlq_sweep_script = ROOT / "scripts" / "sweep_nlq_budgets.py"
         common = [
             "--uids-file",
@@ -628,7 +637,7 @@ def main() -> int:
 
     budget_recommend_cmds: list[list[str]] = []
     if args.with_budget_recommend:
-        if not args.with_bye_budget_sweep or not args.with_nlq_budget_sweep:
+        if not args.with_bye_budget_sweep or not run_nlq_budget_sweep:
             print("error=--with-budget-recommend requires --with-bye-budget-sweep and --with-nlq-budget-sweep")
             return 6
         recommend_script = ROOT / "scripts" / "recommend_budget.py"
@@ -797,7 +806,7 @@ def main() -> int:
                 print(f"budgets_matched={payload.get('budgets_matched')}")
             except Exception:
                 pass
-    if args.with_nlq_budget_sweep:
+    if run_nlq_budget_sweep:
         print(f"nlq_budget_stub_saved={compare_nlq_budget_stub}")
         print(f"nlq_budget_real_saved={compare_nlq_budget_real}")
     if args.with_streaming_budget:

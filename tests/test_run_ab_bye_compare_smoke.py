@@ -165,6 +165,8 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "bye_budget" / "compare" / "figures" / "fig_bye_primary_delta_vs_budget_seconds.png").exists()
     assert (compare_dir / "nlq_budget" / "stub" / "aggregate" / "metrics_by_budget.csv").exists()
     assert (compare_dir / "nlq_budget" / "real" / "aggregate" / "metrics_by_budget.csv").exists()
+    assert (compare_dir / "nlq_budget" / "stub" / "figures" / "fig_nlq_critical_fn_rate_vs_budget_seconds.png").exists()
+    assert (compare_dir / "nlq_budget" / "real" / "figures" / "fig_nlq_critical_fn_rate_vs_budget_seconds.png").exists()
     assert (compare_dir / "streaming_budget" / "stub" / "aggregate" / "metrics_by_budget.csv").exists()
     assert (compare_dir / "streaming_budget" / "real" / "aggregate" / "metrics_by_budget.csv").exists()
     assert (compare_dir / "budget_recommend" / "stub" / "tables" / "table_budget_recommend.csv").exists()
@@ -173,6 +175,7 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "paper_ready" / "tables" / "table_budget_panel_delta.csv").exists()
     assert (compare_dir / "paper_ready" / "report.md").exists()
     assert (compare_dir / "paper_ready" / "snapshot.json").exists()
+    assert (compare_dir / "paper_ready" / "figures" / "fig_nlq_critical_fn_rate_vs_seconds.png").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
 
