@@ -41,6 +41,7 @@ def trace_query(
     hard_constraints_cfg: HardConstraintConfig | dict[str, Any] | str | Path | None = None,
     rerank_cfg: WeightConfig | dict[str, Any] | str | Path | None = None,
     top_k: int = 6,
+    enable_constraints: bool = True,
 ) -> dict[str, Any]:
     output = ensure_events_v1(_as_output(output_json))
     retriever = Retriever(output_json=output, index=index_prefix, config=dict(retrieval_config or {}))
@@ -49,12 +50,24 @@ def trace_query(
     candidate_queries = [str(c["query"]) for c in candidates]
     raw_hits = retriever.retrieve_multi(candidate_queries)
 
-    constraint_result = apply_constraints_detailed(
-        hits=raw_hits,
-        query_plan=plan,
-        cfg=hard_constraints_cfg,
-        output=output,
-    )
+    if bool(enable_constraints):
+        constraint_result = apply_constraints_detailed(
+            hits=raw_hits,
+            query_plan=plan,
+            cfg=hard_constraints_cfg,
+            output=output,
+        )
+    else:
+        from pov_compiler.retrieval.constraints import ConstraintApplyResult
+
+        constraint_result = ConstraintApplyResult(
+            hits=list(raw_hits),
+            applied=[],
+            relaxed=[],
+            used_fallback=False,
+            filtered_before=len(raw_hits),
+            filtered_after=len(raw_hits),
+        )
     weights = resolve_weight_config(rerank_cfg)
     reranked_hits = rerank(
         constraint_result.hits,
@@ -162,6 +175,7 @@ def trace_query(
             "debug": dict(plan.debug),
         },
         "constraint_trace": {
+            "enable_constraints": bool(enable_constraints),
             "applied_constraints": list(constraint_result.applied),
             "constraints_relaxed": list(constraint_result.relaxed),
             "filtered_hits_before": int(constraint_result.filtered_before),

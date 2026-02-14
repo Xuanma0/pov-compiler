@@ -37,6 +37,12 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- chosen_plan_intent: {plan.get('intent', '')}")
     lines.append(f"- rerank_cfg_hash: {trace.get('rerank_cfg_hash', '')}")
     lines.append(f"- top1_kind: {trace.get('top1_kind', '')}")
+    lines.append(f"- parsed_constraints: `{json.dumps(plan.get('constraints', {}), ensure_ascii=False, sort_keys=True)}`")
+    lines.append(f"- enable_constraints: {str(bool(ctrace.get('enable_constraints', True))).lower()}")
+    lines.append(f"- applied_constraints: {ctrace.get('applied_constraints', [])}")
+    lines.append(f"- filtered_hits_before: {int(ctrace.get('filtered_hits_before', 0))}")
+    lines.append(f"- filtered_hits_after: {int(ctrace.get('filtered_hits_after', 0))}")
+    lines.append(f"- relax_steps: {ctrace.get('constraints_relaxed', [])}")
     lines.append("")
     lines.append("## Plan")
     lines.append("")
@@ -140,6 +146,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out_dir", required=True, help="Output directory")
     parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"), help="Config path")
     parser.add_argument("--top-k", type=int, default=6, help="Top-k hits")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--enable-constraints", dest="enable_constraints", action="store_true")
+    group.add_argument("--no-enable-constraints", dest="enable_constraints", action="store_false")
+    parser.set_defaults(enable_constraints=True)
     return parser.parse_args()
 
 
@@ -158,6 +168,7 @@ def main() -> int:
         hard_constraints_cfg=hard_cfg,
         rerank_cfg=rerank_cfg,
         top_k=int(args.top_k),
+        enable_constraints=bool(args.enable_constraints),
     )
 
     out_dir = Path(args.out_dir)
@@ -170,9 +181,11 @@ def main() -> int:
     print(f"video_id={trace.get('video_id', '')}")
     print(f"query={trace.get('query', '')}")
     print(f"chosen_plan_intent={trace.get('plan', {}).get('intent', '')}")
+    print(f"parsed_constraints={trace.get('plan', {}).get('constraints', {})}")
     print(f"applied_constraints={trace.get('constraint_trace', {}).get('applied_constraints', [])}")
     print(f"filtered_hits_before={trace.get('constraint_trace', {}).get('filtered_hits_before', 0)}")
     print(f"filtered_hits_after={trace.get('constraint_trace', {}).get('filtered_hits_after', 0)}")
+    print(f"relax_steps={trace.get('constraint_trace', {}).get('constraints_relaxed', [])}")
     print(f"top1_kind={trace.get('top1_kind', '')}")
     print(f"saved_report={report_md}")
     print(f"saved_trace={trace_json}")

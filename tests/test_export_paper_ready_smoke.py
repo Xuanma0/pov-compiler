@@ -147,6 +147,24 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "stream_intervention_sweep" / "figures" / "fig_objective_vs_latency.pdf").write_bytes(b"PDF")
     (compare_dir / "stream_intervention_sweep" / "figures" / "fig_pareto_frontier.png").write_bytes(b"PNG")
     (compare_dir / "stream_intervention_sweep" / "figures" / "fig_pareto_frontier.pdf").write_bytes(b"PDF")
+    # Optional streaming codec sweep input.
+    (compare_dir / "stream_codec_sweep" / "aggregate").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_codec_sweep" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_codec_sweep" / "aggregate" / "metrics_by_k.csv").write_text(
+        "codec_k,hit_at_k_strict,objective_combo\n4,0.55,0.40\n8,0.61,0.47\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_codec_sweep" / "aggregate" / "metrics_by_k.md").write_text("# codec\n", encoding="utf-8")
+    (compare_dir / "stream_codec_sweep" / "snapshot.json").write_text(
+        json.dumps({"k_list": [4, 8], "policy": "safety_latency_intervention"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_codec_sweep" / "figures" / "fig_streaming_quality_vs_k.png").write_bytes(b"PNG")
+    (compare_dir / "stream_codec_sweep" / "figures" / "fig_streaming_quality_vs_k.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_codec_sweep" / "figures" / "fig_streaming_safety_vs_k.png").write_bytes(b"PNG")
+    (compare_dir / "stream_codec_sweep" / "figures" / "fig_streaming_safety_vs_k.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_codec_sweep" / "figures" / "fig_streaming_latency_vs_k.png").write_bytes(b"PNG")
+    (compare_dir / "stream_codec_sweep" / "figures" / "fig_streaming_latency_vs_k.pdf").write_bytes(b"PDF")
     # Optional reranker sweep input.
     (compare_dir / "reranker_sweep" / "aggregate").mkdir(parents=True, exist_ok=True)
     (compare_dir / "reranker_sweep" / "figures").mkdir(parents=True, exist_ok=True)
@@ -180,6 +198,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "stream_policy_cmp"),
         "--streaming-intervention-sweep-dir",
         str(compare_dir / "stream_intervention_sweep"),
+        "--streaming-codec-sweep-dir",
+        str(compare_dir / "stream_codec_sweep"),
         "--reranker-sweep-dir",
         str(compare_dir / "reranker_sweep"),
     ]
@@ -213,6 +233,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "streaming_intervention_sweep" / "best_report.md").exists()
     assert (out_dir / "figures" / "fig_objective_vs_latency.png").exists()
     assert (out_dir / "figures" / "fig_pareto_frontier.png").exists()
+    assert (out_dir / "streaming_codec_sweep" / "metrics_by_k.csv").exists()
+    assert (out_dir / "figures" / "fig_streaming_quality_vs_k.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_safety_vs_k.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_latency_vs_k.png").exists()
     assert (out_dir / "reranker_sweep" / "metrics_by_weights.csv").exists()
     assert (out_dir / "reranker_sweep" / "best_weights.yaml").exists()
     assert (out_dir / "figures" / "fig_objective_vs_weights_id.png").exists()

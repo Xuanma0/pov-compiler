@@ -30,6 +30,7 @@ from pov_compiler.streaming.budget_policy import (
     SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
 )
+from pov_compiler.streaming.codec import build_streaming_codec
 from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 from pov_compiler.streaming.interventions import (
     InterventionState,
@@ -415,6 +416,9 @@ class StreamingConfig:
     deescalate_on_latency: bool = True
     stop_on_non_budget_failure: bool = True
     intervention_cfg: InterventionConfig | dict[str, Any] | str | Path | None = None
+    codec_name: str = "all_events"
+    codec_k: int = 16
+    codec_cfg: dict[str, Any] | str | Path | None = None
     mode: str = "basic"
 
 
@@ -444,6 +448,9 @@ def _run_streaming_basic(output: Output, cfg: StreamingConfig) -> dict[str, Any]
     max_evidence = max((len(ev.evidence) for ev in output.events_v1), default=1)
     event_index = VectorIndex()
     indexed_ids: set[str] = set()
+    seen_place_segments: set[str] = set()
+    codec_name = str(cfg.codec_name or "all_events").strip().lower()
+    codec = build_streaming_codec(name=codec_name, k=max(1, int(cfg.codec_k)), codec_cfg=cfg.codec_cfg)
     step_s = max(0.5, float(cfg.step_s))
     step_points = _make_step_points(duration_s, step_s)
 
@@ -456,25 +463,39 @@ def _run_streaming_basic(output: Output, cfg: StreamingConfig) -> dict[str, Any]
     prev_t = 0.0
     for step_idx, end_t in enumerate(step_points, start=1):
         step_start = time.perf_counter()
+        step_candidates = [event for event in output.events_v1 if event.id not in indexed_ids and float(event.t1) <= float(end_t)]
+        candidate_count = int(len(step_candidates))
+        encoded_items = codec.encode_step(step_candidates, step_meta={"seen_place_segments": sorted(seen_place_segments)})
+        item_map = {str(item.source_id): item for item in encoded_items}
+        selected_ids = [str(item.source_id) for item in encoded_items]
         added_this_step = 0
-        for event in output.events_v1:
-            if event.id in indexed_ids:
+        selected_scores: list[float] = []
+        for event in step_candidates:
+            if str(event.id) not in selected_ids:
                 continue
-            if float(event.t1) <= float(end_t):
-                event_index.add(
-                    item_id=event.id,
-                    vec=_event_vec(event, duration_s=max(duration_s, 1.0), max_evidence=max_evidence),
-                    meta={
-                        "kind": "event_v1",
-                        "id": event.id,
-                        "t0": float(event.t0),
-                        "t1": float(event.t1),
-                        "label": str(event.label),
-                        "source_event": str(event.meta.get("source_event_id", event.id)),
-                    },
-                )
-                indexed_ids.add(event.id)
-                added_this_step += 1
+            item = item_map.get(str(event.id))
+            event_index.add(
+                item_id=event.id,
+                vec=_event_vec(event, duration_s=max(duration_s, 1.0), max_evidence=max_evidence),
+                meta={
+                    "kind": "event_v1",
+                    "id": event.id,
+                    "t0": float(event.t0),
+                    "t1": float(event.t1),
+                    "label": str(event.label),
+                    "source_event": str(event.meta.get("source_event_id", event.id)),
+                    "codec_name": codec_name,
+                    "codec_k": int(cfg.codec_k),
+                    "codec_score": float(item.score if item is not None else 1.0),
+                    "codec_score_breakdown": dict(item.score_breakdown) if item is not None else {"base": 1.0},
+                },
+            )
+            indexed_ids.add(event.id)
+            place_id = str(getattr(event, "place_segment_id", "") or "").strip()
+            if place_id:
+                seen_place_segments.add(place_id)
+            selected_scores.append(float(item.score if item is not None else 1.0))
+            added_this_step += 1
 
         window_output = _slice_output(output, end_t=end_t)
         retriever = Retriever(output_json=window_output, index=event_index, config=dict(cfg.retrieval_config or {}))
@@ -509,6 +530,8 @@ def _run_streaming_basic(output: Output, cfg: StreamingConfig) -> dict[str, Any]
                     "selected_highlights": int(len(result.get("selected_highlights", []))),
                     "selected_tokens": int(len(result.get("selected_tokens", []))),
                     "selected_decisions": int(len(result.get("selected_decisions", []))),
+                    "codec_name": codec_name,
+                    "codec_k": int(cfg.codec_k),
                 }
             )
 
@@ -534,6 +557,11 @@ def _run_streaming_basic(output: Output, cfg: StreamingConfig) -> dict[str, Any]
                 "policy_name": "none",
                 "chosen_budget_key_mode": "none",
                 "avg_trials_per_query": 1.0 if step_query_latencies else 0.0,
+                "codec_name": codec_name,
+                "codec_k": int(cfg.codec_k),
+                "candidates_in_step": int(candidate_count),
+                "items_written": int(added_this_step),
+                "mean_item_score": _mean(selected_scores),
             }
         )
         progressive_rows.append(
@@ -565,6 +593,8 @@ def _run_streaming_basic(output: Output, cfg: StreamingConfig) -> dict[str, Any]
         else 0.0,
         "policy_name": "none",
         "avg_trials_per_query": 1.0 if query_rows else 0.0,
+        "codec_name": codec_name,
+        "codec_k": int(cfg.codec_k),
     }
     return {"summary": summary, "step_rows": step_rows, "query_rows": query_rows, "progressive_rows": progressive_rows}
 
@@ -626,6 +656,9 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
     max_evidence = max((len(ev.evidence) for ev in output.events_v1), default=1)
     event_index = VectorIndex()
     indexed_ids: set[str] = set()
+    seen_place_segments: set[str] = set()
+    codec_name = str(cfg.codec_name or "all_events").strip().lower()
+    codec = build_streaming_codec(name=codec_name, k=max(1, int(cfg.codec_k)), codec_cfg=cfg.codec_cfg)
     step_s = max(0.5, float(cfg.step_s))
     step_points = _make_step_points(duration_s, step_s)
 
@@ -663,25 +696,39 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
     prev_t = 0.0
     for step_idx, end_t in enumerate(step_points, start=1):
         step_start = time.perf_counter()
+        step_candidates = [event for event in output.events_v1 if event.id not in indexed_ids and float(event.t1) <= float(end_t)]
+        candidate_count = int(len(step_candidates))
+        encoded_items = codec.encode_step(step_candidates, step_meta={"seen_place_segments": sorted(seen_place_segments)})
+        item_map = {str(item.source_id): item for item in encoded_items}
+        selected_ids = {str(item.source_id) for item in encoded_items}
         added_this_step = 0
-        for event in output.events_v1:
-            if event.id in indexed_ids:
+        selected_scores: list[float] = []
+        for event in step_candidates:
+            if str(event.id) not in selected_ids:
                 continue
-            if float(event.t1) <= float(end_t):
-                event_index.add(
-                    item_id=event.id,
-                    vec=_event_vec(event, duration_s=max(duration_s, 1.0), max_evidence=max_evidence),
-                    meta={
-                        "kind": "event_v1",
-                        "id": event.id,
-                        "t0": float(event.t0),
-                        "t1": float(event.t1),
-                        "label": str(event.label),
-                        "source_event": str(event.meta.get("source_event_id", event.id)),
-                    },
-                )
-                indexed_ids.add(event.id)
-                added_this_step += 1
+            item = item_map.get(str(event.id))
+            event_index.add(
+                item_id=event.id,
+                vec=_event_vec(event, duration_s=max(duration_s, 1.0), max_evidence=max_evidence),
+                meta={
+                    "kind": "event_v1",
+                    "id": event.id,
+                    "t0": float(event.t0),
+                    "t1": float(event.t1),
+                    "label": str(event.label),
+                    "source_event": str(event.meta.get("source_event_id", event.id)),
+                    "codec_name": codec_name,
+                    "codec_k": int(cfg.codec_k),
+                    "codec_score": float(item.score if item is not None else 1.0),
+                    "codec_score_breakdown": dict(item.score_breakdown) if item is not None else {"base": 1.0},
+                },
+            )
+            indexed_ids.add(event.id)
+            place_id = str(getattr(event, "place_segment_id", "") or "").strip()
+            if place_id:
+                seen_place_segments.add(place_id)
+            selected_scores.append(float(item.score if item is not None else 1.0))
+            added_this_step += 1
 
         window_output = _slice_output(output, end_t=end_t)
         budgeted_cache: dict[str, Output] = {}
@@ -953,6 +1000,8 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "final_trial_idx": int(final_trial_idx),
                     "final_action": str(selection.action),
                     "final_budget": str(selection.chosen_budget_key),
+                    "codec_name": codec_name,
+                    "codec_k": int(cfg.codec_k),
                     "final_success": (
                         int(
                             trial.get(
@@ -1001,6 +1050,11 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                 "chosen_budget_key_mode": str(policy_name),
                 "avg_trials_per_query": _mean([float(x["trial_count_for_query"]) for x in final_rows]),
                 "avg_trials_per_query_step": _mean([float(x["trial_count_for_query"]) for x in final_rows]),
+                "codec_name": codec_name,
+                "codec_k": int(cfg.codec_k),
+                "candidates_in_step": int(candidate_count),
+                "items_written": int(added_this_step),
+                "mean_item_score": _mean(selected_scores),
                 "hit_at_k_strict": _mean([float(x["hit_at_k_strict"]) for x in metric_rows]),
                 "hit_at_1_strict": _mean([float(x["hit_at_1_strict"]) for x in metric_rows]),
                 "top1_in_distractor_rate": _mean([float(x["top1_in_distractor_rate"]) for x in metric_rows]),
@@ -1085,6 +1139,8 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "intervention_cfg": intervention_cfg.to_dict() if policy_name == "safety_latency_intervention" else {},
         "strict_threshold": float(cfg.strict_threshold),
         "max_top1_in_distractor_rate": float(cfg.max_top1_in_distractor_rate),
+        "codec_name": codec_name,
+        "codec_k": int(cfg.codec_k),
     }
     return {"summary": summary, "step_rows": step_rows, "query_rows": query_rows, "progressive_rows": progressive_rows}
 

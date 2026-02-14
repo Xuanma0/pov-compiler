@@ -7,6 +7,12 @@ from pov_compiler.streaming.budget_policy import (
     SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
 )
+from pov_compiler.streaming.codec import (
+    AllEventsStreamingCodec,
+    FixedKStreamingCodec,
+    MemoryItem,
+    build_streaming_codec,
+)
 from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 from pov_compiler.streaming.interventions import (
     ACTION_ORDER_BY_ATTRIBUTION,
@@ -36,4 +42,8 @@ __all__ = [
     "choose_intervention_action",
     "apply_intervention_action",
     "policy_action_order",
+    "MemoryItem",
+    "AllEventsStreamingCodec",
+    "FixedKStreamingCodec",
+    "build_streaming_codec",
 ]

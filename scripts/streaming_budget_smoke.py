@@ -259,6 +259,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", default="hard_pseudo_nlq", help="Query mode (default hard_pseudo_nlq)")
     parser.add_argument("--query", action="append", default=[], help="Optional query text (repeatable)")
     parser.add_argument("--budgets", required=True, help='Budget list like "20/50/4,40/100/8,60/200/12"')
+    parser.add_argument("--codec-name", choices=["all_events", "fixed_k"], default="all_events")
+    parser.add_argument("--codec-k", type=int, default=16, help="K for fixed_k codec")
+    parser.add_argument("--codec-cfg", default=None, help="Optional codec cfg path (yaml/json)")
     parser.add_argument(
         "--budget-policy",
         "--policy",
@@ -330,6 +333,9 @@ def main() -> int:
             escalate_on_reasons=[str(x).strip() for x in list(args.escalate_on_reason or []) if str(x).strip()]
             or ["budget_insufficient"],
             intervention_cfg=args.intervention_cfg,
+            codec_name=str(args.codec_name),
+            codec_k=int(args.codec_k),
+            codec_cfg=args.codec_cfg,
             allow_gt_fallback=False,
             nlq_mode=str(args.mode),
             nlq_seed=int(args.seed),
@@ -367,6 +373,9 @@ def main() -> int:
             "step_s": float(args.step_s),
             "mode": str(args.mode),
             "budgets": [b.key for b in budgets],
+            "codec_name": str(args.codec_name),
+            "codec_k": int(args.codec_k),
+            "codec_cfg": str(args.codec_cfg) if args.codec_cfg else None,
             "budget_policy": str(args.budget_policy),
             "fixed_budget": str(args.fixed_budget),
             "recommend_dir": str(args.recommend_dir) if args.recommend_dir else None,
@@ -406,6 +415,8 @@ def main() -> int:
     snapshot_json.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"policy={args.budget_policy}")
+    print(f"codec_name={args.codec_name}")
+    print(f"codec_k={int(args.codec_k)}")
     print(f"budgets={len(budgets)}")
     print(f"steps={int(summary.get('steps', 0))}")
     print(f"queries_total={int(summary.get('queries_total', 0))}")

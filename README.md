@@ -105,6 +105,7 @@ docs/
 | `scripts\compare_bye_budget_sweeps.py` | Compare two BYE budget sweeps (A/B curve + delta) | `--a_dir/--a_csv --b_dir/--b_csv --out_dir --primary-metric` | `tables/table_budget_compare.*`, `figures/fig_bye_primary_*`, `compare_summary.json` |
 | `scripts\sweep_nlq_budgets.py` | NLQ hard/pseudo evaluation over explicit budget points (strict UID matching by default) | `--json_dir --index_dir --uids-file --budgets --out_dir` | `aggregate/metrics_by_budget.*`, `figures/fig_nlq_*`, `snapshot.json` |
 | `scripts\sweep_streaming_budgets.py` | Streaming online simulation budget sweep (fixed/adaptive) | `--json_dir --uids-file --budgets --out_dir --policy` | `aggregate/metrics_by_budget.*`, `figures/fig_streaming_quality_*`, `snapshot.json` |
+| `scripts\sweep_streaming_codec_k.py` | Fixed-K Streaming Codec baseline sweep (`codec=fixed_k`) with quality/safety/latency curves | `--json/--json_dir --k-list --budgets --policy --out_dir` | `aggregate/metrics_by_k.*`, `figures/fig_streaming_*_vs_k.*`, `snapshot.json` |
 | `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
 | `scripts\export_paper_ready.py` | Unified BYE/NLQ/Streaming budget panel export (paper-ready tables/figures) | `--compare_dir --out_dir --label_a --label_b [--reranker-sweep-dir]` | `tables/table_budget_panel*`, `figures/fig_budget_*`, `report.md`, `snapshot.json` |
 | `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive/safety_latency/safety_latency_intervention`) with strict+safety metrics and switch traces | `--json --out_dir --budgets --policy [--fixed-budget|--recommend-dir|--latency-cap-ms|--intervention-cfg]` | `steps.csv`, `queries.csv`, `figures/fig_policy_*`, `report.md`, `snapshot.json` |
@@ -382,5 +383,23 @@ python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid
 Smoke summary:
 
 ```text
-python scripts\place_interaction_smoke.py --json data\outputs\ego4d_ab_real_n6\json --out_dir data\outputs\place_interaction_smoke_demo --n 1 --seed 0
+python scripts\place_interaction_smoke.py --json data\outputs\ego4d_ab_real_n6\json --out_dir data\outputs\place_interaction_smoke_demo --n 1 --seed 0 --perception_dir data\outputs\ego4d_ab_real_n6\perception
 ```
+
+Notes:
+- If `interaction_score_mean` and object vocab stay `0`, it usually means perception outputs are missing or you are using stub-only inputs.
+- To enforce non-zero interaction checks, run with `--require_interaction` (the script will fail fast with a hint).
+
+## Fixed-K Streaming Codec (v1.15)
+
+Sweep constant-K memory writing baseline:
+
+```text
+python scripts\sweep_streaming_codec_k.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_codec_k_demo --k-list "4,8,16" --budgets "20/50/4,40/100/8,60/200/12" --policy safety_latency_intervention
+```
+
+Outputs:
+- `aggregate/metrics_by_k.csv`, `aggregate/metrics_by_k.md`
+- `figures/fig_streaming_quality_vs_k.*`
+- `figures/fig_streaming_safety_vs_k.*`
+- `figures/fig_streaming_latency_vs_k.*`
