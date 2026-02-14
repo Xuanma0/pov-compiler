@@ -162,6 +162,8 @@ class ContextSchema(BaseModel):
     decision_points: list[dict[str, Any]] = Field(default_factory=list)
     tokens: list[Token] = Field(default_factory=list)
     token_stats: dict[str, Any] = Field(default_factory=dict)
+    repo_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    repo_trace: dict[str, Any] = Field(default_factory=dict)
 
 
 class Output(BaseModel):
@@ -175,6 +177,7 @@ class Output(BaseModel):
     events_v1: list[EventV1] = Field(default_factory=list)
     decision_points: list[DecisionPoint] = Field(default_factory=list)
     perception: dict[str, Any] = Field(default_factory=dict)
+    repository: dict[str, Any] = Field(default_factory=dict)
     debug: dict[str, Any] = Field(
         default_factory=lambda: {
             "signals": {

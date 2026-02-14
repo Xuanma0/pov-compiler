@@ -121,6 +121,17 @@ event_v0:
   append_to_events: false
 events_v1:
   enabled: true
+repo:
+  enable: false
+  window_s: 30.0
+  min_segment_s: 5.0
+  scales:
+    event: true
+    window: true
+    segment: true
+  dedup:
+    iou_thresh: 0.6
+    keep_best_importance: true
 streaming:
   step_s: 5.0
   queries:

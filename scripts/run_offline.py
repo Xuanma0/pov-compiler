@@ -75,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--perception-fps", type=float, default=None, help="Perception sampling fps")
     parser.add_argument("--perception-max-frames", type=int, default=None, help="Perception frame cap")
+    parser.add_argument("--with-repo", action="store_true", help="Enable RepoV0 chunk write/dedup in pipeline output")
     return parser.parse_args()
 
 
@@ -106,6 +107,8 @@ def main() -> int:
         config.setdefault("perception", {})["sample_fps"] = float(args.perception_fps)
     if args.perception_max_frames is not None:
         config.setdefault("perception", {})["max_frames"] = int(args.perception_max_frames)
+    if args.with_repo:
+        config.setdefault("repo", {})["enable"] = True
     if config.get("perception", {}).get("enabled", False):
         config.setdefault("perception", {})
         if not config["perception"].get("cache_dir"):
@@ -160,6 +163,10 @@ def main() -> int:
         print(f"perception_fallback_used={str(bool(p_sum.get('fallback_used', False))).lower()}")
         if p_sum.get("fallback_reason"):
             print(f"perception_fallback_reason={p_sum.get('fallback_reason')}")
+    if isinstance(output.repository, dict) and output.repository:
+        repo_summary = output.repository.get("summary", {}) if isinstance(output.repository.get("summary", {}), dict) else {}
+        print(f"repo_chunks_before={repo_summary.get('chunks_before_dedup', 0)}")
+        print(f"repo_chunks_after={repo_summary.get('chunks_after_dedup', 0)}")
     print(f"saved={out_path}")
     return 0
 

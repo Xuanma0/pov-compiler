@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from pov_compiler.ir.events_v1 import ensure_events_v1
+from pov_compiler.repository import build_repo_chunks, deduplicate_chunks, select_chunks_for_query
+from pov_compiler.repository.schema import RepoChunk
 from pov_compiler.schemas import ContextSchema, DecisionPoint, Event, KeyClip, Output, Token
 
 
@@ -15,6 +17,9 @@ DEFAULT_BUDGET = {
     "max_tokens": 200,
     "decisions_min_gap_s": 2.0,
     "max_seconds": None,
+    "max_repo_chunks": 16,
+    "max_repo_chars": 6000,
+    "repo_strategy": "importance_greedy",
 }
 
 
@@ -361,6 +366,21 @@ def _select_decisions(
     return [_decision_summary(d) for d in selected]
 
 
+def _load_repo_chunks(output: Output) -> list[dict[str, Any]]:
+    repository = dict(output.repository or {})
+    chunks_payload = repository.get("chunks", [])
+    chunks: list[dict[str, Any]] = []
+    if isinstance(chunks_payload, list):
+        for item in chunks_payload:
+            if isinstance(item, dict):
+                chunks.append(dict(item))
+    if chunks:
+        return chunks
+    built = build_repo_chunks(output, cfg={})
+    deduped = deduplicate_chunks(built, cfg={})
+    return [_model_dump(chunk) for chunk in deduped]
+
+
 def build_context(
     output_json: str | Path | dict[str, Any] | Output,
     mode: str = "highlights",
@@ -371,8 +391,8 @@ def build_context(
     selected_decisions: list[str | dict[str, Any] | DecisionPoint] | None = None,
 ) -> dict[str, Any]:
     mode = str(mode).lower()
-    if mode not in {"timeline", "highlights", "decisions", "full"}:
-        raise ValueError("mode must be one of: timeline, highlights, decisions, full")
+    if mode not in {"timeline", "highlights", "decisions", "full", "repo_only", "events_plus_repo"}:
+        raise ValueError("mode must be one of: timeline, highlights, decisions, full, repo_only, events_plus_repo")
 
     output = ensure_events_v1(_as_output(output_json))
 
@@ -406,9 +426,11 @@ def build_context(
     if selected_decision_ids:
         decisions_pool = [decision for decision in decisions_pool if decision.id in selected_decision_ids]
 
-    if mode == "timeline":
+    core_mode = "full" if mode == "events_plus_repo" else mode
+
+    if core_mode == "timeline":
         decisions = []
-    elif mode in {"decisions", "full"} or selected_decision_ids:
+    elif core_mode in {"decisions", "full"} or selected_decision_ids:
         decisions = _select_decisions(
             decisions_pool,
             max_decisions=max_decisions,
@@ -417,9 +439,9 @@ def build_context(
     else:
         decisions = []
 
-    if mode == "timeline":
+    if core_mode == "timeline":
         highlights = []
-    elif mode == "decisions":
+    elif core_mode == "decisions":
         decision_highlight_ids = {d["source_highlight"] for d in decisions if d.get("source_highlight")}
         if decision_highlight_ids:
             highlights_source = [hl for hl in highlights_pool if hl.id in decision_highlight_ids]
@@ -449,12 +471,48 @@ def build_context(
     event_ids = {e["id"] for e in events}
     selected_tokens_final = _select_tokens(
         tokens=all_tokens,
-        mode=mode,
+        mode=core_mode,
         highlights=highlights,
         decisions=decisions,
         event_ids=event_ids,
         max_tokens=max_tokens,
     )
+
+    repo_chunks = _load_repo_chunks(output)
+    repo_models = [
+        RepoChunk.model_validate(chunk) if hasattr(RepoChunk, "model_validate") else RepoChunk.parse_obj(chunk)
+        for chunk in repo_chunks
+    ]
+    repo_selected_models = select_chunks_for_query(
+        repo_models,
+        query=str((budget or {}).get("repo_query", "")),
+        budget={
+            "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
+            "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+            "max_seconds": max_seconds,
+            "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+        },
+        cfg={"strategy": str(merged_budget.get("repo_strategy", "importance_greedy"))},
+    )
+    repo_selected = [_model_dump(chunk) for chunk in repo_selected_models]
+    repo_trace = {
+        "mode": mode,
+        "budget_used": {
+            "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
+            "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+            "max_seconds": max_seconds,
+            "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+        },
+        "repo_before": len(repo_chunks),
+        "repo_after": len(repo_selected),
+        "repo_chars_after": int(sum(len(str(c.get("text", ""))) for c in repo_selected)),
+    }
+
+    if mode == "repo_only":
+        events = []
+        highlights = []
+        decisions = []
+        selected_tokens_final = []
 
     context = ContextSchema(
         video_id=output.video_id,
@@ -479,5 +537,7 @@ def build_context(
             "by_type_before": _count_by_type(all_tokens),
             "by_type_after": _count_by_type(selected_tokens_final),
         },
+        repo_chunks=repo_selected,
+        repo_trace=repo_trace,
     )
     return _model_dump(context)

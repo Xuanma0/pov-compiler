@@ -187,6 +187,11 @@ def _select_primary(task: str, rows_a: list[dict[str, Any]], rows_b: list[dict[s
         for cand in candidates:
             if cand in cols:
                 return cand
+    elif task_l == "repo":
+        candidates = ["repo_quality_proxy", "repo_coverage_ratio", "repo_importance_mean"]
+        for cand in candidates:
+            if cand in cols:
+                return cand
     else:
         candidates = ["hit@k_strict", "hit_at_k_strict", "nlq_full_hit_at_k_strict", "mrr"]
         for cand in candidates:
@@ -449,6 +454,10 @@ def main() -> int:
         "streaming": {
             args.label_a: compare_dir / "streaming_budget" / args.label_a / "aggregate" / "metrics_by_budget.csv",
             args.label_b: compare_dir / "streaming_budget" / args.label_b / "aggregate" / "metrics_by_budget.csv",
+        },
+        "repo": {
+            args.label_a: compare_dir / "repo_budget" / args.label_a / "aggregate" / "metrics_by_budget.csv",
+            args.label_b: compare_dir / "repo_budget" / args.label_b / "aggregate" / "metrics_by_budget.csv",
         },
     }
     recommend_sources = {

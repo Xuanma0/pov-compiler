@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json", required=True, help="Path to pipeline output JSON")
     parser.add_argument("--out", required=True, help="Path to context output JSON")
     parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"), help="Config YAML path")
-    parser.add_argument("--mode", choices=["timeline", "highlights", "decisions", "full"], default=None)
+    parser.add_argument("--mode", choices=["timeline", "highlights", "decisions", "full", "repo_only", "events_plus_repo"], default=None)
     parser.add_argument("--max-events", type=int, default=None)
     parser.add_argument("--max-highlights", type=int, default=None)
     parser.add_argument("--max-decisions", type=int, default=None)

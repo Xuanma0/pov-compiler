@@ -17,6 +17,7 @@ from pov_compiler.l3_decisions.decision_compiler import DecisionCompiler
 from pov_compiler.ir.events_v1 import convert_output_to_events_v1
 from pov_compiler.memory.decision_sampling import build_highlights
 from pov_compiler.perception.runner import run_perception
+from pov_compiler.repository import build_repo_chunks, deduplicate_chunks
 from pov_compiler.schemas import Output
 
 
@@ -92,6 +93,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "events_v1": {
         "enabled": True,
+    },
+    "repo": {
+        "enable": False,
+        "window_s": 30.0,
+        "min_segment_s": 5.0,
+        "scales": {
+            "event": True,
+            "window": True,
+            "segment": True,
+        },
+        "dedup": {
+            "iou_thresh": 0.6,
+            "keep_best_importance": True,
+        },
     },
 }
 
@@ -321,6 +336,24 @@ class OfflinePipeline:
         events_v1_cfg = self.config.get("events_v1", {})
         if bool(events_v1_cfg.get("enabled", True)):
             output.events_v1 = convert_output_to_events_v1(output)
+
+        repo_cfg = dict(self.config.get("repo", {}))
+        if bool(repo_cfg.get("enable", False)):
+            raw_chunks = build_repo_chunks(output, cfg=repo_cfg)
+            dedup_chunks = deduplicate_chunks(raw_chunks, cfg=dict(repo_cfg.get("dedup", {})))
+            output.repository = {
+                "chunks": [_model_dump(chunk) for chunk in dedup_chunks],
+                "summary": {
+                    "chunks_before_dedup": len(raw_chunks),
+                    "chunks_after_dedup": len(dedup_chunks),
+                    "by_scale": {
+                        "event": sum(1 for c in dedup_chunks if str(c.scale) == "event"),
+                        "window": sum(1 for c in dedup_chunks if str(c.scale) == "window"),
+                        "segment": sum(1 for c in dedup_chunks if str(c.scale) == "segment"),
+                    },
+                },
+                "cfg": repo_cfg,
+            }
         return output
 
 
