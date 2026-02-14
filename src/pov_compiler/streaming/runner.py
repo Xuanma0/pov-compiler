@@ -12,6 +12,7 @@ import numpy as np
 
 from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_nlq
 from pov_compiler.bench.nlq.safety import classify_failure_reason
+from pov_compiler.context.context_builder import build_context, summarize_repo_selection
 from pov_compiler.eval.budget_sweep import apply_budget
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
@@ -29,6 +30,7 @@ from pov_compiler.streaming.budget_policy import (
     RecommendedBudgetPolicy,
     SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
+    parse_budget_keys,
 )
 from pov_compiler.streaming.codec import build_streaming_codec
 from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
@@ -126,6 +128,75 @@ def _slice_output(output: Output, end_t: float) -> Output:
     if hasattr(Output, "model_validate"):
         return Output.model_validate(payload)  # type: ignore[attr-defined]
     return Output.parse_obj(payload)
+
+
+def _normalize_ids(rows: list[dict[str, Any]], key: str = "id") -> set[str]:
+    out: set[str] = set()
+    for row in rows:
+        value = row.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            out.add(text)
+    return out
+
+
+def _context_to_output(output: Output, context_payload: dict[str, Any]) -> Output:
+    event_ids = _normalize_ids(list(context_payload.get("events", [])))
+    highlight_ids = _normalize_ids(list(context_payload.get("highlights", [])))
+    decision_ids = _normalize_ids(list(context_payload.get("decision_points", [])))
+    token_ids = _normalize_ids(list(context_payload.get("tokens", [])))
+    if not (event_ids or highlight_ids or decision_ids or token_ids):
+        return output
+
+    payload = output.model_dump() if hasattr(output, "model_dump") else output.dict()
+    if event_ids:
+        payload["events_v1"] = [e for e in payload.get("events_v1", []) if str(e.get("id", "")) in event_ids]
+        payload["events"] = [e for e in payload.get("events", []) if str(e.get("id", "")) in event_ids]
+        payload["events_v0"] = [e for e in payload.get("events_v0", []) if str(e.get("id", "")) in event_ids]
+    if highlight_ids:
+        payload["highlights"] = [h for h in payload.get("highlights", []) if str(h.get("id", "")) in highlight_ids]
+    if decision_ids:
+        payload["decision_points"] = [
+            d for d in payload.get("decision_points", []) if str(d.get("id", "")) in decision_ids
+        ]
+    token_codec = dict(payload.get("token_codec", {}))
+    if token_ids:
+        token_codec["tokens"] = [t for t in token_codec.get("tokens", []) if str(t.get("id", "")) in token_ids]
+    payload["token_codec"] = token_codec
+    if hasattr(Output, "model_validate"):
+        return Output.model_validate(payload)  # type: ignore[attr-defined]
+    return Output.parse_obj(payload)
+
+
+def _context_len_stats(context_payload: dict[str, Any]) -> tuple[int, int]:
+    events = list(context_payload.get("events", []))
+    highlights = list(context_payload.get("highlights", []))
+    decisions = list(context_payload.get("decision_points", []))
+    tokens = list(context_payload.get("tokens", []))
+    repo_chunks = list(context_payload.get("repo_chunks", []))
+    probe = {
+        "events": events,
+        "highlights": highlights,
+        "decisions": decisions,
+        "tokens": [{"id": t.get("id"), "type": t.get("type")} for t in tokens if isinstance(t, dict)],
+        "repo_chunks": [{"id": c.get("id"), "level": c.get("level"), "text": c.get("text", "")} for c in repo_chunks if isinstance(c, dict)],
+    }
+    chars = int(len(json.dumps(probe, ensure_ascii=False, sort_keys=True)))
+    approx_tokens = int(max(1, round(chars / 4.0))) if chars > 0 else 0
+    return chars, approx_tokens
+
+
+def _resolve_repo_budget_spec(repo_budget: str | None) -> BudgetSpec | None:
+    text = str(repo_budget or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = parse_budget_keys(text)
+        return parsed[0] if parsed else None
+    except Exception:
+        return None
 
 
 def _parse_hard_constraints(cfg: HardConstraintConfig | dict[str, Any] | None) -> HardConstraintConfig:
@@ -244,21 +315,54 @@ def _evaluate_sample_once(
     hard_cfg: HardConstraintConfig,
     rerank_cfg: WeightConfig,
     allow_gt_fallback: bool,
+    budget: BudgetSpec | None = None,
+    context_use_repo: bool = False,
+    repo_read_policy: str = "budgeted_topk",
+    repo_budget: BudgetSpec | None = None,
 ) -> dict[str, Any]:
-    retriever = Retriever(output_json=output, index=index, config=retrieval_config)
     query_plan = _build_plan(sample, allow_gt_fallback=allow_gt_fallback)
+    budget_for_context = repo_budget if repo_budget is not None else budget
+    max_seconds = float(budget_for_context.max_total_s) if budget_for_context is not None else None
+    max_tokens = int(budget_for_context.max_tokens) if budget_for_context is not None else 200
+    max_decisions = int(budget_for_context.max_decisions) if budget_for_context is not None else 12
+    context_payload = build_context(
+        output_json=output,
+        mode="events_plus_repo" if bool(context_use_repo) else "full",
+        budget={
+            "max_events": max(4, int(max_decisions) * 2),
+            "max_highlights": max(4, int(max_decisions) * 2),
+            "max_decisions": int(max_decisions),
+            "max_tokens": int(max_tokens),
+            "max_seconds": max_seconds,
+            "use_repo": bool(context_use_repo),
+            "repo_strategy": str(repo_read_policy or "budgeted_topk"),
+            "repo_read_policy": str(repo_read_policy or "budgeted_topk"),
+            "max_repo_chunks": max(8, int(max_decisions) * 2),
+            "max_repo_tokens": int(max_tokens),
+            "max_repo_chars": int(max(1200, max_tokens * 6)),
+            "repo_query": str(sample.query),
+        },
+        query_info={
+            "query": str(sample.query),
+            "plan_intent": str(query_plan.intent),
+            "parsed_constraints": dict(query_plan.constraints),
+            "top_k": int(sample.top_k),
+        },
+    )
+    retrieval_output = _context_to_output(output, context_payload)
+    retriever = Retriever(output_json=retrieval_output, index=index, config=retrieval_config)
     candidate_queries = [str(cand["query"]) for cand in query_plan.candidates]
     merged_hits = retriever.retrieve_multi(candidate_queries)
     cresult = apply_constraints_detailed(
         merged_hits,
         query_plan=query_plan,
         cfg=hard_cfg,
-        output=output,
+        output=retrieval_output,
     )
     reranked_hits = rerank(
         cresult.hits,
         plan=query_plan,
-        context=output,
+        context=retrieval_output,
         cfg=rerank_cfg,
         distractors=sample.distractors,
     )
@@ -272,6 +376,9 @@ def _evaluate_sample_once(
     mrr = 1.0 / float(rank) if rank is not None else 0.0
     top1_kind = str(reranked_hits[0]["kind"]) if reranked_hits else "none"
     top1_source_query = str(reranked_hits[0]["source_query"]) if reranked_hits else ""
+    repo_trace = dict(context_payload.get("repo_trace", {}))
+    repo_summary = summarize_repo_selection(repo_trace.get("selection_trace", {}))
+    context_len_chars, context_approx_tokens = _context_len_stats(context_payload)
     return {
         "hit_at_k": float(hit_at_k),
         "hit_at_1": float(hit_at_1),
@@ -290,6 +397,15 @@ def _evaluate_sample_once(
         "used_fallback": bool(cresult.used_fallback),
         "filtered_hits_before": int(cresult.filtered_before),
         "filtered_hits_after": int(cresult.filtered_after),
+        "context_use_repo": bool(context_use_repo),
+        "repo_policy": str(repo_summary.get("policy_name", repo_read_policy if context_use_repo else "")),
+        "repo_policy_hash": str(repo_summary.get("policy_hash", "")),
+        "repo_selected_chunks": int(repo_summary.get("selected_chunks", 0)),
+        "repo_selected_by_level": dict(repo_summary.get("by_level", {})),
+        "repo_dropped_topn_count": int(repo_summary.get("dropped_topN_count", 0)),
+        "repo_cache_hit": bool(repo_trace.get("cache_hit", False)),
+        "context_len_chars": int(context_len_chars),
+        "context_approx_tokens": int(context_approx_tokens),
     }
 
 
@@ -419,6 +535,9 @@ class StreamingConfig:
     codec_name: str = "all_events"
     codec_k: int = 16
     codec_cfg: dict[str, Any] | str | Path | None = None
+    context_use_repo: bool = False
+    repo_read_policy: str = "budgeted_topk"
+    repo_budget: str | None = None
     mode: str = "basic"
 
 
@@ -652,6 +771,7 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
 
     hard_cfg = _parse_hard_constraints(cfg.hard_constraints)
     rerank_cfg = _parse_rerank_cfg(cfg.rerank_cfg)
+    repo_budget_spec = _resolve_repo_budget_spec(cfg.repo_budget)
 
     max_evidence = max((len(ev.evidence) for ev in output.events_v1), default=1)
     event_index = VectorIndex()
@@ -781,6 +901,10 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     hard_cfg=hard_cfg_eval,
                     rerank_cfg=rerank_cfg_eval,
                     allow_gt_fallback=bool(cfg.allow_gt_fallback) or bool(widen_window),
+                    budget=budget,
+                    context_use_repo=bool(cfg.context_use_repo),
+                    repo_read_policy=str(cfg.repo_read_policy or "budgeted_topk"),
+                    repo_budget=repo_budget_spec,
                 )
                 eval_ms = float((time.perf_counter() - eval_start) * 1000.0)
                 retrieval_ms = float(metrics.get("retrieval_ms", eval_ms))
@@ -978,6 +1102,19 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "top1_kind": str(trial_metrics.get("top1_kind", "")),
                     "top1_source_query": str(trial_metrics.get("top1_source_query", "")),
                     "chosen_plan_intent": str(trial_metrics.get("chosen_plan_intent", "")),
+                    "context_use_repo": bool(trial_metrics.get("context_use_repo", False)),
+                    "repo_policy": str(trial_metrics.get("repo_policy", "")),
+                    "repo_policy_hash": str(trial_metrics.get("repo_policy_hash", "")),
+                    "repo_selected_chunks": int(trial_metrics.get("repo_selected_chunks", 0) or 0),
+                    "repo_selected_by_level_json": json.dumps(
+                        dict(trial_metrics.get("repo_selected_by_level", {})),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    "repo_dropped_topn_count": int(trial_metrics.get("repo_dropped_topn_count", 0) or 0),
+                    "repo_cache_hit": bool(trial_metrics.get("repo_cache_hit", False)),
+                    "context_len_chars": int(trial_metrics.get("context_len_chars", 0) or 0),
+                    "context_approx_tokens": int(trial_metrics.get("context_approx_tokens", 0) or 0),
                     "safety_is_critical_fn": int(trial_metrics.get("safety_is_critical_fn", 0)),
                     "safety_reason": str(trial_metrics.get("safety_reason", "")),
                     "latency_retrieval_ms": float(trial_metrics.get("latency_retrieval_ms", trial_metrics.get("retrieval_ms", 0.0))),
@@ -1081,6 +1218,12 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
 
     final_query_rows = [r for r in query_rows if int(r.get("final_trial", 0)) == 1]
     metric_rows = final_query_rows if final_query_rows else query_rows
+    repo_policy_hash = ""
+    for r in metric_rows:
+        val = str(r.get("repo_policy_hash", "")).strip()
+        if val:
+            repo_policy_hash = val
+            break
     action_counts: dict[str, int] = {}
     attribution_counts: dict[str, int] = {}
     for row in query_rows:
@@ -1141,6 +1284,13 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "max_top1_in_distractor_rate": float(cfg.max_top1_in_distractor_rate),
         "codec_name": codec_name,
         "codec_k": int(cfg.codec_k),
+        "context_use_repo": bool(cfg.context_use_repo),
+        "repo_read_policy": str(cfg.repo_read_policy),
+        "repo_cfg_hash": str(repo_policy_hash),
+        "repo_budget": str(cfg.repo_budget or ""),
+        "repo_selected_chunks_mean": _mean([float(r.get("repo_selected_chunks", 0.0)) for r in metric_rows]),
+        "context_len_chars_mean": _mean([float(r.get("context_len_chars", 0.0)) for r in metric_rows]),
+        "context_approx_tokens_mean": _mean([float(r.get("context_approx_tokens", 0.0)) for r in metric_rows]),
     }
     return {"summary": summary, "step_rows": step_rows, "query_rows": query_rows, "progressive_rows": progressive_rows}
 

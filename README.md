@@ -258,6 +258,26 @@ Main artifacts:
 - `data/outputs/ab_v12/compare/budget_recommend/stub/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/budget_recommend/real/tables/table_budget_recommend.md`
 - `data/outputs/ab_v12/compare/paper_ready/tables/table_budget_panel.md`
+
+## v1.18 Streaming + Repo Query-Aware Compare
+
+Run non-repo vs repo-aware streaming on the same budgets/queries:
+
+```text
+python scripts\run_streaming_repo_compare.py --json data/outputs/ego4d_ab_real_n6/json/000a3525-6c98-4650-aaab-be7d2c7b9402_v03_decisions.json --out_dir data/outputs/streaming_repo_compare_v118_demo --step-s 8 --budgets "20/50/4,60/200/12" --query "anchor=turn_head top_k=6" --query "decision=ATTENTION_TURN_HEAD top_k=6" --policy-a safety_latency_intervention --policy-b safety_latency_intervention --a-use-repo false --b-use-repo true --b-repo-policy query_aware
+```
+
+Optional paper-ready ingest:
+
+```text
+python scripts\export_paper_ready.py --compare_dir data/outputs/ab_v17_demo/compare --out_dir data/outputs/paper_ready_v118_demo --streaming-repo-compare-dir data/outputs/streaming_repo_compare_v118_demo/compare
+```
+
+Key outputs:
+- `.../streaming_repo_compare_v118_demo/run_a/queries.csv`
+- `.../streaming_repo_compare_v118_demo/run_b/queries.csv`
+- `.../streaming_repo_compare_v118_demo/compare/tables/table_streaming_repo_compare.csv`
+- `.../streaming_repo_compare_v118_demo/compare/figures/fig_streaming_repo_compare_safety_latency.png`
 - `data/outputs/ab_v12/compare/paper_ready/figures/fig_budget_primary_vs_seconds_panel.png`
 - `data/outputs/ab_v12/compare/paper_figs_compare/`
 

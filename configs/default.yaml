@@ -156,6 +156,9 @@ context:
   use_repo: false
 streaming:
   step_s: 5.0
+  context_use_repo: false
+  repo_read_policy: budgeted_topk
+  repo_budget: null
   queries:
     - anchor=turn_head top_k=6
     - token=SCENE_CHANGE top_k=6

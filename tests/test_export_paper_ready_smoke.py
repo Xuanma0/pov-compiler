@@ -129,6 +129,25 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"policy_a": "safety_latency", "policy_b": "safety_latency_intervention"}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional streaming repo compare input.
+    (compare_dir / "stream_repo_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_repo_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_repo_cmp" / "tables" / "table_streaming_repo_compare.csv").write_text(
+        "policy_a,policy_b,a_use_repo,b_use_repo,strict_hit_at_k_rate_a,strict_hit_at_k_rate_b\nsafety_latency,safety_latency,false,true,0.52,0.63\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_repo_cmp" / "tables" / "table_streaming_repo_compare.md").write_text(
+        "# repo compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_repo_cmp" / "figures" / "fig_streaming_repo_compare_safety_latency.png").write_bytes(b"PNG")
+    (compare_dir / "stream_repo_cmp" / "figures" / "fig_streaming_repo_compare_safety_latency.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_repo_cmp" / "figures" / "fig_streaming_repo_compare_delta.png").write_bytes(b"PNG")
+    (compare_dir / "stream_repo_cmp" / "figures" / "fig_streaming_repo_compare_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_repo_cmp" / "compare_summary.json").write_text(
+        json.dumps({"policy_a": "safety_latency", "policy_b": "safety_latency", "b_use_repo": True}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     # Optional streaming intervention sweep input.
     (compare_dir / "stream_intervention_sweep" / "figures").mkdir(parents=True, exist_ok=True)
     (compare_dir / "stream_intervention_sweep" / "best_config.yaml").write_text("name: best\nw_safety: 1.1\n", encoding="utf-8")
@@ -240,6 +259,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         "md+csv",
         "--streaming-policy-compare-dir",
         str(compare_dir / "stream_policy_cmp"),
+        "--streaming-repo-compare-dir",
+        str(compare_dir / "stream_repo_cmp"),
         "--streaming-intervention-sweep-dir",
         str(compare_dir / "stream_intervention_sweep"),
         "--streaming-codec-sweep-dir",
@@ -277,6 +298,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "tables" / "table_streaming_policy_compare.md").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_safety_latency.png").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_delta.png").exists()
+    assert (out_dir / "tables" / "table_streaming_repo_compare.csv").exists()
+    assert (out_dir / "tables" / "table_streaming_repo_compare.md").exists()
+    assert (out_dir / "figures" / "fig_streaming_repo_compare_safety_latency.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_repo_compare_delta.png").exists()
     assert (out_dir / "streaming_intervention_sweep" / "best_config.yaml").exists()
     assert (out_dir / "streaming_intervention_sweep" / "best_report.md").exists()
     assert (out_dir / "figures" / "fig_objective_vs_latency.png").exists()

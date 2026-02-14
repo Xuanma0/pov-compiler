@@ -63,6 +63,8 @@ def _write_report(path: Path, payload: dict[str, Any], policy_gates: dict[str, A
     lines.append(f"- video_id: {summary.get('video_id', '')}")
     lines.append(f"- policy: {summary.get('policy_name', '')}")
     lines.append(f"- budgets: {summary.get('budgets', [])}")
+    lines.append(f"- context_use_repo: {bool(summary.get('context_use_repo', False))}")
+    lines.append(f"- repo_read_policy: {summary.get('repo_read_policy', '')}")
     lines.append(f"- steps: {int(summary.get('steps', 0))}")
     lines.append(f"- queries_total: {int(summary.get('queries_total', 0))}")
     lines.append(f"- avg_trials_per_query: {float(summary.get('avg_trials_per_query', 0.0)):.4f}")
@@ -262,6 +264,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--codec-name", choices=["all_events", "fixed_k"], default="all_events")
     parser.add_argument("--codec-k", type=int, default=16, help="K for fixed_k codec")
     parser.add_argument("--codec-cfg", default=None, help="Optional codec cfg path (yaml/json)")
+    group_repo = parser.add_mutually_exclusive_group()
+    group_repo.add_argument("--context-use-repo", dest="context_use_repo", action="store_true")
+    group_repo.add_argument("--no-context-use-repo", dest="context_use_repo", action="store_false")
+    parser.set_defaults(context_use_repo=False)
+    parser.add_argument("--repo-read-policy", default="budgeted_topk", help="Repo read policy name (e.g. budgeted_topk/query_aware)")
+    parser.add_argument("--repo-budget", default=None, help='Optional repo budget key like "40/100/8"')
     parser.add_argument(
         "--budget-policy",
         "--policy",
@@ -336,6 +344,9 @@ def main() -> int:
             codec_name=str(args.codec_name),
             codec_k=int(args.codec_k),
             codec_cfg=args.codec_cfg,
+            context_use_repo=bool(args.context_use_repo),
+            repo_read_policy=str(args.repo_read_policy),
+            repo_budget=str(args.repo_budget) if args.repo_budget else None,
             allow_gt_fallback=False,
             nlq_mode=str(args.mode),
             nlq_seed=int(args.seed),
@@ -376,6 +387,9 @@ def main() -> int:
             "codec_name": str(args.codec_name),
             "codec_k": int(args.codec_k),
             "codec_cfg": str(args.codec_cfg) if args.codec_cfg else None,
+            "context_use_repo": bool(args.context_use_repo),
+            "repo_read_policy": str(args.repo_read_policy),
+            "repo_budget": str(args.repo_budget) if args.repo_budget else None,
             "budget_policy": str(args.budget_policy),
             "fixed_budget": str(args.fixed_budget),
             "recommend_dir": str(args.recommend_dir) if args.recommend_dir else None,
@@ -417,6 +431,8 @@ def main() -> int:
     print(f"policy={args.budget_policy}")
     print(f"codec_name={args.codec_name}")
     print(f"codec_k={int(args.codec_k)}")
+    print(f"context_use_repo={bool(args.context_use_repo)}")
+    print(f"repo_read_policy={str(args.repo_read_policy)}")
     print(f"budgets={len(budgets)}")
     print(f"steps={int(summary.get('steps', 0))}")
     print(f"queries_total={int(summary.get('queries_total', 0))}")

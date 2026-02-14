@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from run_streaming_policy_compare.py compare/ output",
     )
     parser.add_argument(
+        "--streaming-repo-compare-dir",
+        default=None,
+        help="Optional directory from run_streaming_repo_compare.py compare/ output",
+    )
+    parser.add_argument(
         "--streaming-intervention-sweep-dir",
         default=None,
         help="Optional directory from sweep_streaming_interventions.py output",
@@ -673,6 +678,39 @@ def main() -> int:
         streaming_policy_compare["copied_summary"] = copied_summary
         figure_paths.extend(streaming_policy_compare["copied_figures"])
 
+    streaming_repo_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_tables": [],
+        "copied_figures": [],
+        "copied_summary": None,
+    }
+    if args.streaming_repo_compare_dir:
+        src_dir = Path(args.streaming_repo_compare_dir)
+        streaming_repo_compare["enabled"] = True
+        streaming_repo_compare["source_dir"] = str(src_dir)
+        table_src_csv = src_dir / "tables" / "table_streaming_repo_compare.csv"
+        table_src_md = src_dir / "tables" / "table_streaming_repo_compare.md"
+        fig_src_png = src_dir / "figures" / "fig_streaming_repo_compare_safety_latency.png"
+        fig_src_pdf = src_dir / "figures" / "fig_streaming_repo_compare_safety_latency.pdf"
+        fig_delta_png = src_dir / "figures" / "fig_streaming_repo_compare_delta.png"
+        fig_delta_pdf = src_dir / "figures" / "fig_streaming_repo_compare_delta.pdf"
+        summary_src = src_dir / "compare_summary.json"
+
+        copied_table_csv = _copy_if_exists(table_src_csv, tables_dir / table_src_csv.name)
+        copied_table_md = _copy_if_exists(table_src_md, tables_dir / table_src_md.name)
+        copied_summary = _copy_if_exists(summary_src, out_dir / "streaming_repo_compare_summary.json")
+        copied_figures = [
+            _copy_if_exists(fig_src_png, figures_dir / fig_src_png.name),
+            _copy_if_exists(fig_src_pdf, figures_dir / fig_src_pdf.name),
+            _copy_if_exists(fig_delta_png, figures_dir / fig_delta_png.name),
+            _copy_if_exists(fig_delta_pdf, figures_dir / fig_delta_pdf.name),
+        ]
+        streaming_repo_compare["copied_tables"] = [x for x in [copied_table_csv, copied_table_md] if x]
+        streaming_repo_compare["copied_figures"] = [x for x in copied_figures if x]
+        streaming_repo_compare["copied_summary"] = copied_summary
+        figure_paths.extend(streaming_repo_compare["copied_figures"])
+
     streaming_intervention_sweep: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -938,6 +976,17 @@ def main() -> int:
             )
         else:
             report_lines.append("- streaming_policy_compare: source provided but artifacts missing.")
+    if args.streaming_repo_compare_dir:
+        if streaming_repo_compare.get("copied_tables") or streaming_repo_compare.get("copied_figures"):
+            report_lines.extend(
+                [
+                    f"- streaming_repo_compare_dir: `{streaming_repo_compare.get('source_dir')}`",
+                    f"- streaming_repo_compare_tables: `{streaming_repo_compare.get('copied_tables')}`",
+                    f"- streaming_repo_compare_figures: `{streaming_repo_compare.get('copied_figures')}`",
+                ]
+            )
+        else:
+            report_lines.append("- streaming_repo_compare: source provided but artifacts missing.")
     if args.streaming_intervention_sweep_dir:
         if streaming_intervention_sweep.get("copied_files"):
             report_lines.extend(
@@ -1017,6 +1066,9 @@ def main() -> int:
             "streaming_policy_compare_dir": str(args.streaming_policy_compare_dir)
             if args.streaming_policy_compare_dir
             else None,
+            "streaming_repo_compare_dir": str(args.streaming_repo_compare_dir)
+            if args.streaming_repo_compare_dir
+            else None,
             "streaming_intervention_sweep_dir": str(args.streaming_intervention_sweep_dir)
             if args.streaming_intervention_sweep_dir
             else None,
@@ -1043,6 +1095,7 @@ def main() -> int:
             "figures": figure_paths,
             "safety_figures": safety_figure_paths,
             "streaming_policy_compare": streaming_policy_compare,
+            "streaming_repo_compare": streaming_repo_compare,
             "streaming_intervention_sweep": streaming_intervention_sweep,
             "streaming_codec_sweep": streaming_codec_sweep,
             "reranker_sweep": reranker_sweep,

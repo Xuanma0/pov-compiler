@@ -386,6 +386,30 @@ def _load_repo_chunks(output: Output, repo_cfg: dict[str, Any] | None = None) ->
     return [_model_dump(chunk) for chunk in deduped]
 
 
+def summarize_repo_selection(selection_trace: dict[str, Any] | None) -> dict[str, Any]:
+    trace = dict(selection_trace or {})
+    chunk_ids = trace.get("selected_chunk_ids_time_sorted", trace.get("selected_chunk_ids", []))
+    if not isinstance(chunk_ids, list):
+        chunk_ids = []
+    by_level_raw = trace.get("selected_breakdown_by_level", {})
+    by_level: dict[str, int] = {}
+    if isinstance(by_level_raw, dict):
+        for key, value in by_level_raw.items():
+            try:
+                by_level[str(key)] = int(value)
+            except Exception:
+                continue
+    dropped_raw = trace.get("dropped_topN", [])
+    dropped_count = len(dropped_raw) if isinstance(dropped_raw, list) else 0
+    return {
+        "policy_name": str(trace.get("policy_name", "")),
+        "policy_hash": str(trace.get("policy_hash", "")),
+        "selected_chunks": int(len(chunk_ids)),
+        "by_level": dict(sorted(by_level.items())),
+        "dropped_topN_count": int(dropped_count),
+    }
+
+
 def build_context(
     output_json: str | Path | dict[str, Any] | Output,
     mode: str = "highlights",
