@@ -138,6 +138,7 @@ def _collect_metrics(run_dir: Path) -> dict[str, float | str | int]:
     critical_vals: list[float] = []
     latency_vals: list[float] = []
     trials_vals: list[float] = []
+    chain_rows: list[dict[str, str]] = []
     for r in finals:
         final_success = _to_float(r.get("final_success"))
         strict_hit = _to_float(r.get("strict_hit_at_k"))
@@ -148,11 +149,39 @@ def _collect_metrics(run_dir: Path) -> dict[str, float | str | int]:
         critical_vals.append(float(_to_float(r.get("safety_is_critical_fn")) or 0.0))
         latency_vals.append(float(_to_float(r.get("latency_e2e_ms")) or _to_float(r.get("e2e_ms")) or 0.0))
         trials_vals.append(float(_to_float(r.get("trial_count_for_query")) or _to_float(r.get("trials_count")) or 1.0))
+        if int(float(_to_float(r.get("is_chain")) or 0.0)) > 0:
+            chain_rows.append(r)
 
     strict_success_rate = float(sum(strict_vals) / len(strict_vals)) if strict_vals else float(_to_float(summary.get("hit_at_k_strict")) or 0.0)
     critical_fn_rate = float(sum(critical_vals) / len(critical_vals)) if critical_vals else float(_to_float(summary.get("safety_critical_fn_rate")) or 0.0)
     latency_p95 = float(_percentile(latency_vals, 95.0)) if latency_vals else float(_to_float(summary.get("e2e_latency_p95_ms")) or 0.0)
     avg_trials = float(sum(trials_vals) / len(trials_vals)) if trials_vals else float(_to_float(summary.get("avg_trials_per_query")) or 0.0)
+    chain_success_rate = (
+        float(sum(float(_to_float(r.get("chain_success")) or 0.0) for r in chain_rows) / len(chain_rows))
+        if chain_rows
+        else 0.0
+    )
+    chain_waiting_rate = (
+        float(sum(float(_to_float(r.get("chain_waiting")) or 0.0) for r in chain_rows) / len(chain_rows))
+        if chain_rows
+        else 0.0
+    )
+    chain_distractor_rate = (
+        float(sum(float(_to_float(r.get("top1_in_distractor_rate")) or 0.0) for r in chain_rows) / len(chain_rows))
+        if chain_rows
+        else 0.0
+    )
+    chain_constraints_over_filtered_rate = (
+        float(
+            sum(
+                1.0 if str(r.get("chain_fail_reason", "")).strip() == "constraints_over_filtered" else 0.0
+                for r in chain_rows
+            )
+            / len(chain_rows)
+        )
+        if chain_rows
+        else 0.0
+    )
 
     return {
         "strict_success_rate": float(strict_success_rate),
@@ -160,6 +189,11 @@ def _collect_metrics(run_dir: Path) -> dict[str, float | str | int]:
         "latency_p95_e2e_ms": float(latency_p95),
         "avg_trials_per_query": float(avg_trials),
         "queries_total": int(len(finals)) if finals else int(_to_float(summary.get("queries_total")) or 0),
+        "chain_queries_total": int(len(chain_rows)),
+        "chain_success_rate": float(chain_success_rate),
+        "chain_waiting_rate": float(chain_waiting_rate),
+        "chain_distractor_rate": float(chain_distractor_rate),
+        "chain_constraints_over_filtered_rate": float(chain_constraints_over_filtered_rate),
     }
 
 
@@ -239,6 +273,63 @@ def _make_figures(out_dir: Path, row: dict[str, Any], policy_a: str, policy_b: s
     plt.tight_layout()
     for ext in formats:
         p = p2.with_suffix(f".{ext}")
+        plt.savefig(p)
+        paths.append(str(p))
+    plt.close()
+
+    # chain success compare
+    p3 = out_dir / "fig_streaming_policy_compare_chain_success"
+    chain_labels = ["chain_success_rate", "chain_waiting_rate"]
+    avals = [
+        float(row.get("chain_success_rate_a", 0.0) or 0.0),
+        float(row.get("chain_waiting_rate_a", 0.0) or 0.0),
+    ]
+    bvals = [
+        float(row.get("chain_success_rate_b", 0.0) or 0.0),
+        float(row.get("chain_waiting_rate_b", 0.0) or 0.0),
+    ]
+    x = list(range(len(chain_labels)))
+    width = 0.35
+    plt.figure(figsize=(7.4, 4.2))
+    plt.bar([i - width / 2 for i in x], avals, width=width, label=policy_a)
+    plt.bar([i + width / 2 for i in x], bvals, width=width, label=policy_b)
+    plt.xticks(x, chain_labels, rotation=20, ha="right")
+    plt.ylabel("Rate")
+    plt.title("Streaming Policy Chain Success Compare")
+    plt.grid(True, axis="y", alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = p3.with_suffix(f".{ext}")
+        plt.savefig(p)
+        paths.append(str(p))
+    plt.close()
+
+    # chain delta bar
+    p4 = out_dir / "fig_streaming_policy_compare_chain_delta"
+    chain_delta_labels = [
+        "chain_success_rate",
+        "chain_waiting_rate",
+        "chain_distractor_rate",
+        "chain_constraints_over_filtered_rate",
+    ]
+    chain_deltas = [
+        float(row.get("delta_chain_success_rate", 0.0) or 0.0),
+        float(row.get("delta_chain_waiting_rate", 0.0) or 0.0),
+        float(row.get("delta_chain_distractor_rate", 0.0) or 0.0),
+        float(row.get("delta_chain_constraints_over_filtered_rate", 0.0) or 0.0),
+    ]
+    plt.figure(figsize=(7.4, 4.2))
+    xc = list(range(len(chain_delta_labels)))
+    plt.bar(xc, chain_deltas)
+    plt.axhline(y=0.0, linewidth=1.0)
+    plt.xticks(xc, chain_delta_labels, rotation=20, ha="right")
+    plt.ylabel(f"delta ({policy_b}-{policy_a})")
+    plt.title("Streaming Policy Chain Delta Metrics")
+    plt.grid(True, axis="y", alpha=0.35)
+    plt.tight_layout()
+    for ext in formats:
+        p = p4.with_suffix(f".{ext}")
         plt.savefig(p)
         paths.append(str(p))
     plt.close()
@@ -323,6 +414,9 @@ def _write_readme(path: Path, *, cmd_a: list[str], cmd_b: list[str], row: dict[s
         f"- critical_fn_rate: A={row.get('critical_fn_rate_a')} B={row.get('critical_fn_rate_b')} delta={row.get('delta_critical_fn_rate')}",
         f"- latency_p95_e2e_ms: A={row.get('latency_p95_e2e_ms_a')} B={row.get('latency_p95_e2e_ms_b')} delta={row.get('delta_latency_p95_e2e_ms')}",
         f"- avg_trials_per_query: A={row.get('avg_trials_per_query_a')} B={row.get('avg_trials_per_query_b')} delta={row.get('delta_avg_trials_per_query')}",
+        f"- chain_success_rate: A={row.get('chain_success_rate_a')} B={row.get('chain_success_rate_b')} delta={row.get('delta_chain_success_rate')}",
+        f"- chain_waiting_rate: A={row.get('chain_waiting_rate_a')} B={row.get('chain_waiting_rate_b')} delta={row.get('delta_chain_waiting_rate')}",
+        f"- chain_distractor_rate: A={row.get('chain_distractor_rate_a')} B={row.get('chain_distractor_rate_b')} delta={row.get('delta_chain_distractor_rate')}",
         "",
         "## Figures",
         "",
@@ -428,6 +522,19 @@ def main() -> int:
         "avg_trials_per_query_a": float(metrics_a.get("avg_trials_per_query", 0.0)),
         "avg_trials_per_query_b": float(metrics_b.get("avg_trials_per_query", 0.0)),
         "delta_avg_trials_per_query": float(metrics_b.get("avg_trials_per_query", 0.0)) - float(metrics_a.get("avg_trials_per_query", 0.0)),
+        "chain_success_rate_a": float(metrics_a.get("chain_success_rate", 0.0)),
+        "chain_success_rate_b": float(metrics_b.get("chain_success_rate", 0.0)),
+        "delta_chain_success_rate": float(metrics_b.get("chain_success_rate", 0.0)) - float(metrics_a.get("chain_success_rate", 0.0)),
+        "chain_waiting_rate_a": float(metrics_a.get("chain_waiting_rate", 0.0)),
+        "chain_waiting_rate_b": float(metrics_b.get("chain_waiting_rate", 0.0)),
+        "delta_chain_waiting_rate": float(metrics_b.get("chain_waiting_rate", 0.0)) - float(metrics_a.get("chain_waiting_rate", 0.0)),
+        "chain_distractor_rate_a": float(metrics_a.get("chain_distractor_rate", 0.0)),
+        "chain_distractor_rate_b": float(metrics_b.get("chain_distractor_rate", 0.0)),
+        "delta_chain_distractor_rate": float(metrics_b.get("chain_distractor_rate", 0.0)) - float(metrics_a.get("chain_distractor_rate", 0.0)),
+        "chain_constraints_over_filtered_rate_a": float(metrics_a.get("chain_constraints_over_filtered_rate", 0.0)),
+        "chain_constraints_over_filtered_rate_b": float(metrics_b.get("chain_constraints_over_filtered_rate", 0.0)),
+        "delta_chain_constraints_over_filtered_rate": float(metrics_b.get("chain_constraints_over_filtered_rate", 0.0))
+        - float(metrics_a.get("chain_constraints_over_filtered_rate", 0.0)),
     }
     columns = [
         "policy_a",
@@ -444,6 +551,18 @@ def main() -> int:
         "avg_trials_per_query_a",
         "avg_trials_per_query_b",
         "delta_avg_trials_per_query",
+        "chain_success_rate_a",
+        "chain_success_rate_b",
+        "delta_chain_success_rate",
+        "chain_waiting_rate_a",
+        "chain_waiting_rate_b",
+        "delta_chain_waiting_rate",
+        "chain_distractor_rate_a",
+        "chain_distractor_rate_b",
+        "delta_chain_distractor_rate",
+        "chain_constraints_over_filtered_rate_a",
+        "chain_constraints_over_filtered_rate_b",
+        "delta_chain_constraints_over_filtered_rate",
     ]
 
     table_csv = tables_dir / "table_streaming_policy_compare.csv"
@@ -489,6 +608,10 @@ def main() -> int:
             "critical_fn_rate": row["delta_critical_fn_rate"],
             "latency_p95_e2e_ms": row["delta_latency_p95_e2e_ms"],
             "avg_trials_per_query": row["delta_avg_trials_per_query"],
+            "chain_success_rate": row["delta_chain_success_rate"],
+            "chain_waiting_rate": row["delta_chain_waiting_rate"],
+            "chain_distractor_rate": row["delta_chain_distractor_rate"],
+            "chain_constraints_over_filtered_rate": row["delta_chain_constraints_over_filtered_rate"],
         },
         "outputs": {
             "table_csv": str(table_csv),

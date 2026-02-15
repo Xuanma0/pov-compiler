@@ -109,7 +109,7 @@ docs/
 | `scripts\sweep_streaming_codec_k.py` | Fixed-K Streaming Codec baseline sweep (`codec=fixed_k`) with quality/safety/latency curves | `--json/--json_dir --k-list --budgets --policy --out_dir` | `aggregate/metrics_by_k.*`, `figures/fig_streaming_*_vs_k.*`, `snapshot.json` |
 | `scripts\recommend_budget.py` | Multi-objective budget recommender (BYE + NLQ curves with gates) | `--bye_csv/--bye_dir --nlq_csv/--nlq_dir --out_dir` | `tables/table_budget_recommend.*`, `figures/fig_objective_*`, `recommend_summary.json` |
 | `scripts\export_paper_ready.py` | Unified BYE/NLQ/Streaming budget panel export (paper-ready tables/figures) | `--compare_dir --out_dir --label_a --label_b [--reranker-sweep-dir]` | `tables/table_budget_panel*`, `figures/fig_budget_*`, `report.md`, `snapshot.json` |
-| `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive/safety_latency/safety_latency_intervention`) with strict+safety metrics and switch traces | `--json --out_dir --budgets --policy [--fixed-budget|--recommend-dir|--latency-cap-ms|--intervention-cfg]` | `steps.csv`, `queries.csv`, `figures/fig_policy_*`, `report.md`, `snapshot.json` |
+| `scripts\streaming_budget_smoke.py` | Streaming/online budget policy simulation (`fixed/recommend/adaptive/safety_latency/safety_latency_chain/safety_latency_intervention`) with strict+safety metrics and switch traces | `--json --out_dir --budgets --policy [--fixed-budget|--recommend-dir|--latency-cap-ms|--min-chain-success-rate|--intervention-cfg]` | `steps.csv`, `queries.csv`, `figures/fig_policy_*` (+ chain mode: `fig_streaming_chain_*`), `report.md`, `snapshot.json` |
 | `scripts\run_streaming_policy_compare.py` | One-click baseline vs intervention streaming compare harness (`safety_latency` vs `safety_latency_intervention`) | `--json --out_dir --budgets --query ... --max-trials` | `run_a/*`, `run_b/*`, `compare/tables/table_streaming_policy_compare.*`, `compare/figures/fig_streaming_policy_compare_*`, `compare_summary.json`, `snapshot.json` |
 | `scripts\sweep_streaming_interventions.py` | Random/grid sweep over intervention config to optimize strict+safety+latency objective | `--json --out_dir --budgets --trials --base-cfg --query ...` | `results_sweep.csv`, `best_config.yaml`, `best_report.md`, `figures/fig_objective_vs_latency*`, `snapshot.json` |
 | `scripts\place_interaction_smoke.py` | AMEGO-style place-segment and interaction-signature smoke summary (`events_v1` focus) | `--json --out_dir [--n --seed]` | `place_segments.json`, `interaction_summary.csv`, `report.md`, `snapshot.json` |
@@ -526,6 +526,9 @@ python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v17_demo\comp
 ```text
 python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\trace_chain_v124_demo --query "place=first interaction_object=door interaction_min=0.30 then token=SCENE_CHANGE which=first top_k=6 chain_derive=time+place+object chain_place_mode=hard chain_object_mode=soft"
 python scripts\eval_nlq.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --index data\outputs\ego4d_ab_real_n6\cache\<uid> --out_dir data\outputs\nlq_chain_v124_demo --mode hard_pseudo_chain --n 6 --seed 0 --top-k 6
+
+# v1.25 streaming chain-aware budget policy
+python scripts\streaming_budget_smoke.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_chain_v125_demo --policy safety_latency_chain --budgets "20/50/4,60/200/12" --step-s 8 --query "lost_object=door which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object chain_object_mode=hard"
 ```
 
 Chain mode now emits:
@@ -534,3 +537,6 @@ Chain mode now emits:
 - `fig_chain_success_vs_budget_seconds.(png/pdf)`
 - `fig_chain_failure_attribution_vs_budget_seconds.(png/pdf)`
 - `fig_chain_success_vs_derive.(png/pdf)`
+- streaming chain policy smoke also exports:
+  - `fig_streaming_chain_success_vs_budget_seconds.(png/pdf)`
+  - `fig_streaming_chain_failure_attribution.(png/pdf)`

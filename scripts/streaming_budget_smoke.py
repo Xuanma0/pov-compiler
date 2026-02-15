@@ -76,6 +76,12 @@ def _write_report(path: Path, payload: dict[str, Any], policy_gates: dict[str, A
     lines.append(f"- top1_in_distractor_rate: {float(summary.get('top1_in_distractor_rate', 0.0)):.4f}")
     lines.append(f"- safety_critical_fn_rate: {float(summary.get('safety_critical_fn_rate', 0.0)):.4f}")
     lines.append(f"- safety_budget_insufficient_rate: {float(summary.get('safety_budget_insufficient_rate', 0.0)):.4f}")
+    lines.append(f"- chain_queries_total: {int(summary.get('chain_queries_total', 0))}")
+    lines.append(f"- chain_success_rate: {float(summary.get('chain_success_rate', 0.0)):.4f}")
+    lines.append(f"- chain_waiting_rate: {float(summary.get('chain_waiting_rate', 0.0)):.4f}")
+    lines.append(
+        f"- chain_constraints_over_filtered_rate: {float(summary.get('chain_constraints_over_filtered_rate', 0.0)):.4f}"
+    )
     lines.append(f"- latency_cap_ms: {float(summary.get('latency_cap_ms', 0.0)):.3f}")
     lines.append(f"- max_trials_per_query: {int(summary.get('max_trials_per_query', 0))}")
     lines.append(f"- num_escalate: {int(summary.get('num_escalate', 0))}")
@@ -250,6 +256,77 @@ def _make_figures(out_dir: Path, query_rows: list[dict[str, Any]], formats: list
         plt.savefig(p)
         all_paths.append(str(p))
     plt.close()
+
+    # 5) chain success vs budget seconds
+    chain_rows = [r for r in plot_rows if int(r.get("is_chain", 0) or 0) > 0]
+    if chain_rows:
+        p5 = out_fig / "fig_streaming_chain_success_vs_budget_seconds"
+        by_budget: dict[float, list[dict[str, Any]]] = {}
+        for r in chain_rows:
+            b = float(r.get("chain_step2_budget_seconds", r.get("budget_seconds", 0.0)) or 0.0)
+            by_budget.setdefault(b, []).append(r)
+        xs = sorted(by_budget.keys())
+        ys_success = [
+            float(sum(float(x.get("chain_success", 0.0) or 0.0) for x in by_budget[b]) / max(1, len(by_budget[b])))
+            for b in xs
+        ]
+        ys_waiting = [
+            float(sum(float(x.get("chain_waiting", 0.0) or 0.0) for x in by_budget[b]) / max(1, len(by_budget[b])))
+            for b in xs
+        ]
+        plt.figure(figsize=(8.2, 4.4))
+        plt.plot(xs, ys_success, marker="o", linewidth=1.2, label="chain_success_rate")
+        plt.plot(xs, ys_waiting, marker="s", linestyle="--", linewidth=1.2, label="chain_waiting_rate")
+        plt.xlabel("Budget Seconds")
+        plt.ylabel("Rate")
+        plt.title("Streaming Chain Success vs Budget Seconds")
+        plt.grid(True, alpha=0.35)
+        plt.legend()
+        plt.tight_layout()
+        for ext in formats:
+            p = p5.with_suffix(f".{ext}")
+            plt.savefig(p)
+            all_paths.append(str(p))
+        plt.close()
+
+        # 6) chain failure attribution
+        p6 = out_fig / "fig_streaming_chain_failure_attribution"
+        reason_order = [
+            "step1_no_hit",
+            "step2_no_hit",
+            "constraints_over_filtered",
+            "retrieval_distractor",
+            "budget_insufficient",
+            "evidence_missing",
+            "pending",
+            "other",
+        ]
+        counts = {k: 0 for k in reason_order}
+        for r in chain_rows:
+            reason = str(r.get("chain_fail_reason", "") or "").strip()
+            if not reason:
+                continue
+            if reason not in counts:
+                counts["other"] += 1
+            else:
+                counts[reason] += 1
+        labels = [k for k in reason_order if counts.get(k, 0) > 0]
+        vals = [counts[k] for k in labels]
+        plt.figure(figsize=(8.2, 4.4))
+        if labels:
+            x = list(range(len(labels)))
+            plt.bar(x, vals)
+            plt.xticks(x, labels, rotation=20, ha="right")
+            plt.ylabel("Count")
+        else:
+            plt.text(0.5, 0.5, "no chain failures", ha="center", va="center")
+        plt.title("Streaming Chain Failure Attribution")
+        plt.tight_layout()
+        for ext in formats:
+            p = p6.with_suffix(f".{ext}")
+            plt.savefig(p)
+            all_paths.append(str(p))
+        plt.close()
     return all_paths
 
 
@@ -274,7 +351,7 @@ def parse_args() -> argparse.Namespace:
         "--budget-policy",
         "--policy",
         dest="budget_policy",
-        choices=["fixed", "recommend", "adaptive", "safety_latency", "safety_latency_intervention"],
+        choices=["fixed", "recommend", "adaptive", "safety_latency", "safety_latency_chain", "safety_latency_intervention"],
         default="fixed",
     )
     parser.add_argument("--fixed-budget", default="40/100/8", help="Budget key for fixed policy")
@@ -287,6 +364,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-gates-json", default=None, help="JSON string/path for adaptive gate constraints")
     parser.add_argument("--policy-targets-json", default=None, help="JSON string/path for adaptive targets")
     parser.add_argument("--latency-cap-ms", type=float, default=25.0, help="Latency cap for safety_latency policy")
+    parser.add_argument("--min-chain-success-rate", type=float, default=0.5, help="Minimum chain success target for safety_latency_chain policy")
     parser.add_argument("--max-trials-per-query", "--max-trials", dest="max_trials_per_query", type=int, default=3, help="Max trials per query for safety policies")
     parser.add_argument("--strict-threshold", type=float, default=1.0, help="Strict hit@k threshold for safety intervention success")
     parser.add_argument("--max-top1-in-distractor-rate", type=float, default=0.2, help="Risk threshold for intervention success")
@@ -334,6 +412,7 @@ def main() -> int:
             policy_gates=gates,
             policy_targets=targets,
             latency_cap_ms=float(args.latency_cap_ms),
+            min_chain_success_rate=float(args.min_chain_success_rate),
             max_trials_per_query=int(args.max_trials_per_query),
             strict_threshold=float(args.strict_threshold),
             max_top1_in_distractor_rate=float(args.max_top1_in_distractor_rate),
@@ -398,6 +477,7 @@ def main() -> int:
             "policy_gates": gates,
             "policy_targets": targets,
             "latency_cap_ms": float(args.latency_cap_ms),
+            "min_chain_success_rate": float(args.min_chain_success_rate),
             "max_trials_per_query": int(args.max_trials_per_query),
             "strict_threshold": float(args.strict_threshold),
             "max_top1_in_distractor_rate": float(args.max_top1_in_distractor_rate),
@@ -437,6 +517,9 @@ def main() -> int:
     print(f"steps={int(summary.get('steps', 0))}")
     print(f"queries_total={int(summary.get('queries_total', 0))}")
     print(f"avg_trials_per_query={float(summary.get('avg_trials_per_query', 0.0)):.4f}")
+    print(f"chain_queries_total={int(summary.get('chain_queries_total', 0))}")
+    print(f"chain_success_rate={float(summary.get('chain_success_rate', 0.0)):.4f}")
+    print(f"chain_waiting_rate={float(summary.get('chain_waiting_rate', 0.0)):.4f}")
     print(f"intervention_cfg_name={str(summary.get('intervention_cfg_name', ''))}")
     print(f"intervention_cfg_hash={str(summary.get('intervention_cfg_hash', ''))}")
     print(f"saved_steps={steps_csv}")

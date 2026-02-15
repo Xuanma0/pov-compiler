@@ -309,7 +309,9 @@ def score_hit_components(
         hit_object = str(meta.get("interaction_primary_object", meta.get("object_name", ""))).strip().lower()
         if hit_object and (chain_object_value in hit_object or hit_object in chain_object_value):
             object_match_bonus = float(weights.bonus_token_highlight_overlap)
-    match_score += float(place_match_bonus + object_match_bonus)
+    chain_place_bonus = float(place_match_bonus)
+    chain_object_bonus = float(object_match_bonus)
+    match_score += float(chain_place_bonus + chain_object_bonus)
 
     first_last_bonus = 0.0
     which = str(constraints.get("which", "")).lower()
@@ -372,6 +374,8 @@ def score_hit_components(
         "priority_bonus": float(priority_bonus),
         "place_match_bonus": float(place_match_bonus),
         "object_match_bonus": float(object_match_bonus),
+        "chain_place_bonus": float(chain_place_bonus),
+        "chain_object_bonus": float(chain_object_bonus),
         "trigger_match": float(decision_features["trigger_match"]),
         "action_match": float(decision_features["action_match"]),
         "constraint_match": float(decision_features["constraint_match"]),
@@ -445,6 +449,8 @@ def rerank(
                 "priority_bonus": float(parts["priority_bonus"]),
                 "place_match_bonus": float(parts.get("place_match_bonus", 0.0)),
                 "object_match_bonus": float(parts.get("object_match_bonus", 0.0)),
+                "chain_place_bonus": float(parts.get("chain_place_bonus", 0.0)),
+                "chain_object_bonus": float(parts.get("chain_object_bonus", 0.0)),
                 "trigger_match": float(parts["trigger_match"]),
                 "action_match": float(parts["action_match"]),
                 "constraint_match": float(parts["constraint_match"]),

@@ -682,6 +682,10 @@ def main() -> int:
         fig_src_pdf = spc_dir / "figures" / "fig_streaming_policy_compare_safety_latency.pdf"
         fig_delta_png = spc_dir / "figures" / "fig_streaming_policy_compare_delta.png"
         fig_delta_pdf = spc_dir / "figures" / "fig_streaming_policy_compare_delta.pdf"
+        fig_chain_png = spc_dir / "figures" / "fig_streaming_policy_compare_chain_success.png"
+        fig_chain_pdf = spc_dir / "figures" / "fig_streaming_policy_compare_chain_success.pdf"
+        fig_chain_delta_png = spc_dir / "figures" / "fig_streaming_policy_compare_chain_delta.png"
+        fig_chain_delta_pdf = spc_dir / "figures" / "fig_streaming_policy_compare_chain_delta.pdf"
         summary_src = spc_dir / "compare_summary.json"
 
         copied_table_csv = _copy_if_exists(table_src_csv, tables_dir / table_src_csv.name)
@@ -692,6 +696,10 @@ def main() -> int:
             _copy_if_exists(fig_src_pdf, figures_dir / fig_src_pdf.name),
             _copy_if_exists(fig_delta_png, figures_dir / fig_delta_png.name),
             _copy_if_exists(fig_delta_pdf, figures_dir / fig_delta_pdf.name),
+            _copy_if_exists(fig_chain_png, figures_dir / fig_chain_png.name),
+            _copy_if_exists(fig_chain_pdf, figures_dir / fig_chain_pdf.name),
+            _copy_if_exists(fig_chain_delta_png, figures_dir / fig_chain_delta_png.name),
+            _copy_if_exists(fig_chain_delta_pdf, figures_dir / fig_chain_delta_pdf.name),
         ]
         streaming_policy_compare["copied_tables"] = [x for x in [copied_table_csv, copied_table_md] if x]
         streaming_policy_compare["copied_figures"] = [x for x in copied_figures if x]

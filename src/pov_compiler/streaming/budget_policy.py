@@ -489,6 +489,192 @@ class SafetyLatencyBudgetPolicy:
         )
 
 
+class SafetyLatencyChainBudgetPolicy:
+    name = "safety_latency_chain"
+
+    def __init__(
+        self,
+        *,
+        budgets: list[BudgetSpec],
+        latency_cap_ms: float,
+        max_trials_per_query: int = 3,
+        min_chain_success_rate: float = 0.5,
+        prefer_lower_budget: bool = True,
+        escalate_on_reasons: list[str] | None = None,
+    ):
+        self.budgets = sorted(list(budgets), key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
+        self.latency_cap_ms = float(latency_cap_ms)
+        self.max_trials_per_query = max(1, int(max_trials_per_query))
+        self.min_chain_success_rate = float(min_chain_success_rate)
+        self.prefer_lower_budget = bool(prefer_lower_budget)
+        reasons = [str(x).strip().lower() for x in (escalate_on_reasons or ["budget_insufficient"]) if str(x).strip()]
+        self.escalate_on_reasons = reasons or ["budget_insufficient"]
+
+    def _start_index(self) -> int:
+        if self.prefer_lower_budget:
+            return 0
+        return max(0, int(len(self.budgets) // 2))
+
+    @staticmethod
+    def _latency_from_metrics(metrics: dict[str, Any]) -> float:
+        for key in ("latency_e2e_ms", "query_e2e_ms", "e2e_ms", "latency_ms"):
+            val = _to_float(metrics.get(key))
+            if val is not None:
+                return float(val)
+        return 0.0
+
+    @staticmethod
+    def _strict_hit(metrics: dict[str, Any]) -> bool:
+        for key in ("strict_hit_at_k", "hit_at_k_strict"):
+            val = _to_float(metrics.get(key))
+            if val is not None:
+                return float(val) > 0.0
+        return False
+
+    @staticmethod
+    def _chain_success(metrics: dict[str, Any]) -> float:
+        for key in ("chain_success", "chain_success_rate"):
+            val = _to_float(metrics.get(key))
+            if val is not None:
+                return float(val)
+        return 0.0
+
+    @staticmethod
+    def _chain_waiting(metrics: dict[str, Any]) -> bool:
+        val = _to_float(metrics.get("chain_waiting"))
+        return bool(val is not None and float(val) > 0.0)
+
+    @staticmethod
+    def _safety(metrics: dict[str, Any]) -> tuple[bool, str]:
+        is_critical = _to_float(metrics.get("safety_is_critical_fn"))
+        reason = str(metrics.get("safety_reason", "")).strip().lower()
+        if is_critical is None:
+            return False, reason
+        return bool(float(is_critical) > 0.0), reason
+
+    def select(
+        self,
+        *,
+        budgets: list[BudgetSpec],
+        evaluate_budget: Callable[[BudgetSpec], dict[str, Any]],
+        query_context: dict[str, Any] | None = None,
+    ) -> BudgetSelection:
+        available = sorted(list(budgets), key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
+        if not available:
+            raise ValueError("budgets is empty")
+        self.budgets = available
+        idx = self._start_index()
+        is_chain = bool((query_context or {}).get("is_chain", False))
+        tried: list[str] = []
+        trial_records: list[dict[str, Any]] = []
+        chosen_budget = available[idx]
+        chosen_metrics: dict[str, Any] = {}
+        status = "ok"
+        reason = "accept"
+        final_action = "accept"
+        final_action_reason = "strict_hit_latency_ok"
+
+        for trial_idx in range(1, self.max_trials_per_query + 1):
+            budget = available[idx]
+            metrics = evaluate_budget(budget)
+            tried.append(budget.key)
+            chosen_budget = budget
+            chosen_metrics = dict(metrics)
+
+            latency_ms = self._latency_from_metrics(metrics)
+            strict_hit = self._strict_hit(metrics)
+            chain_success = self._chain_success(metrics)
+            chain_waiting = self._chain_waiting(metrics)
+            safety_is, safety_reason = self._safety(metrics)
+
+            action = "accept"
+            action_reason = "strict_hit_latency_ok"
+            should_continue = False
+
+            if chain_waiting and is_chain:
+                action = "accept_waiting"
+                action_reason = "chain_waiting_for_time"
+                status = "waiting"
+                reason = action_reason
+            elif latency_ms > self.latency_cap_ms:
+                if idx > 0:
+                    action = "deescalate_latency"
+                    action_reason = f"latency_e2e_ms>{self.latency_cap_ms:.3f}"
+                    idx -= 1
+                    should_continue = True
+                else:
+                    action = "give_up_latency_floor"
+                    action_reason = f"latency_e2e_ms>{self.latency_cap_ms:.3f} at_min_budget"
+                    status = "rejected_by_latency"
+                    reason = action_reason
+            elif is_chain and chain_success < self.min_chain_success_rate:
+                if safety_reason in self.escalate_on_reasons and idx < len(available) - 1:
+                    action = f"escalate_chain_{safety_reason or 'critical'}"
+                    action_reason = "chain_success_below_threshold"
+                    idx += 1
+                    should_continue = True
+                elif idx < len(available) - 1:
+                    action = "escalate_chain_search"
+                    action_reason = "chain_success_below_threshold"
+                    idx += 1
+                    should_continue = True
+                else:
+                    action = "give_up_chain_target"
+                    action_reason = "chain_success_below_threshold_at_max_budget"
+                    status = "no_budget_passed"
+                    reason = action_reason
+            elif strict_hit and (not safety_is):
+                action = "accept"
+                action_reason = "strict_hit_latency_ok"
+                status = "ok"
+                reason = action_reason
+            elif safety_is and safety_reason in self.escalate_on_reasons and idx < len(available) - 1:
+                action = f"escalate_safety_{safety_reason or 'critical'}"
+                action_reason = "safety_critical_fn"
+                idx += 1
+                should_continue = True
+            else:
+                action = "give_up_max_trials"
+                action_reason = "max_trials_reached_or_nonrecoverable"
+                status = "no_budget_passed"
+                reason = action_reason
+
+            trial_records.append(
+                {
+                    "trial_index": int(trial_idx),
+                    "budget_key": budget.key,
+                    "budget_seconds": budget.seconds,
+                    "action": action,
+                    "action_reason": action_reason,
+                    "status": status if not should_continue else "continue",
+                    "metrics": dict(metrics),
+                }
+            )
+            final_action = action
+            final_action_reason = action_reason
+            if should_continue:
+                continue
+            break
+        else:
+            status = "no_budget_passed"
+            reason = "max_trials_reached"
+            final_action = "give_up_max_trials"
+            final_action_reason = reason
+
+        return BudgetSelection(
+            chosen_budget_key=chosen_budget.key,
+            chosen_budget_seconds=chosen_budget.seconds,
+            trials_count=len(trial_records),
+            tried_budget_keys=tried,
+            status=status,
+            reason=reason,
+            metrics=chosen_metrics,
+            action=final_action,
+            action_reason=final_action_reason,
+            trial_records=trial_records,
+        )
+
+
 class SafetyLatencyInterventionBudgetPolicy:
     name = "safety_latency_intervention"
 

@@ -4,6 +4,7 @@ from pov_compiler.streaming.budget_policy import (
     BudgetSpec,
     FixedBudgetPolicy,
     RecommendedBudgetPolicy,
+    SafetyLatencyChainBudgetPolicy,
     SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "RecommendedBudgetPolicy",
     "AdaptiveMinBudgetPolicy",
     "SafetyLatencyBudgetPolicy",
+    "SafetyLatencyChainBudgetPolicy",
     "SafetyLatencyInterventionBudgetPolicy",
     "InterventionConfig",
     "resolve_intervention_config",

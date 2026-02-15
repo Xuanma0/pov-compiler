@@ -172,3 +172,55 @@ def test_streaming_budget_smoke_safety_latency_policy(tmp_path: Path) -> None:
         "fig_policy_safety_vs_latency.pdf",
     ):
         assert (out_dir / "figures" / fig).exists()
+
+
+def test_streaming_budget_smoke_safety_latency_chain_policy(tmp_path: Path) -> None:
+    repo_root = ROOT
+    json_path = tmp_path / "demo_chain.json"
+    out_dir = tmp_path / "out_chain"
+    payload = _build_output().model_dump()
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    cmd = [
+        sys.executable,
+        str(repo_root / "scripts" / "streaming_budget_smoke.py"),
+        "--json",
+        str(json_path),
+        "--out_dir",
+        str(out_dir),
+        "--step-s",
+        "8",
+        "--budgets",
+        "20/50/4,40/100/8,60/200/12",
+        "--policy",
+        "safety_latency_chain",
+        "--latency-cap-ms",
+        "5",
+        "--max-trials-per-query",
+        "3",
+        "--query",
+        "lost_object=door which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object chain_object_mode=hard",
+    ]
+    proc = subprocess.run(cmd, cwd=str(repo_root), capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "policy=safety_latency_chain" in proc.stdout
+    assert "chain_queries_total=" in proc.stdout
+    assert "chain_success_rate=" in proc.stdout
+
+    headers = (out_dir / "queries.csv").read_text(encoding="utf-8").splitlines()[0]
+    for col in (
+        "is_chain",
+        "chain_success",
+        "chain_fail_reason",
+        "chain_step1_budget_seconds",
+        "chain_step2_budget_seconds",
+    ):
+        assert col in headers
+
+    for fig in (
+        "fig_streaming_chain_success_vs_budget_seconds.png",
+        "fig_streaming_chain_success_vs_budget_seconds.pdf",
+        "fig_streaming_chain_failure_attribution.png",
+        "fig_streaming_chain_failure_attribution.pdf",
+    ):
+        assert (out_dir / "figures" / fig).exists()

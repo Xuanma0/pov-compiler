@@ -79,6 +79,8 @@ def test_run_streaming_policy_compare_smoke(tmp_path: Path) -> None:
         "anchor=turn_head top_k=6",
         "--query",
         "decision=ATTENTION_TURN_HEAD top_k=6",
+        "--query",
+        "lost_object=door which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object chain_object_mode=hard",
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -103,6 +105,10 @@ def test_run_streaming_policy_compare_smoke(tmp_path: Path) -> None:
         "fig_streaming_policy_compare_safety_latency.pdf",
         "fig_streaming_policy_compare_delta.png",
         "fig_streaming_policy_compare_delta.pdf",
+        "fig_streaming_policy_compare_chain_success.png",
+        "fig_streaming_policy_compare_chain_success.pdf",
+        "fig_streaming_policy_compare_chain_delta.png",
+        "fig_streaming_policy_compare_chain_delta.pdf",
     ):
         assert (compare_dir / "figures" / name).exists()
 
@@ -129,6 +135,7 @@ def test_run_streaming_policy_compare_smoke(tmp_path: Path) -> None:
     assert summary.get("policy_a")
     assert summary.get("policy_b")
     assert "delta" in summary
+    assert "chain_success_rate" in summary.get("delta", {})
     snap = json.loads(snapshot_json.read_text(encoding="utf-8"))
     inputs = snap.get("inputs", {})
     assert str(inputs.get("intervention_cfg", "")).strip()

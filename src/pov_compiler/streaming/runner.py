@@ -10,13 +10,14 @@ from typing import Any
 
 import numpy as np
 
-from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_nlq
+from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_chain, load_hard_pseudo_nlq
 from pov_compiler.bench.nlq.safety import classify_failure_reason
 from pov_compiler.context.context_builder import build_context, summarize_repo_selection
 from pov_compiler.eval.budget_sweep import apply_budget
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
 from pov_compiler.retrieval.constraints import HardConstraintConfig, apply_constraints_detailed
+from pov_compiler.retrieval.query_parser import parse_query, parse_query_chain
 from pov_compiler.retrieval.query_planner import QueryCandidate, QueryPlan, plan as plan_query
 from pov_compiler.retrieval.reranker import Hit, rerank
 from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
@@ -28,6 +29,7 @@ from pov_compiler.streaming.budget_policy import (
     BudgetSpec,
     FixedBudgetPolicy,
     RecommendedBudgetPolicy,
+    SafetyLatencyChainBudgetPolicy,
     SafetyLatencyInterventionBudgetPolicy,
     SafetyLatencyBudgetPolicy,
     parse_budget_keys,
@@ -188,6 +190,49 @@ def _context_len_stats(context_payload: dict[str, Any]) -> tuple[int, int]:
     return chars, approx_tokens
 
 
+def _infer_chain_applied_constraints(query_text: str) -> list[str]:
+    parsed = parse_query(str(query_text))
+    applied: list[str] = []
+    time_mode = str(parsed.chain_time_mode or "hard").strip().lower()
+    if time_mode != "off" and (parsed.chain_time_min_s is not None or parsed.chain_time_max_s is not None):
+        applied.append("chain_time_range")
+    place_mode = str(parsed.chain_place_mode or "").strip().lower()
+    if place_mode in {"soft", "hard"} and str(parsed.chain_place_value or "").strip():
+        applied.append("chain_place_match")
+    object_mode = str(parsed.chain_object_mode or "").strip().lower()
+    if object_mode in {"soft", "hard"} and str(parsed.chain_object_value or "").strip():
+        applied.append("chain_object_match")
+    return applied
+
+
+def _infer_chain_fail_reason(
+    *,
+    waiting: bool,
+    step1_has_hit: bool,
+    step2_has_hit: bool,
+    step2_before: int,
+    step2_after: int,
+    top1_bad: bool,
+    strict_hit: bool,
+    safety_reason: str,
+) -> str:
+    if waiting:
+        return "pending"
+    if not step1_has_hit:
+        return "step1_no_hit"
+    if not step2_has_hit:
+        if step2_before > 0 and step2_after == 0:
+            return "constraints_over_filtered"
+        return "step2_no_hit"
+    if top1_bad:
+        return "retrieval_distractor"
+    if safety_reason:
+        return str(safety_reason)
+    if not strict_hit:
+        return "evidence_missing"
+    return ""
+
+
 def _resolve_repo_budget_spec(repo_budget: str | None) -> BudgetSpec | None:
     text = str(repo_budget or "").strip()
     if not text:
@@ -319,54 +364,186 @@ def _evaluate_sample_once(
     context_use_repo: bool = False,
     repo_read_policy: str = "budgeted_topk",
     repo_budget: BudgetSpec | None = None,
+    chain_step1_output: Output | None = None,
+    chain_step1_budget: BudgetSpec | None = None,
+    chain_step2_budget: BudgetSpec | None = None,
+    step_end_t: float | None = None,
 ) -> dict[str, Any]:
-    query_plan = _build_plan(sample, allow_gt_fallback=allow_gt_fallback)
+    chain_query = parse_query_chain(str(sample.query))
+    query_plan = _build_plan(sample, allow_gt_fallback=allow_gt_fallback) if chain_query is None else None
     budget_for_context = repo_budget if repo_budget is not None else budget
     max_seconds = float(budget_for_context.max_total_s) if budget_for_context is not None else None
     max_tokens = int(budget_for_context.max_tokens) if budget_for_context is not None else 200
     max_decisions = int(budget_for_context.max_decisions) if budget_for_context is not None else 12
-    context_payload = build_context(
-        output_json=output,
-        mode="events_plus_repo" if bool(context_use_repo) else "full",
-        budget={
-            "max_events": max(4, int(max_decisions) * 2),
-            "max_highlights": max(4, int(max_decisions) * 2),
-            "max_decisions": int(max_decisions),
-            "max_tokens": int(max_tokens),
-            "max_seconds": max_seconds,
-            "use_repo": bool(context_use_repo),
-            "repo_strategy": str(repo_read_policy or "budgeted_topk"),
-            "repo_read_policy": str(repo_read_policy or "budgeted_topk"),
-            "max_repo_chunks": max(8, int(max_decisions) * 2),
-            "max_repo_tokens": int(max_tokens),
-            "max_repo_chars": int(max(1200, max_tokens * 6)),
-            "repo_query": str(sample.query),
-        },
-        query_info={
-            "query": str(sample.query),
-            "plan_intent": str(query_plan.intent),
-            "parsed_constraints": dict(query_plan.constraints),
-            "top_k": int(sample.top_k),
-        },
+    def _build_context_payload(
+        local_output: Output,
+        *,
+        local_query: str,
+        local_plan_intent: str,
+        local_constraints: dict[str, Any],
+    ) -> dict[str, Any]:
+        return build_context(
+            output_json=local_output,
+            mode="events_plus_repo" if bool(context_use_repo) else "full",
+            budget={
+                "max_events": max(4, int(max_decisions) * 2),
+                "max_highlights": max(4, int(max_decisions) * 2),
+                "max_decisions": int(max_decisions),
+                "max_tokens": int(max_tokens),
+                "max_seconds": max_seconds,
+                "use_repo": bool(context_use_repo),
+                "repo_strategy": str(repo_read_policy or "budgeted_topk"),
+                "repo_read_policy": str(repo_read_policy or "budgeted_topk"),
+                "max_repo_chunks": max(8, int(max_decisions) * 2),
+                "max_repo_tokens": int(max_tokens),
+                "max_repo_chars": int(max(1200, max_tokens * 6)),
+                "repo_query": str(local_query),
+            },
+            query_info={
+                "query": str(local_query),
+                "plan_intent": str(local_plan_intent),
+                "parsed_constraints": dict(local_constraints),
+                "top_k": int(sample.top_k),
+            },
+        )
+
+    if chain_query is None:
+        assert query_plan is not None
+        context_payload = _build_context_payload(
+            output,
+            local_query=str(sample.query),
+            local_plan_intent=str(query_plan.intent),
+            local_constraints=dict(query_plan.constraints),
+        )
+        retrieval_output = _context_to_output(output, context_payload)
+        retriever = Retriever(output_json=retrieval_output, index=index, config=retrieval_config)
+        candidate_queries = [str(cand["query"]) for cand in query_plan.candidates]
+        merged_hits = retriever.retrieve_multi(candidate_queries)
+        cresult = apply_constraints_detailed(
+            merged_hits,
+            query_plan=query_plan,
+            cfg=hard_cfg,
+            output=retrieval_output,
+        )
+        reranked_hits = rerank(
+            cresult.hits,
+            plan=query_plan,
+            context=retrieval_output,
+            cfg=rerank_cfg,
+            distractors=sample.distractors,
+        )
+        pred_spans = _extract_pred_spans_from_hits(reranked_hits, top_k=int(sample.top_k))
+        rank, best_iou = _rank_for_gt_span(pred_spans, sample.gt_span, min_iou=0.1)
+        hit_at_k = 1.0 if rank is not None and rank <= int(sample.top_k) else 0.0
+        hit_at_1 = 1.0 if rank == 1 else 0.0
+        top1_bad = 1.0 if _top1_in_distractor(pred_spans, sample.distractors, min_iou=0.1) else 0.0
+        hit_at_1_strict = 1.0 if hit_at_1 > 0.0 and top1_bad < 0.5 else 0.0
+        hit_at_k_strict = 1.0 if hit_at_k > 0.0 and top1_bad < 0.5 else 0.0
+        mrr = 1.0 / float(rank) if rank is not None else 0.0
+        top1_kind = str(reranked_hits[0]["kind"]) if reranked_hits else "none"
+        top1_source_query = str(reranked_hits[0]["source_query"]) if reranked_hits else ""
+        repo_trace = dict(context_payload.get("repo_trace", {}))
+        repo_summary = summarize_repo_selection(repo_trace.get("selection_trace", {}))
+        context_len_chars, context_approx_tokens = _context_len_stats(context_payload)
+        return {
+            "is_chain": 0.0,
+            "chain_steps": 0.0,
+            "chain_rel": "",
+            "chain_step1_has_hit": 0.0,
+            "chain_step2_has_hit": 0.0,
+            "chain_success": 0.0,
+            "chain_fail_reason": "",
+            "chain_derived_time_used": 0.0,
+            "chain_derived_place_used": 0.0,
+            "chain_derived_object_used": 0.0,
+            "chain_waiting": 0.0,
+            "chain_step1_budget_seconds": float(chain_step1_budget.seconds if chain_step1_budget else (budget.seconds if budget else 0.0)),
+            "chain_step2_budget_seconds": float(chain_step2_budget.seconds if chain_step2_budget else (budget.seconds if budget else 0.0)),
+            "hit_at_k": float(hit_at_k),
+            "hit_at_1": float(hit_at_1),
+            "hit_at_1_strict": float(hit_at_1_strict),
+            "hit_at_k_strict": float(hit_at_k_strict),
+            "top1_in_distractor_rate": float(top1_bad),
+            "fp_rate": float(top1_bad),
+            "mrr": float(mrr),
+            "rank": int(rank) if rank is not None else -1,
+            "best_iou": float(best_iou),
+            "top1_kind": top1_kind,
+            "top1_source_query": top1_source_query,
+            "chosen_plan_intent": str(query_plan.intent),
+            "constraints_applied": list(cresult.applied),
+            "constraints_relaxed": list(cresult.relaxed),
+            "used_fallback": bool(cresult.used_fallback),
+            "filtered_hits_before": int(cresult.filtered_before),
+            "filtered_hits_after": int(cresult.filtered_after),
+            "context_use_repo": bool(context_use_repo),
+            "repo_policy": str(repo_summary.get("policy_name", repo_read_policy if context_use_repo else "")),
+            "repo_policy_hash": str(repo_summary.get("policy_hash", "")),
+            "repo_selected_chunks": int(repo_summary.get("selected_chunks", 0)),
+            "repo_selected_by_level": dict(repo_summary.get("by_level", {})),
+            "repo_dropped_topn_count": int(repo_summary.get("dropped_topN_count", 0)),
+            "repo_cache_hit": bool(repo_trace.get("cache_hit", False)),
+            "context_len_chars": int(context_len_chars),
+            "context_approx_tokens": int(context_approx_tokens),
+        }
+
+    # Chain path: step1 uses minimum budget slice, step2 uses policy-selected budget slice.
+    step1_query = str(chain_query.steps[0].raw).strip()
+    step2_query = str(chain_query.steps[1].raw).strip()
+    step1_base = chain_step1_output if chain_step1_output is not None else output
+    step2_base = output
+    step1_plan = plan_query(step1_query)
+
+    context_payload_step1 = _build_context_payload(
+        step1_base,
+        local_query=step1_query,
+        local_plan_intent=str(step1_plan.intent),
+        local_constraints=dict(step1_plan.constraints),
     )
-    retrieval_output = _context_to_output(output, context_payload)
-    retriever = Retriever(output_json=retrieval_output, index=index, config=retrieval_config)
-    candidate_queries = [str(cand["query"]) for cand in query_plan.candidates]
-    merged_hits = retriever.retrieve_multi(candidate_queries)
-    cresult = apply_constraints_detailed(
-        merged_hits,
-        query_plan=query_plan,
-        cfg=hard_cfg,
-        output=retrieval_output,
+    retrieval_step1 = _context_to_output(step1_base, context_payload_step1)
+    retriever_step1 = Retriever(output_json=retrieval_step1, index=index, config=retrieval_config)
+    step1_result = retriever_step1.retrieve(step1_query)
+    step1_hits = retriever_step1._result_to_hits(step1_query, step1_result)  # type: ignore[attr-defined]
+    step1_top = step1_hits[0] if step1_hits else None
+    step1_has_hit = bool(step1_top is not None)
+
+    if step1_top is not None:
+        derived = retriever_step1._derive_constraints_from_hit(  # type: ignore[attr-defined]
+            step1_top,
+            rel=str(chain_query.rel),
+            window_s=float(chain_query.window_s),
+            derive=str(getattr(chain_query, "derive", "time_only")),
+            place_mode=str(getattr(chain_query, "place_mode", "soft")),
+            object_mode=str(getattr(chain_query, "object_mode", "soft")),
+            time_mode=str(getattr(chain_query, "time_mode", "hard")),
+            output=step2_base,
+            step1_parsed=chain_query.steps[0].parsed,
+        )
+        step2_query_derived = retriever_step1._merge_step2_query(  # type: ignore[attr-defined]
+            step2_query,
+            derived,
+            default_top_k=int(sample.top_k),
+        )
+    else:
+        derived = {}
+        step2_query_derived = _force_top_k(step2_query, int(sample.top_k))
+
+    step2_plan = plan_query(step2_query_derived)
+    context_payload_step2 = _build_context_payload(
+        step2_base,
+        local_query=step2_query_derived,
+        local_plan_intent=str(step2_plan.intent),
+        local_constraints=dict(step2_plan.constraints),
     )
-    reranked_hits = rerank(
-        cresult.hits,
-        plan=query_plan,
-        context=retrieval_output,
-        cfg=rerank_cfg,
-        distractors=sample.distractors,
-    )
-    pred_spans = _extract_pred_spans_from_hits(reranked_hits, top_k=int(sample.top_k))
+    retrieval_step2 = _context_to_output(step2_base, context_payload_step2)
+    retriever_step2 = Retriever(output_json=retrieval_step2, index=index, config=retrieval_config)
+    step2_plain = retriever_step2.retrieve(step2_query)
+    step2_result = retriever_step2.retrieve(step2_query_derived)
+    step2_before = int(retriever_step2._count_selected(step2_plain))  # type: ignore[attr-defined]
+    step2_after = int(retriever_step2._count_selected(step2_result))  # type: ignore[attr-defined]
+    step2_hits = retriever_step2._result_to_hits(step2_query_derived, step2_result)  # type: ignore[attr-defined]
+
+    pred_spans = _extract_pred_spans_from_hits(step2_hits, top_k=int(sample.top_k))
     rank, best_iou = _rank_for_gt_span(pred_spans, sample.gt_span, min_iou=0.1)
     hit_at_k = 1.0 if rank is not None and rank <= int(sample.top_k) else 0.0
     hit_at_1 = 1.0 if rank == 1 else 0.0
@@ -374,12 +551,62 @@ def _evaluate_sample_once(
     hit_at_1_strict = 1.0 if hit_at_1 > 0.0 and top1_bad < 0.5 else 0.0
     hit_at_k_strict = 1.0 if hit_at_k > 0.0 and top1_bad < 0.5 else 0.0
     mrr = 1.0 / float(rank) if rank is not None else 0.0
-    top1_kind = str(reranked_hits[0]["kind"]) if reranked_hits else "none"
-    top1_source_query = str(reranked_hits[0]["source_query"]) if reranked_hits else ""
-    repo_trace = dict(context_payload.get("repo_trace", {}))
+    top1_kind = str(step2_hits[0]["kind"]) if step2_hits else "none"
+    top1_source_query = str(step2_hits[0]["source_query"]) if step2_hits else ""
+    repo_trace = dict(context_payload_step2.get("repo_trace", {}))
     repo_summary = summarize_repo_selection(repo_trace.get("selection_trace", {}))
-    context_len_chars, context_approx_tokens = _context_len_stats(context_payload)
+    context_len_chars, context_approx_tokens = _context_len_stats(context_payload_step2)
+
+    derived_time = dict(derived.get("time", {})) if isinstance(derived.get("time", {}), dict) else {}
+    derived_place = dict(derived.get("place", {})) if isinstance(derived.get("place", {}), dict) else {}
+    derived_object = dict(derived.get("object", {})) if isinstance(derived.get("object", {}), dict) else {}
+    chain_waiting = 0.0
+    if (
+        str(getattr(chain_query, "rel", "after")).strip().lower() == "after"
+        and bool(derived_time.get("enabled", False))
+        and step_end_t is not None
+    ):
+        t_min = float(derived_time.get("t_min_s", 0.0) or 0.0)
+        chain_waiting = 1.0 if float(step_end_t) + 1e-6 < t_min else 0.0
+    chain_step2_has_hit = 1.0 if bool(step2_hits) else 0.0
+    chain_success = 1.0 if (step1_has_hit and chain_step2_has_hit > 0.0 and top1_bad < 0.5 and chain_waiting < 0.5) else 0.0
+    safety_reason = str(classify_failure_reason(
+        {
+            "filtered_hits_before": int(step2_before),
+            "filtered_hits_after": int(step2_after),
+            "candidate_count": int(step2_after),
+            "top1_in_distractor": float(top1_bad),
+            "budget_max_total_s": float((chain_step2_budget.seconds if chain_step2_budget else (budget.seconds if budget else 0.0))),
+            "budget_max_tokens": int(chain_step2_budget.max_tokens if chain_step2_budget else (budget.max_tokens if budget else 0)),
+            "budget_max_decisions": int(chain_step2_budget.max_decisions if chain_step2_budget else (budget.max_decisions if budget else 0)),
+        }
+    ))
+    chain_fail_reason = _infer_chain_fail_reason(
+        waiting=bool(chain_waiting > 0.0),
+        step1_has_hit=bool(step1_has_hit),
+        step2_has_hit=bool(chain_step2_has_hit > 0.0),
+        step2_before=int(step2_before),
+        step2_after=int(step2_after),
+        top1_bad=bool(top1_bad > 0.0),
+        strict_hit=bool(hit_at_k_strict > 0.0),
+        safety_reason=str(safety_reason),
+    )
+    inferred_applied = _infer_chain_applied_constraints(step2_query_derived)
+
     return {
+        "is_chain": 1.0,
+        "chain_steps": 2.0,
+        "chain_rel": str(getattr(chain_query, "rel", "after")),
+        "chain_step1_has_hit": 1.0 if step1_has_hit else 0.0,
+        "chain_step2_has_hit": float(chain_step2_has_hit),
+        "chain_success": float(chain_success),
+        "chain_fail_reason": str(chain_fail_reason),
+        "chain_derived_time_used": 1.0 if bool(derived_time.get("enabled", False)) else 0.0,
+        "chain_derived_place_used": 1.0 if bool(derived_place.get("enabled", False)) else 0.0,
+        "chain_derived_object_used": 1.0 if bool(derived_object.get("enabled", False)) else 0.0,
+        "chain_waiting": float(chain_waiting),
+        "chain_step1_budget_seconds": float(chain_step1_budget.seconds if chain_step1_budget else (budget.seconds if budget else 0.0)),
+        "chain_step2_budget_seconds": float(chain_step2_budget.seconds if chain_step2_budget else (budget.seconds if budget else 0.0)),
         "hit_at_k": float(hit_at_k),
         "hit_at_1": float(hit_at_1),
         "hit_at_1_strict": float(hit_at_1_strict),
@@ -391,12 +618,12 @@ def _evaluate_sample_once(
         "best_iou": float(best_iou),
         "top1_kind": top1_kind,
         "top1_source_query": top1_source_query,
-        "chosen_plan_intent": str(query_plan.intent),
-        "constraints_applied": list(cresult.applied),
-        "constraints_relaxed": list(cresult.relaxed),
-        "used_fallback": bool(cresult.used_fallback),
-        "filtered_hits_before": int(cresult.filtered_before),
-        "filtered_hits_after": int(cresult.filtered_after),
+        "chosen_plan_intent": str(step2_plan.intent),
+        "constraints_applied": list(inferred_applied),
+        "constraints_relaxed": [],
+        "used_fallback": False,
+        "filtered_hits_before": int(step2_before),
+        "filtered_hits_after": int(step2_after),
         "context_use_repo": bool(context_use_repo),
         "repo_policy": str(repo_summary.get("policy_name", repo_read_policy if context_use_repo else "")),
         "repo_policy_hash": str(repo_summary.get("policy_hash", "")),
@@ -440,9 +667,15 @@ def _samples_from_queries(output: Output, queries: list[str], top_k: int) -> lis
 
 
 def _derive_safety_for_trial(metrics: dict[str, Any], budget: BudgetSpec) -> tuple[int, str]:
+    if float(metrics.get("chain_waiting", 0.0) or 0.0) > 0.0:
+        return 0, "pending"
     strict_hit = float(metrics.get("hit_at_k_strict", 0.0) or 0.0) > 0.0
     if strict_hit:
         return 0, ""
+    chain_reason = str(metrics.get("chain_fail_reason", "")).strip()
+    if chain_reason:
+        if chain_reason in {"step1_no_hit", "step2_no_hit", "constraints_over_filtered", "retrieval_distractor", "evidence_missing", "budget_insufficient"}:
+            return 1, chain_reason
     row = {
         "filtered_hits_before": int(metrics.get("filtered_hits_before", 0) or 0),
         "filtered_hits_after": int(metrics.get("filtered_hits_after", 0) or 0),
@@ -527,6 +760,7 @@ class StreamingConfig:
     max_trials_per_query: int = 3
     strict_threshold: float = 1.0
     max_top1_in_distractor_rate: float = 0.2
+    min_chain_success_rate: float = 0.5
     prefer_lower_budget: bool = True
     escalate_on_reasons: list[str] | None = None
     deescalate_on_latency: bool = True
@@ -728,6 +962,7 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         return _run_streaming_basic(output, cfg)
 
     budgets_sorted = sorted(budgets, key=lambda b: (float(b.max_total_s), int(b.max_tokens), int(b.max_decisions)))
+    min_budget = budgets_sorted[0]
     fixed_budget = str(cfg.fixed_budget or budgets_sorted[-1].key)
     policy_name = str(cfg.budget_policy or "fixed").strip().lower()
     intervention_cfg = resolve_intervention_config(cfg.intervention_cfg)
@@ -752,6 +987,15 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
             escalate_on_reasons=list(cfg.escalate_on_reasons or ["budget_insufficient"]),
             deescalate_on_latency=bool(cfg.deescalate_on_latency),
             stop_on_non_budget_failure=bool(cfg.stop_on_non_budget_failure),
+        )
+    elif policy_name == "safety_latency_chain":
+        policy = SafetyLatencyChainBudgetPolicy(
+            budgets=budgets_sorted,
+            latency_cap_ms=float(cfg.latency_cap_ms),
+            max_trials_per_query=int(cfg.max_trials_per_query),
+            min_chain_success_rate=float(cfg.min_chain_success_rate),
+            prefer_lower_budget=bool(cfg.prefer_lower_budget),
+            escalate_on_reasons=list(cfg.escalate_on_reasons or ["budget_insufficient"]),
         )
     elif policy_name == "adaptive":
         default_gates = {
@@ -792,6 +1036,13 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
             n_highlight=max(1, int(cfg.nlq_n_highlight)),
             n_token=max(1, int(cfg.nlq_n_token)),
             n_decision=max(1, int(cfg.nlq_n_decision)),
+            top_k=max(1, int(cfg.top_k)),
+        )
+    elif str(cfg.nlq_mode).strip().lower() == "hard_pseudo_chain":
+        samples_all = load_hard_pseudo_chain(
+            output,
+            seed=int(cfg.nlq_seed),
+            n_chain=max(1, int(cfg.nlq_n_highlight)),
             top_k=max(1, int(cfg.top_k)),
         )
     else:
@@ -881,6 +1132,15 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                             "max_decisions": int(budget.max_decisions),
                         },
                     )
+                if min_budget.key not in budgeted_cache:
+                    budgeted_cache[min_budget.key] = apply_budget(
+                        window_output,
+                        budget={
+                            "max_total_s": float(min_budget.max_total_s),
+                            "max_tokens": int(min_budget.max_tokens),
+                            "max_decisions": int(min_budget.max_decisions),
+                        },
+                    )
                 eval_start = time.perf_counter()
                 hard_cfg_eval = _hard_cfg_for_stage(hard_cfg, constraints_stage)
                 rerank_cfg_eval = _rerank_cfg_for_profile(rerank_cfg, rerank_profile)
@@ -905,6 +1165,10 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     context_use_repo=bool(cfg.context_use_repo),
                     repo_read_policy=str(cfg.repo_read_policy or "budgeted_topk"),
                     repo_budget=repo_budget_spec,
+                    chain_step1_output=budgeted_cache[min_budget.key],
+                    chain_step1_budget=min_budget,
+                    chain_step2_budget=budget,
+                    step_end_t=float(end_t),
                 )
                 eval_ms = float((time.perf_counter() - eval_start) * 1000.0)
                 retrieval_ms = float(metrics.get("retrieval_ms", eval_ms))
@@ -1023,7 +1287,11 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                 selection = policy.select(
                     budgets=budgets_sorted,
                     evaluate_budget=_eval_budget,
-                    query_context={"qid": sample.qid, "query_type": sample.query_type},
+                    query_context={
+                        "qid": sample.qid,
+                        "query_type": sample.query_type,
+                        "is_chain": bool(parse_query_chain(str(sample.query)) is not None),
+                    },
                 )
             selected_metrics = dict(selection.metrics)
             q_e2e_ms = float((time.perf_counter() - query_started) * 1000.0)
@@ -1071,6 +1339,9 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "gt_t0": float(sample.gt_span[0]),
                     "gt_t1": float(sample.gt_span[1]),
                     "policy_name": str(policy_name),
+                    "is_chain": int(float(trial_metrics.get("is_chain", 0.0) or 0.0)),
+                    "chain_steps": int(float(trial_metrics.get("chain_steps", 0.0) or 0.0)),
+                    "chain_rel": str(trial_metrics.get("chain_rel", "")),
                     "budget_seconds": bsec,
                     "budget_tokens": btok,
                     "budget_decisions": bdec,
@@ -1096,6 +1367,20 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "strict_hit_at_1": float(trial_metrics.get("strict_hit_at_1", trial_metrics.get("hit_at_1_strict", 0.0))),
                     "hit_at_k_strict": float(trial_metrics.get("hit_at_k_strict", 0.0)),
                     "hit_at_1_strict": float(trial_metrics.get("hit_at_1_strict", 0.0)),
+                    "chain_step1_has_hit": int(float(trial_metrics.get("chain_step1_has_hit", 0.0) or 0.0)),
+                    "chain_step2_has_hit": int(float(trial_metrics.get("chain_step2_has_hit", 0.0) or 0.0)),
+                    "chain_success": float(trial_metrics.get("chain_success", 0.0) or 0.0),
+                    "chain_fail_reason": str(trial_metrics.get("chain_fail_reason", "")),
+                    "chain_derived_time_used": int(float(trial_metrics.get("chain_derived_time_used", 0.0) or 0.0)),
+                    "chain_derived_place_used": int(float(trial_metrics.get("chain_derived_place_used", 0.0) or 0.0)),
+                    "chain_derived_object_used": int(float(trial_metrics.get("chain_derived_object_used", 0.0) or 0.0)),
+                    "chain_waiting": int(float(trial_metrics.get("chain_waiting", 0.0) or 0.0)),
+                    "chain_step1_budget_seconds": float(
+                        trial_metrics.get("chain_step1_budget_seconds", min_budget.seconds)
+                    ),
+                    "chain_step2_budget_seconds": float(
+                        trial_metrics.get("chain_step2_budget_seconds", bsec)
+                    ),
                     "top1_in_distractor_rate": float(trial_metrics.get("top1_in_distractor_rate", 0.0)),
                     "fp_rate": float(trial_metrics.get("fp_rate", 0.0)),
                     "mrr": float(trial_metrics.get("mrr", 0.0)),
@@ -1187,6 +1472,11 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                 "chosen_budget_key_mode": str(policy_name),
                 "avg_trials_per_query": _mean([float(x["trial_count_for_query"]) for x in final_rows]),
                 "avg_trials_per_query_step": _mean([float(x["trial_count_for_query"]) for x in final_rows]),
+                "chain_queries_total": int(
+                    sum(1 for x in metric_rows if int(x.get("is_chain", 0)) > 0)
+                ),
+                "chain_success_rate_step": _mean([float(x.get("chain_success", 0.0)) for x in metric_rows]),
+                "chain_waiting_rate_step": _mean([float(x.get("chain_waiting", 0.0)) for x in metric_rows]),
                 "codec_name": codec_name,
                 "codec_k": int(cfg.codec_k),
                 "candidates_in_step": int(candidate_count),
@@ -1264,6 +1554,23 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "safety_budget_insufficient_rate": _mean(
             [1.0 if str(r.get("safety_reason", "")) == "budget_insufficient" else 0.0 for r in metric_rows]
         ),
+        "chain_queries_total": int(sum(1 for r in metric_rows if int(r.get("is_chain", 0)) > 0)),
+        "chain_success_rate": _mean([float(r.get("chain_success", 0.0)) for r in metric_rows]),
+        "chain_waiting_rate": _mean([float(r.get("chain_waiting", 0.0)) for r in metric_rows]),
+        "chain_distractor_rate": _mean(
+            [
+                float(r.get("top1_in_distractor_rate", 0.0))
+                for r in metric_rows
+                if int(r.get("is_chain", 0)) > 0
+            ]
+        ),
+        "chain_constraints_over_filtered_rate": _mean(
+            [
+                1.0 if str(r.get("chain_fail_reason", "")) == "constraints_over_filtered" else 0.0
+                for r in metric_rows
+                if int(r.get("is_chain", 0)) > 0
+            ]
+        ),
         "num_escalate": int(sum(v for k, v in action_counts.items() if str(k).startswith("escalate_"))),
         "num_deescalate": int(sum(v for k, v in action_counts.items() if str(k).startswith("deescalate_"))),
         "num_accept": int(action_counts.get("accept", 0)),
@@ -1273,6 +1580,7 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "attribution_counts": attribution_counts,
         "budgets": [b.key for b in budgets_sorted],
         "latency_cap_ms": float(cfg.latency_cap_ms),
+        "min_chain_success_rate": float(cfg.min_chain_success_rate),
         "max_trials_per_query": int(cfg.max_trials_per_query),
         "escalate_on_reasons": list(cfg.escalate_on_reasons or ["budget_insufficient"]),
         "policy_action_counts": action_counts,

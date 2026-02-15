@@ -48,6 +48,8 @@ def explain_scores(
                 "priority_bonus": float(parts["priority_bonus"]),
                 "place_match_bonus": float(parts.get("place_match_bonus", 0.0)),
                 "object_match_bonus": float(parts.get("object_match_bonus", 0.0)),
+                "chain_place_bonus": float(parts.get("chain_place_bonus", 0.0)),
+                "chain_object_bonus": float(parts.get("chain_object_bonus", 0.0)),
                 "trigger_match": float(parts["trigger_match"]),
                 "action_match": float(parts["action_match"]),
                 "constraint_match": float(parts["constraint_match"]),

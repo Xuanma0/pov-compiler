@@ -125,6 +125,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_safety_latency.pdf").write_bytes(b"PDF")
     (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_delta.png").write_bytes(b"PNG")
     (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_chain_success.png").write_bytes(b"PNG")
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_chain_success.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_chain_delta.png").write_bytes(b"PNG")
+    (compare_dir / "stream_policy_cmp" / "figures" / "fig_streaming_policy_compare_chain_delta.pdf").write_bytes(b"PDF")
     (compare_dir / "stream_policy_cmp" / "compare_summary.json").write_text(
         json.dumps({"policy_a": "safety_latency", "policy_b": "safety_latency_intervention"}, ensure_ascii=False),
         encoding="utf-8",
@@ -364,6 +368,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "tables" / "table_streaming_policy_compare.md").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_safety_latency.png").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_delta.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_policy_compare_chain_success.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_policy_compare_chain_delta.png").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.csv").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.md").exists()
     assert (out_dir / "figures" / "fig_streaming_repo_compare_safety_latency.png").exists()

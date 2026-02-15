@@ -319,6 +319,7 @@ class Retriever:
         object_mode: str = "soft",
         time_mode: str = "hard",
         output: Output | None = None,
+        step1_parsed: ParsedQuery | None = None,
     ) -> dict[str, Any]:
         rel_norm = str(rel).strip().lower()
         t0 = float(hit["t0"])
@@ -335,8 +336,43 @@ class Retriever:
             t_min_s = max(0.0, float(t1))
             t_max_s = float("inf")
         meta = dict(hit.get("meta", {}))
+
         place_value = str(meta.get("place_segment_id", "")).strip()
+        place_source = "step1_hit_meta" if place_value else ""
+        place_disabled_reason = ""
+
         object_value = str(meta.get("interaction_primary_object", "")).strip().lower()
+        if not object_value:
+            for candidate_key in ("object_name", "active_object_top1", "label", "name"):
+                val = str(meta.get(candidate_key, "")).strip().lower()
+                if val:
+                    object_value = val
+                    break
+        object_source = "step1_hit_meta" if object_value else ""
+        object_disabled_reason = ""
+
+        if (not object_value) and step1_parsed is not None:
+            parsed_obj = str(
+                step1_parsed.object_name
+                or step1_parsed.lost_object
+                or step1_parsed.object_last_seen
+                or step1_parsed.interaction_object
+                or ""
+            ).strip().lower()
+            if parsed_obj:
+                object_value = parsed_obj
+                object_source = "step1_query"
+            else:
+                object_disabled_reason = "missing_from_query"
+
+        if (not place_value) and step1_parsed is not None:
+            parsed_place = str(step1_parsed.place or "").strip().lower()
+            if parsed_place in {"first", "last", "any"}:
+                place_value = parsed_place
+                place_source = "step1_query"
+            else:
+                place_disabled_reason = "missing_from_query"
+
         if (not object_value) and output is not None:
             center_ms = int(round((0.5 * (t0 + t1)) * 1000.0))
             nearest_name = ""
@@ -357,7 +393,16 @@ class Retriever:
                 if nearest_dist is None or dist < nearest_dist:
                     nearest_dist = dist
                     nearest_name = name
-            object_value = nearest_name
+            if nearest_name:
+                object_value = nearest_name
+                object_source = "object_memory_nearby"
+            elif not object_disabled_reason:
+                object_disabled_reason = "missing_from_object_memory"
+
+        if not place_value and not place_disabled_reason:
+            place_disabled_reason = "missing_from_hit"
+        if not object_value and not object_disabled_reason:
+            object_disabled_reason = "missing_from_hit"
         derive_norm = str(derive or "time_only").strip().lower().replace(" ", "")
         if derive_norm not in {"time_only", "time+place", "time+object", "time+place+object"}:
             derive_norm = "time_only"
@@ -372,6 +417,16 @@ class Retriever:
             time_mode_norm = "hard"
         use_place = derive_norm in {"time+place", "time+place+object"}
         use_object = derive_norm in {"time+object", "time+place+object"}
+        time_enabled = bool(time_mode_norm != "off")
+        use_place = derive_norm in {"time+place", "time+place+object"}
+        use_object = derive_norm in {"time+object", "time+place+object"}
+        place_enabled = bool(use_place and place_mode_norm != "off" and bool(place_value))
+        object_enabled = bool(use_object and object_mode_norm != "off" and bool(object_value))
+        if use_place and place_mode_norm != "off" and not place_enabled and not place_disabled_reason:
+            place_disabled_reason = "missing_from_hit"
+        if use_object and object_mode_norm != "off" and not object_enabled and not object_disabled_reason:
+            object_disabled_reason = "missing_from_hit"
+
         return {
             "rel": rel_norm,
             "t_min_s": float(t_min_s),
@@ -384,23 +439,26 @@ class Retriever:
             "interaction_primary_object": str(object_value),
             "derive": str(derive_norm),
             "time": {
-                "enabled": bool(time_mode_norm != "off"),
+                "enabled": bool(time_enabled),
                 "mode": str(time_mode_norm),
                 "source": "step1_top1",
                 "t_min_s": float(t_min_s),
                 "t_max_s": None if not np.isfinite(t_max_s) else float(t_max_s),
+                "disabled_reason": "" if time_enabled else "time_mode_off",
             },
             "place": {
-                "enabled": bool(use_place and place_mode_norm != "off" and bool(place_value)),
+                "enabled": bool(place_enabled),
                 "mode": str(place_mode_norm),
-                "source": "step1_top1_meta",
+                "source": str(place_source),
                 "value": str(place_value),
+                "disabled_reason": "" if place_enabled else str(place_disabled_reason or ("place_mode_off" if place_mode_norm == "off" else "missing_from_hit")),
             },
             "object": {
-                "enabled": bool(use_object and object_mode_norm != "off" and bool(object_value)),
+                "enabled": bool(object_enabled),
                 "mode": str(object_mode_norm),
-                "source": "step1_top1_meta_or_object_memory",
+                "source": str(object_source),
                 "value": str(object_value),
+                "disabled_reason": "" if object_enabled else str(object_disabled_reason or ("object_mode_off" if object_mode_norm == "off" else "missing_from_hit")),
             },
         }
 
@@ -1039,6 +1097,7 @@ class Retriever:
             object_mode=str(getattr(chain, "object_mode", "soft")),
             time_mode=str(getattr(chain, "time_mode", "hard")),
             output=self.output,
+            step1_parsed=step1.parsed,
         )
         step2_query_derived = self._merge_step2_query(step2_query, derived, default_top_k=int(top_k))
         step2_plain = self.retrieve(step2_query)

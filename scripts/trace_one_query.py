@@ -117,19 +117,20 @@ def _render_markdown(trace: dict[str, Any]) -> str:
         d_place = derived.get("place", {}) if isinstance(derived, dict) else {}
         d_object = derived.get("object", {}) if isinstance(derived, dict) else {}
         lines.append("")
-        lines.append("| type | value | mode | source | enabled |")
-        lines.append("|---|---|---|---|---:|")
+        lines.append("| type | value | mode | source | enabled | disabled_reason |")
+        lines.append("|---|---|---|---|---:|---|")
         lines.append(
             f"| time | {json.dumps({'t_min_s': d_time.get('t_min_s'), 't_max_s': d_time.get('t_max_s')}, ensure_ascii=False)} | "
-            f"{d_time.get('mode', '')} | {d_time.get('source', '')} | {int(bool(d_time.get('enabled', False)))} |"
+            f"{d_time.get('mode', '')} | {d_time.get('source', '')} | {int(bool(d_time.get('enabled', False)))} | "
+            f"{d_time.get('disabled_reason', '')} |"
         )
         lines.append(
             f"| place | {d_place.get('value', '')} | {d_place.get('mode', '')} | {d_place.get('source', '')} | "
-            f"{int(bool(d_place.get('enabled', False)))} |"
+            f"{int(bool(d_place.get('enabled', False)))} | {d_place.get('disabled_reason', '')} |"
         )
         lines.append(
             f"| object | {d_object.get('value', '')} | {d_object.get('mode', '')} | {d_object.get('source', '')} | "
-            f"{int(bool(d_object.get('enabled', False)))} |"
+            f"{int(bool(d_object.get('enabled', False)))} | {d_object.get('disabled_reason', '')} |"
         )
         lines.append("")
         lines.append("## Chain Step 2")

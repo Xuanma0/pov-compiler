@@ -836,6 +836,17 @@ def load_hard_pseudo_chain(
 
     combos: list[dict[str, Any]] = [
         {
+            "name": "lost_object_to_scene_change_object_derived",
+            "step1": ["hard_pseudo_lost_object"],
+            "step2": ["hard_pseudo_token"],
+            "derive": "time+object",
+            "place_mode": "off",
+            "object_mode": "hard",
+            "time_mode": "hard",
+            "force_step2": "token=SCENE_CHANGE which=last top_k={top_k}",
+            "force_step1": "lost_object=door which=last top_k={top_k}",
+        },
+        {
             "name": "place_or_interaction_to_lost_object",
             "step1": ["hard_pseudo_place", "hard_pseudo_interaction"],
             "step2": ["hard_pseudo_lost_object"],
@@ -887,6 +898,7 @@ def load_hard_pseudo_chain(
         object_mode = str(combo_cfg.get("object_mode", "soft"))
         time_mode = str(combo_cfg.get("time_mode", "hard"))
         force_step2 = str(combo_cfg.get("force_step2", "")).strip()
+        force_step1 = str(combo_cfg.get("force_step1", "")).strip()
         step1_pool = [s for t in step1_types for s in by_type.get(t, [])]
         step2_pool = [s for t in step2_types for s in by_type.get(t, [])]
         if not step1_pool or not step2_pool:
@@ -897,9 +909,10 @@ def load_hard_pseudo_chain(
         for i in range(min(len(idx1), len(idx2))):
             s1 = step1_pool[idx1[i]]
             s2 = step2_pool[idx2[i]]
+            step1_query = force_step1.format(top_k=int(top_k)) if force_step1 else str(s1.query).strip()
             step2_query = force_step2.format(top_k=int(top_k)) if force_step2 else str(s2.query).strip()
             query = (
-                f"{str(s1.query).strip()} then {step2_query} "
+                f"{step1_query} then {step2_query} "
                 f"chain_rel={rel} chain_window_s={window_s:.1f} chain_top1_only=true "
                 f"chain_derive={derive} chain_place_mode={place_mode} chain_object_mode={object_mode} chain_time_mode={time_mode}"
             )

@@ -84,6 +84,7 @@ def trace_query(
                 object_mode=str(getattr(chain_query, "object_mode", "soft")),
                 time_mode=str(getattr(chain_query, "time_mode", "hard")),
                 output=output,
+                step1_parsed=chain_query.steps[0].parsed,
             )
             step2_query_derived = retriever._merge_step2_query(  # type: ignore[attr-defined]
                 step2_query,
@@ -240,6 +241,7 @@ def trace_query(
                     "decision_align_score": float(breakdown.get("decision_align_score", 0.0)),
                     "final_score": float(breakdown.get("total", 0.0)),
                 },
+                "meta": dict(hit.get("meta", {})),
                 "evidence_spans": evidence_spans,
             }
         )

@@ -340,10 +340,15 @@ def _apply_once(
         place_value = str(constraints.get("chain_place_value", "")).strip()
         if place_mode in {"hard", "soft", "off"} and place_value:
             if place_mode == "hard":
+                place_value_lower = str(place_value).strip().lower()
                 _run_step(
                     "chain_place_match",
                     True,
-                    lambda xs: [h for h in xs if _match_place_segment(h, place_value)],
+                    (
+                        (lambda xs: _apply_place_first_last(xs, place_value_lower))
+                        if place_value_lower in {"first", "last"}
+                        else (lambda xs: [h for h in xs if _match_place_segment(h, place_value)])
+                    ),
                     {"mode": "hard", "place_segment_id": place_value},
                 )
             else:
@@ -484,6 +489,7 @@ def apply_constraints_detailed(
         resolved = HardConstraintConfig.from_yaml(cfg)
 
     before = len(hits)
+    constraints = dict(query_plan.constraints)
     enabled: set[str] = set()
     if bool(resolved.enable_after_scene_change):
         enabled.add("after_scene_change")
@@ -517,6 +523,34 @@ def apply_constraints_detailed(
             used_fallback=False,
             filtered_before=before,
             filtered_after=len(filtered),
+            steps=all_steps,
+        )
+
+    chain_hard_active = bool(
+        (
+            str(constraints.get("chain_time_mode", "")).strip().lower() == "hard"
+            and (
+                constraints.get("chain_time_min_s", None) is not None
+                or constraints.get("chain_time_max_s", None) is not None
+            )
+        )
+        or (
+            str(constraints.get("chain_place_mode", "")).strip().lower() == "hard"
+            and bool(str(constraints.get("chain_place_value", "")).strip())
+        )
+        or (
+            str(constraints.get("chain_object_mode", "")).strip().lower() == "hard"
+            and bool(str(constraints.get("chain_object_value", "")).strip())
+        )
+    )
+    if chain_hard_active:
+        return ConstraintApplyResult(
+            hits=[],
+            applied=applied_union,
+            relaxed=relaxed,
+            used_fallback=False,
+            filtered_before=before,
+            filtered_after=0,
             steps=all_steps,
         )
 
