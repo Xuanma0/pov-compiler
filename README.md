@@ -730,3 +730,31 @@ Key outputs:
 - `compare/decisions_backend/figures/fig_decisions_backend_delta.png`
 - `compare/paper_ready/decisions_backend/table_decisions_backend_compare.csv`
 - `compare/paper_ready/figures/fig_decisions_backend_delta.png`
+
+### v1.35 Multi-Provider Routing + Model Cache + Health Check
+
+Provider routing now supports:
+- `openai_compat` (OpenAI-compatible APIs; recommended for Qwen/DeepSeek/GLM)
+- `gemini` (native `generateContent`)
+- `qwen` / `deepseek` / `glm` (routed through `openai_compat` with provider defaults)
+- `fake` (deterministic CI-safe path)
+
+Model call cache (on by default when `decisions.backend=model`) avoids repeated paid calls:
+
+```text
+python scripts/model_decisions_smoke.py --json data/outputs/ego4d_ab_real_n6/json/<uid>_v03_decisions.json --out_dir data/outputs/model_decisions_cache_demo --provider fake --fake-mode diverse --model-cache-dir data/outputs/model_cache_demo
+```
+
+Run the same command again: `model_cache_stats` should show `hit>0`.
+
+Optional connectivity check (real network call; never used by tests):
+
+```text
+python scripts/model_health_check.py --provider openai_compat --model gpt-4o-mini --api-key-env OPENAI_API_KEY
+python scripts/model_health_check.py --provider gemini --model gemini-1.5-flash --api-key-env GEMINI_API_KEY
+```
+
+Security rules remain strict:
+- keys only via env vars (`*_API_KEY`); never put key values in tracked yaml/json.
+- snapshots/reports/commands are redacted.
+- run `python scripts/security_scan_secrets.py` before commit.

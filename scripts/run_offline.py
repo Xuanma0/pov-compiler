@@ -90,6 +90,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-max-tokens", type=int, default=None)
     parser.add_argument("--model-temperature", type=float, default=None)
     parser.add_argument("--model-fake-mode", choices=["minimal", "diverse"], default=None)
+    parser.add_argument("--model-cache-dir", default=None, help="Model call cache directory")
+    parser.set_defaults(model_cache=None)
+    cache_group = parser.add_mutually_exclusive_group()
+    cache_group.add_argument("--model-cache", dest="model_cache", action="store_true")
+    cache_group.add_argument("--no-model-cache", dest="model_cache", action="store_false")
     return parser.parse_args()
 
 
@@ -144,6 +149,10 @@ def main() -> int:
         model_cfg.setdefault("extra", {})
         if isinstance(model_cfg["extra"], dict):
             model_cfg["extra"]["fake_mode"] = str(args.model_fake_mode)
+    if args.model_cache_dir is not None:
+        model_cfg["model_cache_dir"] = str(args.model_cache_dir)
+    if args.model_cache is not None:
+        model_cfg["model_cache_enabled"] = bool(args.model_cache)
     if config.get("perception", {}).get("enabled", False):
         config.setdefault("perception", {})
         if not config["perception"].get("cache_dir"):
@@ -195,6 +204,23 @@ def main() -> int:
         print(f"decisions_model_provider={output.meta.get('decisions_model_provider', '')}")
         print(f"decisions_model_name={output.meta.get('decisions_model_name', '')}")
         print(f"decisions_model_cfg_hash={output.meta.get('decisions_model_cfg_hash', '')}")
+        cache_stats = output.meta.get("decisions_model_cache", {})
+        if isinstance(cache_stats, dict):
+            print(f"model_cache_enabled={str(bool(cache_stats.get('enabled', False))).lower()}")
+            print(f"model_cache_dir={cache_stats.get('dir', '')}")
+            print(
+                "model_cache_stats="
+                + json.dumps(
+                    {
+                        "hit": int(cache_stats.get("hit", 0)),
+                        "miss": int(cache_stats.get("miss", 0)),
+                        "write_fail": int(cache_stats.get("write_fail", 0)),
+                        "hash_prefix": str(cache_stats.get("hash_prefix", "")),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
     print(f"decisions_context_default={decisions_context_default}")
     if isinstance(output.perception, dict) and output.perception:
         p_meta = output.perception.get("meta", {}) if isinstance(output.perception.get("meta", {}), dict) else {}

@@ -14,7 +14,7 @@ if str(SRC_DIR) not in sys.path:
 
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model
-from pov_compiler.models import ModelClientConfig, make_client
+from pov_compiler.models import ModelClientConfig, get_model_cache_stats, make_client
 from pov_compiler.schemas import Output
 
 
@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_tokens", type=int, default=800)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--fake-mode", choices=["minimal", "diverse"], default="minimal")
+    parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
+    parser.set_defaults(model_cache=True)
+    cache_group = parser.add_mutually_exclusive_group()
+    cache_group.add_argument("--model-cache", dest="model_cache", action="store_true")
+    cache_group.add_argument("--no-model-cache", dest="model_cache", action="store_false")
     parser.add_argument("--print_env_hint", action="store_true", help="Print expected env var name (never prints values)")
     return parser.parse_args()
 
@@ -91,6 +96,8 @@ def main() -> int:
         timeout_s=int(args.timeout_s),
         max_tokens=int(args.max_tokens),
         temperature=float(args.temperature),
+        model_cache_enabled=bool(args.model_cache),
+        model_cache_dir=str(args.model_cache_dir),
         extra={"fake_mode": str(args.fake_mode)},
     )
     if args.print_env_hint and cfg.provider != "fake":
@@ -98,6 +105,7 @@ def main() -> int:
 
     client = make_client(cfg)
     decisions_model_v1 = compile_decisions_with_model(output=output, client=client, cfg=cfg)
+    cache_stats = get_model_cache_stats(client)
 
     decisions_path = out_dir / "decisions_model_v1.json"
     _write_json(decisions_path, {"video_id": output.video_id, "decisions_model_v1": decisions_model_v1})
@@ -110,6 +118,10 @@ def main() -> int:
         f"- provider: `{cfg.provider}`",
         f"- model: `{cfg.model}`",
         f"- decisions_model_v1_total: `{len(decisions_model_v1)}`",
+        f"- model_cache_enabled: `{str(bool(cache_stats.get('enabled', False))).lower()}`",
+        f"- model_cache_dir: `{cache_stats.get('dir', '')}`",
+        f"- model_cache_stats: `{json.dumps({'hit': int(cache_stats.get('hit', 0)), 'miss': int(cache_stats.get('miss', 0)), 'write_fail': int(cache_stats.get('write_fail', 0))}, ensure_ascii=False, sort_keys=True)}`",
+        f"- model_cache_hash_prefix: `{cache_stats.get('hash_prefix', '')}`",
         f"- output: `{decisions_path}`",
     ]
     report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
@@ -126,6 +138,14 @@ def main() -> int:
             "decisions_model_v1_json": str(decisions_path),
             "report_md": str(report_path),
             "decisions_model_v1_total": len(decisions_model_v1),
+            "model_cache_stats": {
+                "enabled": bool(cache_stats.get("enabled", False)),
+                "dir": str(cache_stats.get("dir", "")),
+                "hit": int(cache_stats.get("hit", 0)),
+                "miss": int(cache_stats.get("miss", 0)),
+                "write_fail": int(cache_stats.get("write_fail", 0)),
+                "hash_prefix": str(cache_stats.get("hash_prefix", "")),
+            },
         },
     }
     snapshot = ModelClientConfig.redact_dict(snapshot)
@@ -136,6 +156,21 @@ def main() -> int:
     print(f"provider={cfg.provider}")
     print(f"model={cfg.model}")
     print(f"decisions_model_v1_total={len(decisions_model_v1)}")
+    print(f"model_cache_enabled={str(bool(cache_stats.get('enabled', False))).lower()}")
+    print(f"model_cache_dir={cache_stats.get('dir', '')}")
+    print(
+        "model_cache_stats="
+        + json.dumps(
+            {
+                "hit": int(cache_stats.get("hit", 0)),
+                "miss": int(cache_stats.get("miss", 0)),
+                "write_fail": int(cache_stats.get("write_fail", 0)),
+                "hash_prefix": str(cache_stats.get("hash_prefix", "")),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
     print(f"saved_decisions={decisions_path}")
     print(f"saved_report={report_path}")
     print(f"saved_snapshot={snapshot_path}")

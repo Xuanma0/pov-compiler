@@ -43,8 +43,29 @@ def test_model_smoke_snapshot_redacted(tmp_path: Path) -> None:
     snap_text = (out_dir / "snapshot.json").read_text(encoding="utf-8").lower()
     report_text = (out_dir / "report.md").read_text(encoding="utf-8").lower()
     stdout_text = (proc.stdout or "").lower()
-    banned = ["api_key", "authorization", "bearer ", "aiza", "?key="]
+    banned = ["api_key", "authorization", "bearer ", "aiza", "?key=", "key=", "sk-"]
     for token in banned:
         assert token not in snap_text
         assert token not in report_text
         assert token not in stdout_text
+
+
+def test_commands_render_redacted() -> None:
+    from scripts.run_decisions_backend_compare import _render_cmd
+
+    rendered = _render_cmd(
+        [
+            "python",
+            "scripts/ego4d_smoke.py",
+            "--model-base-url",
+            "https://example.test/v1/chat/completions?key=REALSECRET123456",
+            "--model-api-key-env",
+            "OPENAI_API_KEY",
+            "--header",
+            "Authorization=Bearer sk-abc123456789",
+        ]
+    ).lower()
+    banned = ["authorization=bearer", "sk-abc", "realsecret", "key=real"]
+    for token in banned:
+        assert token not in rendered
+    assert "***" in rendered

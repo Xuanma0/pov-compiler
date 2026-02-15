@@ -68,9 +68,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "model": "fake-decision-v1",
             "base_url": None,
             "api_key_env": "",
+            "base_url_env": "OPENAI_BASE_URL",
             "timeout_s": 60,
             "max_tokens": 800,
             "temperature": 0.2,
+            "model_cache_enabled": True,
+            "model_cache_dir": "data/outputs/model_cache",
+            "model_cache_max_entries": 0,
+            "model_cache_max_mb": 0,
             "extra_headers": {},
             "extra": {},
         },
@@ -370,7 +375,7 @@ class OfflinePipeline:
             output.meta["decisions_backend"] = backend
             if backend == "model":
                 from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model
-                from pov_compiler.models import ModelClientConfig, make_client
+                from pov_compiler.models import ModelClientConfig, get_model_cache_stats, make_client
 
                 model_cfg_raw = decision_cfg.get("model_client", {}) if isinstance(decision_cfg, dict) else {}
                 if not isinstance(model_cfg_raw, dict):
@@ -379,10 +384,15 @@ class OfflinePipeline:
                     provider=str(model_cfg_raw.get("provider", "fake")),
                     model=str(model_cfg_raw.get("model", "fake-decision-v1")),
                     base_url=str(model_cfg_raw.get("base_url")) if model_cfg_raw.get("base_url") not in (None, "") else None,
+                    base_url_env=str(model_cfg_raw.get("base_url_env", "")),
                     api_key_env=str(model_cfg_raw.get("api_key_env", "")),
                     timeout_s=int(model_cfg_raw.get("timeout_s", 60)),
                     max_tokens=int(model_cfg_raw.get("max_tokens", 800)),
                     temperature=float(model_cfg_raw.get("temperature", 0.2)),
+                    model_cache_enabled=bool(model_cfg_raw.get("model_cache_enabled", True)),
+                    model_cache_dir=str(model_cfg_raw.get("model_cache_dir", "data/outputs/model_cache")),
+                    model_cache_max_entries=int(model_cfg_raw.get("model_cache_max_entries", 0)),
+                    model_cache_max_mb=int(model_cfg_raw.get("model_cache_max_mb", 0)),
                     extra_headers=dict(model_cfg_raw.get("extra_headers", {}))
                     if isinstance(model_cfg_raw.get("extra_headers", {}), dict)
                     else {},
@@ -398,6 +408,7 @@ class OfflinePipeline:
                 output.meta["decisions_model_name"] = str(model_cfg.model)
                 output.meta["decisions_model_base_url"] = str(public_cfg.get("base_url", ""))
                 output.meta["decisions_model_cfg_hash"] = cfg_hash
+                output.meta["decisions_model_cache"] = get_model_cache_stats(model_client)
             else:
                 output.decisions_model_v1 = []
 

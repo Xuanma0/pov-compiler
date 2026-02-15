@@ -509,6 +509,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-max-tokens", type=int, default=None)
     parser.add_argument("--model-temperature", type=float, default=None)
     parser.add_argument("--model-fake-mode", choices=["minimal", "diverse"], default="minimal")
+    parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
+    parser.set_defaults(model_cache=True)
+    model_cache_group = parser.add_mutually_exclusive_group()
+    model_cache_group.add_argument("--model-cache", dest="model_cache", action="store_true")
+    model_cache_group.add_argument("--no-model-cache", dest="model_cache", action="store_false")
 
     parser.add_argument("--min-size-bytes", "--min_size_bytes", dest="min_size_bytes", type=int, default=MIN_SIZE_DEFAULT)
     parser.add_argument("--min-duration-s", type=float, default=None)
@@ -871,6 +876,8 @@ def _process_video(
     model_max_tokens: int | None,
     model_temperature: float | None,
     model_fake_mode: str,
+    model_cache_enabled: bool,
+    model_cache_dir: str,
     run_eval: bool,
     sweep: bool,
     run_nlq: bool,
@@ -967,6 +974,8 @@ def _process_video(
             if model_temperature is not None:
                 run_offline_args.extend(["--model-temperature", str(float(model_temperature))])
             run_offline_args.extend(["--model-fake-mode", str(model_fake_mode)])
+            run_offline_args.extend(["--model-cache-dir", str(model_cache_dir)])
+            run_offline_args.append("--model-cache" if bool(model_cache_enabled) else "--no-model-cache")
         ok, log = _run_python_script(
             run_offline_script,
             run_offline_args,
@@ -1679,6 +1688,8 @@ def main() -> int:
         print(f"model_name={str(args.model_name) if args.model_name else ''}")
         print(f"model_api_key_env={str(args.model_api_key_env) if args.model_api_key_env else ''}")
         print(f"model_fake_mode={str(args.model_fake_mode)}")
+        print(f"model_cache_enabled={str(bool(args.model_cache)).lower()}")
+        print(f"model_cache_dir={str(args.model_cache_dir)}")
 
     # Proxy stage (parallel, capped for safety).
     if proxy_enabled and chosen_entries:
@@ -1762,6 +1773,8 @@ def main() -> int:
         "model_max_tokens": int(args.model_max_tokens) if args.model_max_tokens is not None else None,
         "model_temperature": float(args.model_temperature) if args.model_temperature is not None else None,
         "model_fake_mode": str(args.model_fake_mode),
+        "model_cache_enabled": bool(args.model_cache),
+        "model_cache_dir": str(args.model_cache_dir),
         "run_eval": bool(args.run_eval),
         "sweep": bool(args.sweep),
         "run_nlq": bool(args.run_nlq),

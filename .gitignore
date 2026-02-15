@@ -27,6 +27,7 @@ MANIFEST
 
 # Dataset and Generated Outputs - MUST NOT COMMIT
 data/outputs/
+data/outputs/model_cache/
 data/cache/
 *.mp4
 *.tar
@@ -46,9 +47,11 @@ assets/mediapipe/*.task
 # Secrets / Local credentials
 .env
 .env.*
+*.env
 *_secrets*
 *keys*.json
 credentials.*
 local_settings.yaml
+**/local_config.yaml
 **/api_keys.*
 !scripts/security_scan_secrets.py

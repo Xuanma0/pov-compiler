@@ -97,6 +97,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--real-model-api-key-env", default=None)
     parser.add_argument("--stub-model-fake-mode", choices=["minimal", "diverse"], default="minimal")
     parser.add_argument("--real-model-fake-mode", choices=["minimal", "diverse"], default="minimal")
+    parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
+    _parse_bool_with_neg(parser, "model-cache", default=True)
     _parse_bool_with_neg(parser, "with-decisions-backend-compare", default=False)
 
     _parse_bool_with_neg(parser, "with-bye", default=False)
@@ -201,6 +203,8 @@ def _build_smoke_cmd(
     model_base_url: str | None,
     model_api_key_env: str | None,
     model_fake_mode: str,
+    model_cache_enabled: bool,
+    model_cache_dir: str,
     with_bye: bool,
     with_bye_report: bool,
     bye_root: str | None,
@@ -281,6 +285,8 @@ def _build_smoke_cmd(
         if model_api_key_env:
             cmd.extend(["--model-api-key-env", str(model_api_key_env)])
         cmd.extend(["--model-fake-mode", str(model_fake_mode)])
+        cmd.extend(["--model-cache-dir", str(model_cache_dir)])
+        cmd.append("--model-cache" if model_cache_enabled else "--no-model-cache")
 
     if with_bye:
         cmd.append("--run-bye")
@@ -711,6 +717,8 @@ def main() -> int:
         model_base_url=str(args.stub_model_base_url) if args.stub_model_base_url else None,
         model_api_key_env=str(args.stub_model_api_key_env) if args.stub_model_api_key_env else None,
         model_fake_mode=str(args.stub_model_fake_mode),
+        model_cache_enabled=bool(args.model_cache),
+        model_cache_dir=str(args.model_cache_dir),
         with_bye=args.with_bye,
         with_bye_report=args.with_bye_report,
         bye_root=bye_root,
@@ -769,6 +777,8 @@ def main() -> int:
         model_base_url=str(args.real_model_base_url) if args.real_model_base_url else None,
         model_api_key_env=str(args.real_model_api_key_env) if args.real_model_api_key_env else None,
         model_fake_mode=str(args.real_model_fake_mode),
+        model_cache_enabled=bool(args.model_cache),
+        model_cache_dir=str(args.model_cache_dir),
         with_bye=args.with_bye,
         with_bye_report=args.with_bye_report,
         bye_root=bye_root,
@@ -1311,6 +1321,8 @@ def main() -> int:
             "streaming_step_s": float(args.streaming_step_s),
             "with_streaming_chain_backoff": bool(args.with_streaming_chain_backoff),
             "export_paper_ready": bool(args.export_paper_ready),
+            "model_cache_enabled": bool(args.model_cache),
+            "model_cache_dir": str(args.model_cache_dir),
         },
         "outputs": {
             "run_stub": str(run_stub),
@@ -1420,6 +1432,9 @@ def main() -> int:
         print(f"streaming_chain_backoff_compare_saved={compare_streaming_chain_backoff / 'compare'}")
     if decisions_compare_enabled:
         print(f"decisions_backend_compare_saved={compare_decisions_backend}")
+    if str(args.stub_decisions_backend).strip().lower() == "model" or str(args.real_decisions_backend).strip().lower() == "model":
+        print(f"model_cache_enabled={str(bool(args.model_cache)).lower()}")
+        print(f"model_cache_dir={str(args.model_cache_dir)}")
     if args.with_reranker_sweep:
         print(f"reranker_sweep_stub_saved={compare_reranker_sweep_stub}")
         print(f"reranker_sweep_real_saved={compare_reranker_sweep_real}")

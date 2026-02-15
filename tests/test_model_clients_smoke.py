@@ -13,6 +13,7 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from pov_compiler.models import make_client
 from pov_compiler.models.client import ModelClientConfig
 from pov_compiler.models.gemini import GeminiClient
 from pov_compiler.models.openai_compat import OpenAICompatClient
@@ -88,3 +89,10 @@ def test_gemini_client_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "contents" in body and isinstance(body["contents"], list)
     assert "generationConfig" in body and isinstance(body["generationConfig"], dict)
     assert int(body["generationConfig"]["maxOutputTokens"]) == 88
+
+
+def test_make_client_routes_openai_compat_family() -> None:
+    for provider in ("openai_compat", "qwen", "deepseek", "glm"):
+        cfg = ModelClientConfig(provider=provider, model="demo-model", model_cache_enabled=False)
+        client = make_client(cfg)
+        assert client.__class__.__name__ == "OpenAICompatClient"

@@ -382,6 +382,8 @@ def _build_smoke_cmd(
     model_base_url: str | None,
     model_api_key_env: str | None,
     fake_mode: str,
+    model_cache_enabled: bool,
+    model_cache_dir: str,
     nlq_mode: str,
 ) -> list[str]:
     cmd = [
@@ -420,6 +422,8 @@ def _build_smoke_cmd(
         if model_api_key_env:
             cmd.extend(["--model-api-key-env", str(model_api_key_env)])
         cmd.extend(["--model-fake-mode", str(fake_mode)])
+        cmd.extend(["--model-cache-dir", str(model_cache_dir)])
+        cmd.append("--model-cache" if model_cache_enabled else "--no-model-cache")
     return cmd
 
 
@@ -445,6 +449,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-base-url", default=None)
     parser.add_argument("--model-api-key-env", default=None)
     parser.add_argument("--fake-mode", choices=["minimal", "diverse"], default="diverse")
+    parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
+    parser.set_defaults(model_cache=True)
+    cache_group = parser.add_mutually_exclusive_group()
+    cache_group.add_argument("--model-cache", dest="model_cache", action="store_true")
+    cache_group.add_argument("--no-model-cache", dest="model_cache", action="store_false")
     return parser.parse_args()
 
 
@@ -488,6 +497,8 @@ def main() -> int:
             model_base_url=str(args.model_base_url) if args.model_base_url else None,
             model_api_key_env=str(args.model_api_key_env) if args.model_api_key_env else None,
             fake_mode=str(args.fake_mode),
+            model_cache_enabled=bool(args.model_cache),
+            model_cache_dir=str(args.model_cache_dir),
             nlq_mode=str(args.nlq_mode),
         )
         rc = _run(cmd_a, cwd=ROOT, log_prefix=compare_dir / "run_A", commands_path=commands_path)
@@ -508,6 +519,8 @@ def main() -> int:
             model_base_url=str(args.model_base_url) if args.model_base_url else None,
             model_api_key_env=str(args.model_api_key_env) if args.model_api_key_env else None,
             fake_mode=str(args.fake_mode),
+            model_cache_enabled=bool(args.model_cache),
+            model_cache_dir=str(args.model_cache_dir),
             nlq_mode=str(args.nlq_mode),
         )
         rc = _run(cmd_b, cwd=ROOT, log_prefix=compare_dir / "run_B", commands_path=commands_path)
@@ -530,6 +543,8 @@ def main() -> int:
             "model_base_url": _redact_token(str(args.model_base_url), "--model-base-url") if args.model_base_url else None,
             "model_api_key_env": "***ENV***" if args.model_api_key_env else None,
             "fake_mode": str(args.fake_mode),
+            "model_cache_enabled": bool(args.model_cache),
+            "model_cache_dir": str(args.model_cache_dir),
         },
         "runs": {"run_A": str(run_a), "run_B": str(run_b)},
         "outputs": {
@@ -571,6 +586,8 @@ def main() -> int:
     if cmd_b is not None:
         print(f"saved_run_B={run_b}")
     print(f"saved_compare={compare_dir}")
+    print(f"model_cache_enabled={str(bool(args.model_cache)).lower()}")
+    print(f"model_cache_dir={str(args.model_cache_dir)}")
     print(f"saved_table={[str(compare_dir / 'tables' / 'table_decisions_backend_compare.csv'), str(compare_dir / 'tables' / 'table_decisions_backend_compare.md')]}")
     print(f"saved_figures={fig_paths}")
     print(f"saved_snapshot={compare_dir / 'snapshot.json'}")
