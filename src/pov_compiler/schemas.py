@@ -202,6 +202,7 @@ class Output(BaseModel):
     events_v0: list[Event] = Field(default_factory=list)
     events_v1: list[EventV1] = Field(default_factory=list)
     decision_points: list[DecisionPoint] = Field(default_factory=list)
+    decisions_model_v1: list[dict[str, Any]] = Field(default_factory=list)
     perception: dict[str, Any] = Field(default_factory=dict)
     object_memory_v0: list[ObjectMemoryItemV0] = Field(default_factory=list)
     repository: dict[str, Any] = Field(default_factory=dict)

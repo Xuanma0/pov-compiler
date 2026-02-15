@@ -142,6 +142,7 @@ def main() -> int:
     ratio = float(output.stats.get("compression_ratio", 0.0)) if isinstance(output.stats, dict) else 0.0
     tokens_total = len(output.token_codec.tokens) if output.token_codec else 0
     decisions_total = len(output.decision_points)
+    decisions_model_total = len(getattr(output, "decisions_model_v1", []) or [])
     context_default_cfg = dict(config.get("context_default", {}))
     context_mode = str(context_default_cfg.pop("mode", "highlights"))
     context_json = build_context(output_dict, mode=context_mode, budget=context_default_cfg)
@@ -153,6 +154,7 @@ def main() -> int:
     print(f"tokens_total={tokens_total}")
     print(f"tokens_context_default={tokens_context_default}")
     print(f"decision_points_total={decisions_total}")
+    print(f"decisions_model_v1_total={decisions_model_total}")
     print(f"decisions_context_default={decisions_context_default}")
     if isinstance(output.perception, dict) and output.perception:
         p_meta = output.perception.get("meta", {}) if isinstance(output.perception.get("meta", {}), dict) else {}

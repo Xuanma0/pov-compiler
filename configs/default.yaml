@@ -29,11 +29,22 @@ tokens:
   merge_gap_s: 0.2
 decisions:
   enabled: true
+  backend: heuristic
   pre_s: 2.0
   post_s: 2.0
   merge_iou: 0.7
   min_gap_s: 0.0
   boundary_thresh: 0.65
+  model_client:
+    provider: fake
+    model: fake-decision-v1
+    base_url: null
+    api_key_env: ""
+    timeout_s: 60
+    max_tokens: 800
+    temperature: 0.2
+    extra_headers: {}
+    extra: {}
 context_default:
   mode: highlights
   max_events: 8

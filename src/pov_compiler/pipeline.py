@@ -55,11 +55,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "decisions": {
         "enabled": True,
+        "backend": "heuristic",
         "pre_s": 2.0,
         "post_s": 2.0,
         "merge_iou": 0.7,
         "min_gap_s": 0.0,
         "boundary_thresh": 0.65,
+        "model_client": {
+            "provider": "fake",
+            "model": "fake-decision-v1",
+            "base_url": None,
+            "api_key_env": "",
+            "timeout_s": 60,
+            "max_tokens": 800,
+            "temperature": 0.2,
+            "extra_headers": {},
+            "extra": {},
+        },
     },
     "context_default": {
         "mode": "highlights",
@@ -352,6 +364,31 @@ class OfflinePipeline:
         if bool(decision_cfg.get("enabled", True)):
             decision_compiler = DecisionCompiler(config=dict(decision_cfg))
             output.decision_points = decision_compiler.compile(output)
+            backend = str(decision_cfg.get("backend", "heuristic")).strip().lower()
+            if backend == "model":
+                from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model
+                from pov_compiler.models import ModelClientConfig, make_client
+
+                model_cfg_raw = decision_cfg.get("model_client", {}) if isinstance(decision_cfg, dict) else {}
+                if not isinstance(model_cfg_raw, dict):
+                    model_cfg_raw = {}
+                model_cfg = ModelClientConfig(
+                    provider=str(model_cfg_raw.get("provider", "fake")),
+                    model=str(model_cfg_raw.get("model", "fake-decision-v1")),
+                    base_url=str(model_cfg_raw.get("base_url")) if model_cfg_raw.get("base_url") not in (None, "") else None,
+                    api_key_env=str(model_cfg_raw.get("api_key_env", "")),
+                    timeout_s=int(model_cfg_raw.get("timeout_s", 60)),
+                    max_tokens=int(model_cfg_raw.get("max_tokens", 800)),
+                    temperature=float(model_cfg_raw.get("temperature", 0.2)),
+                    extra_headers=dict(model_cfg_raw.get("extra_headers", {}))
+                    if isinstance(model_cfg_raw.get("extra_headers", {}), dict)
+                    else {},
+                    extra=dict(model_cfg_raw.get("extra", {})) if isinstance(model_cfg_raw.get("extra", {}), dict) else {},
+                )
+                model_client = make_client(model_cfg)
+                output.decisions_model_v1 = compile_decisions_with_model(output=output, client=model_client, cfg=model_cfg)
+            else:
+                output.decisions_model_v1 = []
 
         events_v1_cfg = self.config.get("events_v1", {})
         if bool(events_v1_cfg.get("enabled", True)):

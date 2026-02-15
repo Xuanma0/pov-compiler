@@ -42,3 +42,13 @@ assets/mediapipe/*.task
 # Editor
 .vscode/
 .idea/
+
+# Secrets / Local credentials
+.env
+.env.*
+*_secrets*
+*keys*.json
+credentials.*
+local_settings.yaml
+**/api_keys.*
+!scripts/security_scan_secrets.py

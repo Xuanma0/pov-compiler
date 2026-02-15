@@ -666,3 +666,44 @@ This produces selection artifacts under:
 - `compare/selection/selected_uids.txt`
 - `compare/selection/selection_report.md`
 - `compare/selection/signal_cache/<uid>/events_v1_meta.json`
+
+### v1.33 Model Integration (OpenAI-compatible + Gemini + Fake)
+
+Model decisions are optional and only run when `decisions.backend=model`.  
+Default behavior remains heuristic-only (`decisions.backend=heuristic`).
+
+Providers:
+- `openai_compat` (OpenAI / OpenAI-compatible endpoints, recommended for Qwen/DeepSeek/GLM)
+- `gemini` (Google Generative Language API)
+- `fake` (deterministic CI/stability backend)
+
+Security rules:
+- API secrets are read only from environment variables (`api_key_env`), never from tracked config.
+- `snapshot.json` and reports are redacted.
+- `.env` and key-like local files are gitignored.
+- Use `scripts/security_scan_secrets.py` to preflight tracked files.
+
+Example env setup (placeholder only):
+
+```bash
+export OPENAI_API_KEY=<YOUR_KEY>
+export GEMINI_API_KEY=<YOUR_KEY>
+```
+
+Model decision smoke (fake backend, no network):
+
+```text
+python scripts/model_decisions_smoke.py --json data/outputs/ego4d_ab_real_n6/json/<uid>_v03_decisions.json --out_dir data/outputs/model_decisions_v133_demo --provider fake
+```
+
+OpenAI-compatible example:
+
+```text
+python scripts/model_decisions_smoke.py --json data/outputs/ego4d_ab_real_n6/json/<uid>_v03_decisions.json --out_dir data/outputs/model_decisions_openai_demo --provider openai_compat --model gpt-4o-mini --base_url https://api.openai.com/v1 --api_key_env OPENAI_API_KEY
+```
+
+Gemini example:
+
+```text
+python scripts/model_decisions_smoke.py --json data/outputs/ego4d_ab_real_n6/json/<uid>_v03_decisions.json --out_dir data/outputs/model_decisions_gemini_demo --provider gemini --model gemini-1.5-flash --api_key_env GEMINI_API_KEY
+```
