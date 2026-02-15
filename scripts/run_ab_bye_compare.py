@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from statistics import median
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,6 +32,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--n", type=int, default=None)
+    parser.add_argument("--auto-select-uids", action="store_true", help="Auto-select UIDs from signal coverage when --uids-file is omitted")
+    parser.add_argument(
+        "--signal-audit-json-dir",
+        default=None,
+        help="Optional json dir for signal audit (default tries run_stub/json then <root>/json)",
+    )
+    parser.add_argument("--signal-audit-out", default=None, help="Optional output dir for signal audit artifacts")
+    parser.add_argument("--signal-min-score", type=float, default=2.0)
+    parser.add_argument("--signal-top-k", type=int, default=20)
 
     _parse_bool_with_neg(parser, "with-eval", default=False)
     _parse_bool_with_neg(parser, "with-nlq", default=False)
@@ -269,6 +279,65 @@ def _pick_streaming_json(preferred_json_dir: Path, fallback_json_dir: Path, uids
     return None
 
 
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except Exception:
+        return float(default)
+    if out != out:
+        return float(default)
+    return float(out)
+
+
+def _summarize_coverage_csv(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"rows": 0, "coverage_score_stats": {"min": 0.0, "median": 0.0, "max": 0.0}, "missing_signal_breakdown": {}}
+    with path.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    scores = [_to_float(r.get("coverage_score"), default=0.0) for r in rows]
+    missing_cols = sorted({k for r in rows for k in r.keys() if str(k).startswith("missing_")})
+    breakdown: dict[str, float] = {}
+    denom = max(1, len(rows))
+    for col in missing_cols:
+        count = sum(1 for r in rows if _to_float(r.get(col), default=0.0) > 0.0)
+        breakdown[col] = float(count) / float(denom)
+    return {
+        "rows": len(rows),
+        "coverage_score_stats": {
+            "min": min(scores) if scores else 0.0,
+            "median": median(scores) if scores else 0.0,
+            "max": max(scores) if scores else 0.0,
+        },
+        "missing_signal_breakdown": breakdown,
+    }
+
+
+def _copy_selection_artifacts(src_dir: Path, dst_dir: Path) -> list[str]:
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    for name in ("coverage.csv", "coverage.md", "uid_candidates.txt", "selection_report.md", "selected_uids.txt", "snapshot.json"):
+        src = src_dir / name
+        if not src.exists():
+            continue
+        dst = dst_dir / name
+        if src.resolve() != dst.resolve():
+            shutil.copyfile(src, dst)
+        copied.append(str(dst))
+    return copied
+
+
+def _resolve_signal_audit_json_dir(args: argparse.Namespace, *, run_stub: Path) -> Path:
+    if args.signal_audit_json_dir:
+        return Path(args.signal_audit_json_dir)
+    run_stub_json = run_stub / "json"
+    if run_stub_json.exists() and list(run_stub_json.glob("*_v03_decisions.json")):
+        return run_stub_json
+    root_json = Path(args.root) / "json"
+    if root_json.exists():
+        return root_json
+    return Path(args.root)
+
+
 def _write_compare_readme(
     out_dir: Path,
     *,
@@ -332,6 +401,7 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'bye' / 'table_bye_compare.csv'}`",
             f"- `{out_dir / 'compare' / 'bye' / 'table_bye_compare.md'}`",
             f"- `{out_dir / 'compare' / 'bye' / 'compare_summary.json'}`",
+            f"- `{out_dir / 'compare' / 'compare_summary.json'}`",
             f"- `{out_dir / 'compare' / 'bye_report' / 'tables' / 'table_bye_report_compare.csv'}`",
             f"- `{out_dir / 'compare' / 'bye_report' / 'tables' / 'table_bye_report_compare.md'}`",
             f"- `{out_dir / 'compare' / 'bye_report' / 'figures' / 'fig_bye_critical_fn_delta.png'}`",
@@ -343,6 +413,7 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'reranker_sweep'}`",
             f"- `{out_dir / 'compare' / 'budget_recommend'}`",
             f"- `{out_dir / 'compare' / 'paper_ready'}`",
+            f"- `{out_dir / 'compare' / 'selection'}`",
             f"- `{out_dir / 'compare' / 'commands.sh'}`",
             f"- `{out_dir / 'compare' / 'snapshots'}`",
             "",
@@ -431,6 +502,68 @@ def main() -> int:
     if not commands_file.exists():
         commands_file.write_text("#!/usr/bin/env text\n\n", encoding="utf-8")
 
+    compare_selection_dir = compare_dir / "selection"
+    compare_selection_dir.mkdir(parents=True, exist_ok=True)
+    signal_selection_mode = "manual_uids_file" if args.uids_file else "derived_from_stub_summary"
+    signal_selected_uids_count = 0
+    signal_coverage_stats: dict[str, float] = {"min": 0.0, "median": 0.0, "max": 0.0}
+    signal_missing_breakdown: dict[str, float] = {}
+    signal_artifacts: list[str] = []
+    uids_file_for_run: str | None = str(args.uids_file) if args.uids_file else None
+
+    if args.auto_select_uids and not args.uids_file:
+        signal_selection_mode = "auto_signal"
+        signal_audit_script = ROOT / "scripts" / "audit_signal_coverage.py"
+        signal_select_script = ROOT / "scripts" / "select_uids_for_experiments.py"
+        signal_out = Path(args.signal_audit_out) if args.signal_audit_out else (out_dir / "selection")
+        signal_out.mkdir(parents=True, exist_ok=True)
+        signal_json_dir = _resolve_signal_audit_json_dir(args, run_stub=run_stub)
+        cmd_signal_audit = [
+            sys.executable,
+            str(signal_audit_script),
+            "--pov-json-dir",
+            str(signal_json_dir),
+            "--out-dir",
+            str(signal_out),
+        ]
+        perception_dir_for_audit = run_stub / "perception"
+        if perception_dir_for_audit.exists():
+            cmd_signal_audit.extend(["--perception-dir", str(perception_dir_for_audit)])
+        rc = _run(cmd_signal_audit, cwd=ROOT, log_prefix=compare_dir / "signal_audit", commands_file=commands_file)
+        if rc != 0:
+            return rc
+        cmd_signal_select = [
+            sys.executable,
+            str(signal_select_script),
+            "--coverage-csv",
+            str(signal_out / "coverage.csv"),
+            "--out-dir",
+            str(signal_out),
+            "--min-score",
+            str(float(args.signal_min_score)),
+            "--top-k",
+            str(int(args.signal_top_k)),
+        ]
+        rc = _run(cmd_signal_select, cwd=ROOT, log_prefix=compare_dir / "signal_select", commands_file=commands_file)
+        if rc != 0:
+            return rc
+        selected_uids_file = signal_out / "selected_uids.txt"
+        if not selected_uids_file.exists():
+            print("error=auto-select-uids expected selected_uids.txt but file is missing")
+            return 7
+        selected_uids = [x.strip() for x in selected_uids_file.read_text(encoding="utf-8").splitlines() if x.strip()]
+        if not selected_uids:
+            print("error=auto-select-uids produced empty selected_uids.txt")
+            return 7
+        uids_file_for_run = str(selected_uids_file)
+        signal_selected_uids_count = len(selected_uids)
+        coverage_payload = _summarize_coverage_csv(signal_out / "coverage.csv")
+        signal_coverage_stats = dict(coverage_payload.get("coverage_score_stats", {}))
+        signal_missing_breakdown = dict(coverage_payload.get("missing_signal_breakdown", {}))
+        signal_artifacts = _copy_selection_artifacts(signal_out, compare_selection_dir)
+    elif args.auto_select_uids and args.uids_file:
+        signal_selection_mode = "manual_uids_file"
+
     bye_root = str(args.bye_root) if args.bye_root else (str(Path.cwd()) if False else None)
     if args.with_bye and bye_root is None:
         env_value = os.environ.get("BYE_ROOT")
@@ -443,7 +576,7 @@ def main() -> int:
     cmd_stub = _build_smoke_cmd(
         out_dir=run_stub,
         root=args.root,
-        uids_file=args.uids_file,
+        uids_file=uids_file_for_run,
         jobs=args.jobs,
         n=args.n,
         with_eval=args.with_eval,
@@ -476,7 +609,7 @@ def main() -> int:
     if rc != 0:
         return rc
 
-    effective_uids_file: Path | None = Path(args.uids_file) if args.uids_file else None
+    effective_uids_file: Path | None = Path(uids_file_for_run) if uids_file_for_run else None
     if effective_uids_file is None:
         summary_csv = run_stub / "summary.csv"
         if not summary_csv.exists():
@@ -989,6 +1122,8 @@ def main() -> int:
             cmd_paper_ready.extend(
                 ["--streaming-chain-backoff-compare-dir", str(compare_streaming_chain_backoff / "compare")]
             )
+        if signal_selection_mode == "auto_signal":
+            cmd_paper_ready.extend(["--signal-selection-dir", str(compare_selection_dir)])
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
         if rc != 0:
             return rc
@@ -1002,6 +1137,11 @@ def main() -> int:
             "root": str(args.root),
             "uids_file": str(effective_uids_file) if effective_uids_file else None,
             "seed": int(args.seed),
+            "auto_select_uids": bool(args.auto_select_uids),
+            "signal_audit_json_dir": str(args.signal_audit_json_dir) if args.signal_audit_json_dir else None,
+            "signal_audit_out": str(args.signal_audit_out) if args.signal_audit_out else None,
+            "signal_min_score": float(args.signal_min_score),
+            "signal_top_k": int(args.signal_top_k),
             "with_eval": bool(args.with_eval),
             "with_nlq": bool(args.with_nlq),
             "nlq_mode": str(args.nlq_mode),
@@ -1014,6 +1154,14 @@ def main() -> int:
             "run_stub": str(run_stub),
             "run_real": str(run_real),
             "compare_dir": str(compare_dir),
+            "selection_dir": str(compare_selection_dir),
+        },
+        "selection": {
+            "selection_mode": signal_selection_mode,
+            "selected_uids_count": int(signal_selected_uids_count),
+            "coverage_score_stats": signal_coverage_stats,
+            "missing_signal_breakdown": signal_missing_breakdown,
+            "artifacts": signal_artifacts,
         },
         "streaming_chain_backoff": {
             "enabled": bool(args.with_streaming_chain_backoff),
@@ -1025,6 +1173,19 @@ def main() -> int:
         },
     }
     (compare_dir / "snapshot.json").write_text(json.dumps(compare_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    selected_uids_count = 0
+    if effective_uids_file and effective_uids_file.exists():
+        selected_uids_count = len([x.strip() for x in effective_uids_file.read_text(encoding="utf-8").splitlines() if x.strip()])
+    if signal_selection_mode == "auto_signal" and signal_selected_uids_count > 0:
+        selected_uids_count = signal_selected_uids_count
+    compare_summary = {
+        "selection_mode": signal_selection_mode,
+        "selected_uids_count": int(selected_uids_count),
+        "coverage_score_stats": signal_coverage_stats,
+        "missing_signal_breakdown": signal_missing_breakdown,
+        "selection_artifacts": signal_artifacts,
+    }
+    (compare_dir / "compare_summary.json").write_text(json.dumps(compare_summary, ensure_ascii=False, indent=2), encoding="utf-8")
     _write_compare_readme(
         out_dir,
         run_label=str(args.run_label),
@@ -1051,6 +1212,11 @@ def main() -> int:
     print(f"repo_read_policy={str(args.repo_read_policy)}")
     print(f"with_bye_report={str(bool(args.with_bye_report)).lower()}")
     print(f"bye_gate={str(bool(args.bye_gate)).lower()}")
+    if args.auto_select_uids:
+        print(f"selection_mode={signal_selection_mode}")
+        print(f"selected_uids_count={selected_uids_count}")
+        print(f"coverage_score_stats={json.dumps(signal_coverage_stats, ensure_ascii=False, sort_keys=True)}")
+        print(f"selection_saved={compare_selection_dir}")
     if args.with_bye_budget_sweep:
         print(f"bye_budget_stub_saved={compare_bye_budget_stub}")
         print(f"bye_budget_real_saved={compare_bye_budget_real}")

@@ -94,6 +94,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional directory from run_chain_attribution.py compare/ output",
     )
+    parser.add_argument(
+        "--signal-selection-dir",
+        default=None,
+        help="Optional directory containing signal selection artifacts (coverage.md, selection_report.md, selected_uids.txt)",
+    )
     parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
     _parse_bool_with_neg(parser, "with-figs", default=True)
     parser.add_argument("--png", action="store_true")
@@ -1275,6 +1280,24 @@ def main() -> int:
             if str(p).endswith(".png") or str(p).endswith(".pdf"):
                 figure_paths.append(str(p))
 
+    signal_selection_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    if args.signal_selection_dir:
+        ss_dir = Path(args.signal_selection_dir)
+        signal_selection_panel["enabled"] = True
+        signal_selection_panel["source_dir"] = str(ss_dir)
+        dst_root = out_dir / "selection"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        copied: list[str] = []
+        for name in ("coverage.md", "selection_report.md", "selected_uids.txt", "coverage.csv", "snapshot.json"):
+            cp = _copy_if_exists(ss_dir / name, dst_root / name)
+            if cp:
+                copied.append(cp)
+        signal_selection_panel["copied_files"] = copied
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -1443,6 +1466,19 @@ def main() -> int:
             )
         else:
             report_lines.append("- chain_attribution: source provided but artifacts missing.")
+    if args.signal_selection_dir:
+        if signal_selection_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Signal Coverage of Chosen UIDs",
+                    "",
+                    f"- signal_selection_dir: `{signal_selection_panel.get('source_dir')}`",
+                    f"- signal_selection_files: `{signal_selection_panel.get('copied_files')}`",
+                    "- this panel documents why selected UIDs carry non-empty place/interaction/object signals for AB plots.",
+                ]
+            )
+        else:
+            report_lines.append("- signal_selection: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -1492,6 +1528,7 @@ def main() -> int:
             "chain_nlq_dir": str(args.chain_nlq_dir) if args.chain_nlq_dir else None,
             "chain_repo_compare_dir": str(args.chain_repo_compare_dir) if args.chain_repo_compare_dir else None,
             "chain_attribution_dir": str(args.chain_attribution_dir) if args.chain_attribution_dir else None,
+            "signal_selection_dir": str(args.signal_selection_dir) if args.signal_selection_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -1520,6 +1557,7 @@ def main() -> int:
             "chain_nlq_panel": chain_nlq_panel,
             "chain_repo_compare_panel": chain_repo_compare_panel,
             "chain_attribution_panel": chain_attribution_panel,
+            "signal_selection_panel": signal_selection_panel,
             "report_md": str(report_path),
         },
     }

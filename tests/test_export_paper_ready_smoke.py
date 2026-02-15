@@ -387,6 +387,13 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"policies": ["strict", "ladder", "adaptive"]}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional signal selection input.
+    (compare_dir / "signal_selection").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "signal_selection" / "coverage.md").write_text("# coverage\n", encoding="utf-8")
+    (compare_dir / "signal_selection" / "selection_report.md").write_text("# selection\n", encoding="utf-8")
+    (compare_dir / "signal_selection" / "selected_uids.txt").write_text("u1\nu2\n", encoding="utf-8")
+    (compare_dir / "signal_selection" / "coverage.csv").write_text("uid,coverage_score\nu1,3\n", encoding="utf-8")
+    (compare_dir / "signal_selection" / "snapshot.json").write_text(json.dumps({"rows": 1}), encoding="utf-8")
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -424,6 +431,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "chain_repo_cmp"),
         "--chain-attribution-dir",
         str(compare_dir / "chain_attr"),
+        "--signal-selection-dir",
+        str(compare_dir / "signal_selection"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -459,6 +468,9 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_streaming_chain_backoff_latency_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_streaming_chain_backoff_backoff_level_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_streaming_chain_backoff_delta.png").exists()
+    assert (out_dir / "selection" / "coverage.md").exists()
+    assert (out_dir / "selection" / "selection_report.md").exists()
+    assert (out_dir / "selection" / "selected_uids.txt").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.csv").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.md").exists()
     assert (out_dir / "figures" / "fig_streaming_repo_compare_safety_latency.png").exists()
