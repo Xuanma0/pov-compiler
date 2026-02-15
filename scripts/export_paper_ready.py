@@ -1280,13 +1280,21 @@ def main() -> int:
             if str(p).endswith(".png") or str(p).endswith(".pdf"):
                 figure_paths.append(str(p))
 
+    resolved_signal_selection_dir: Path | None = None
+    if args.signal_selection_dir:
+        resolved_signal_selection_dir = Path(args.signal_selection_dir)
+    elif compare_dir:
+        inferred = compare_dir / "selection"
+        if inferred.exists():
+            resolved_signal_selection_dir = inferred
+
     signal_selection_panel: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
         "copied_files": [],
     }
-    if args.signal_selection_dir:
-        ss_dir = Path(args.signal_selection_dir)
+    if resolved_signal_selection_dir:
+        ss_dir = resolved_signal_selection_dir
         signal_selection_panel["enabled"] = True
         signal_selection_panel["source_dir"] = str(ss_dir)
         dst_root = out_dir / "selection"
@@ -1466,7 +1474,7 @@ def main() -> int:
             )
         else:
             report_lines.append("- chain_attribution: source provided but artifacts missing.")
-    if args.signal_selection_dir:
+    if resolved_signal_selection_dir:
         if signal_selection_panel.get("copied_files"):
             report_lines.extend(
                 [
@@ -1528,7 +1536,7 @@ def main() -> int:
             "chain_nlq_dir": str(args.chain_nlq_dir) if args.chain_nlq_dir else None,
             "chain_repo_compare_dir": str(args.chain_repo_compare_dir) if args.chain_repo_compare_dir else None,
             "chain_attribution_dir": str(args.chain_attribution_dir) if args.chain_attribution_dir else None,
-            "signal_selection_dir": str(args.signal_selection_dir) if args.signal_selection_dir else None,
+            "signal_selection_dir": str(resolved_signal_selection_dir) if resolved_signal_selection_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}

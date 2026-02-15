@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--signal-audit-out", default=None, help="Optional output dir for signal audit artifacts")
     parser.add_argument("--signal-min-score", type=float, default=2.0)
     parser.add_argument("--signal-top-k", type=int, default=20)
+    _parse_bool_with_neg(parser, "auto-select-uids-build-cache", default=True)
+    parser.add_argument(
+        "--auto-select-uids-cache-dir",
+        default=None,
+        help="Signal cache dir for auto-select (default: <out_dir>/compare/selection/signal_cache)",
+    )
 
     _parse_bool_with_neg(parser, "with-eval", default=False)
     _parse_bool_with_neg(parser, "with-nlq", default=False)
@@ -326,6 +332,20 @@ def _copy_selection_artifacts(src_dir: Path, dst_dir: Path) -> list[str]:
     return copied
 
 
+def _copy_signal_cache_tree(src_dir: Path, dst_dir: Path) -> str | None:
+    if not src_dir.exists():
+        return None
+    try:
+        if src_dir.resolve() == dst_dir.resolve():
+            return str(dst_dir)
+    except Exception:
+        pass
+    if dst_dir.exists():
+        shutil.rmtree(dst_dir)
+    shutil.copytree(src_dir, dst_dir)
+    return str(dst_dir)
+
+
 def _resolve_signal_audit_json_dir(args: argparse.Namespace, *, run_stub: Path) -> Path:
     if args.signal_audit_json_dir:
         return Path(args.signal_audit_json_dir)
@@ -509,15 +529,23 @@ def main() -> int:
     signal_coverage_stats: dict[str, float] = {"min": 0.0, "median": 0.0, "max": 0.0}
     signal_missing_breakdown: dict[str, float] = {}
     signal_artifacts: list[str] = []
+    signal_cache_dir: Path | None = None
+    signal_cache_built = False
+    signal_cache_uid_coverage: dict[str, int] = {"built_ok": 0, "built_fail": 0}
     uids_file_for_run: str | None = str(args.uids_file) if args.uids_file else None
 
     if args.auto_select_uids and not args.uids_file:
-        signal_selection_mode = "auto_signal"
+        signal_selection_mode = "auto_signal_cache"
         signal_audit_script = ROOT / "scripts" / "audit_signal_coverage.py"
         signal_select_script = ROOT / "scripts" / "select_uids_for_experiments.py"
         signal_out = Path(args.signal_audit_out) if args.signal_audit_out else (out_dir / "selection")
         signal_out.mkdir(parents=True, exist_ok=True)
         signal_json_dir = _resolve_signal_audit_json_dir(args, run_stub=run_stub)
+        signal_cache_dir = (
+            Path(args.auto_select_uids_cache_dir)
+            if args.auto_select_uids_cache_dir
+            else (compare_selection_dir / "signal_cache")
+        )
         cmd_signal_audit = [
             sys.executable,
             str(signal_audit_script),
@@ -526,12 +554,29 @@ def main() -> int:
             "--out-dir",
             str(signal_out),
         ]
+        if args.auto_select_uids_build_cache:
+            cmd_signal_audit.append("--auto-build-cache")
+            cmd_signal_audit.extend(["--cache-out", str(signal_cache_dir)])
+        elif signal_cache_dir is not None:
+            cmd_signal_audit.extend(["--signal-cache-dir", str(signal_cache_dir)])
         perception_dir_for_audit = run_stub / "perception"
         if perception_dir_for_audit.exists():
             cmd_signal_audit.extend(["--perception-dir", str(perception_dir_for_audit)])
         rc = _run(cmd_signal_audit, cwd=ROOT, log_prefix=compare_dir / "signal_audit", commands_file=commands_file)
         if rc != 0:
             return rc
+        signal_cache_built = bool(args.auto_select_uids_build_cache)
+        cache_snap = signal_cache_dir / "snapshot.json" if signal_cache_dir is not None else None
+        if cache_snap is not None and cache_snap.exists():
+            try:
+                payload = json.loads(cache_snap.read_text(encoding="utf-8"))
+                build = payload.get("build", {}) if isinstance(payload, dict) else {}
+                signal_cache_uid_coverage = {
+                    "built_ok": int(build.get("built_ok", 0)),
+                    "built_fail": int(build.get("built_fail", 0)),
+                }
+            except Exception:
+                pass
         cmd_signal_select = [
             sys.executable,
             str(signal_select_script),
@@ -561,6 +606,10 @@ def main() -> int:
         signal_coverage_stats = dict(coverage_payload.get("coverage_score_stats", {}))
         signal_missing_breakdown = dict(coverage_payload.get("missing_signal_breakdown", {}))
         signal_artifacts = _copy_selection_artifacts(signal_out, compare_selection_dir)
+        if signal_cache_dir is not None and signal_cache_dir.exists():
+            copied_cache = _copy_signal_cache_tree(signal_cache_dir, compare_selection_dir / "signal_cache")
+            if copied_cache:
+                signal_artifacts.append(copied_cache)
     elif args.auto_select_uids and args.uids_file:
         signal_selection_mode = "manual_uids_file"
 
@@ -1122,7 +1171,7 @@ def main() -> int:
             cmd_paper_ready.extend(
                 ["--streaming-chain-backoff-compare-dir", str(compare_streaming_chain_backoff / "compare")]
             )
-        if signal_selection_mode == "auto_signal":
+        if signal_selection_mode == "auto_signal_cache":
             cmd_paper_ready.extend(["--signal-selection-dir", str(compare_selection_dir)])
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
         if rc != 0:
@@ -1142,6 +1191,8 @@ def main() -> int:
             "signal_audit_out": str(args.signal_audit_out) if args.signal_audit_out else None,
             "signal_min_score": float(args.signal_min_score),
             "signal_top_k": int(args.signal_top_k),
+            "auto_select_uids_build_cache": bool(args.auto_select_uids_build_cache),
+            "auto_select_uids_cache_dir": str(args.auto_select_uids_cache_dir) if args.auto_select_uids_cache_dir else None,
             "with_eval": bool(args.with_eval),
             "with_nlq": bool(args.with_nlq),
             "nlq_mode": str(args.nlq_mode),
@@ -1161,6 +1212,9 @@ def main() -> int:
             "selected_uids_count": int(signal_selected_uids_count),
             "coverage_score_stats": signal_coverage_stats,
             "missing_signal_breakdown": signal_missing_breakdown,
+            "cache_dir_rel": str(Path("compare") / "selection" / "signal_cache"),
+            "cache_built": bool(signal_cache_built),
+            "cache_uid_coverage": signal_cache_uid_coverage,
             "artifacts": signal_artifacts,
         },
         "streaming_chain_backoff": {
@@ -1176,13 +1230,16 @@ def main() -> int:
     selected_uids_count = 0
     if effective_uids_file and effective_uids_file.exists():
         selected_uids_count = len([x.strip() for x in effective_uids_file.read_text(encoding="utf-8").splitlines() if x.strip()])
-    if signal_selection_mode == "auto_signal" and signal_selected_uids_count > 0:
+    if signal_selection_mode == "auto_signal_cache" and signal_selected_uids_count > 0:
         selected_uids_count = signal_selected_uids_count
     compare_summary = {
         "selection_mode": signal_selection_mode,
         "selected_uids_count": int(selected_uids_count),
         "coverage_score_stats": signal_coverage_stats,
         "missing_signal_breakdown": signal_missing_breakdown,
+        "cache_dir_rel": str(Path("compare") / "selection" / "signal_cache"),
+        "cache_built": bool(signal_cache_built),
+        "cache_uid_coverage": signal_cache_uid_coverage,
         "selection_artifacts": signal_artifacts,
     }
     (compare_dir / "compare_summary.json").write_text(json.dumps(compare_summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1214,6 +1271,7 @@ def main() -> int:
     print(f"bye_gate={str(bool(args.bye_gate)).lower()}")
     if args.auto_select_uids:
         print(f"selection_mode={signal_selection_mode}")
+        print(f"cache_built={str(bool(signal_cache_built)).lower()}")
         print(f"selected_uids_count={selected_uids_count}")
         print(f"coverage_score_stats={json.dumps(signal_coverage_stats, ensure_ascii=False, sort_keys=True)}")
         print(f"selection_saved={compare_selection_dir}")

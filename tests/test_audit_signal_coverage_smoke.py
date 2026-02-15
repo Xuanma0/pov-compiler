@@ -54,6 +54,9 @@ def test_audit_signal_coverage_smoke(tmp_path: Path) -> None:
         str(json_dir),
         "--out-dir",
         str(out_dir),
+        "--auto-build-cache",
+        "--cache-out",
+        str(out_dir / "signal_cache"),
         "--perception-dir",
         str(perception_dir),
     ]
@@ -83,4 +86,7 @@ def test_audit_signal_coverage_smoke(tmp_path: Path) -> None:
         "coverage_score",
     }
     assert required.issubset(set(rows[0].keys()))
-
+    assert "cache_used" in rows[0]
+    assert "score_components" in rows[0]
+    assert any(float(r.get("cache_used", 0) or 0) > 0 for r in rows)
+    assert max(float(r.get("coverage_score", 0) or 0) for r in rows) >= 1.0

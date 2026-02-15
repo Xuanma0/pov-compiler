@@ -651,10 +651,10 @@ Key outputs:
 - `compare/streaming_chain_backoff/compare/figures/fig_streaming_chain_backoff_*.png`
 - `compare/paper_ready/figures/fig_streaming_chain_backoff_*.png`
 
-### v1.31 Signal Audit + Auto UID Selection
+### v1.32 Signal Cache + Auto UID Selection
 
-If AB/streaming/chain plots look empty or deltas stay near zero, the usual cause is low-signal UIDs (missing place/interaction/object/perception evidence).  
-Use auto selection to enforce a reproducible non-empty UID set:
+If AB/streaming/chain plots look empty or deltas stay near zero, the common cause is low-signal UIDs (no place/interaction/object evidence in raw inputs).  
+`--auto-select-uids` now builds a minimal signal cache by default (`events_v1_meta + place_interaction + object_memory + lost_object`) before scoring UIDs.
 
 ```text
 python scripts\run_ab_bye_compare.py --root "<YOUR_ROOT>" --out_dir data\outputs\ab_v131_demo --jobs 1 --auto-select-uids --signal-min-score 2 --signal-top-k 20 --no-with-figs
@@ -665,3 +665,4 @@ This produces selection artifacts under:
 - `compare/selection/coverage.md`
 - `compare/selection/selected_uids.txt`
 - `compare/selection/selection_report.md`
+- `compare/selection/signal_cache/<uid>/events_v1_meta.json`

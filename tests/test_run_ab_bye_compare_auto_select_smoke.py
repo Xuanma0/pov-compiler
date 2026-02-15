@@ -70,7 +70,8 @@ def test_run_ab_bye_compare_auto_select_smoke(tmp_path: Path) -> None:
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
-    assert "selection_mode=auto_signal" in proc.stdout
+    assert "selection_mode=auto_signal_cache" in proc.stdout
+    assert "cache_built=true" in proc.stdout
     assert "selected_uids_count=" in proc.stdout
     assert "coverage_score_stats=" in proc.stdout
 
@@ -82,11 +83,14 @@ def test_run_ab_bye_compare_auto_select_smoke(tmp_path: Path) -> None:
     compare_summary = out_dir / "compare" / "compare_summary.json"
     assert compare_summary.exists()
     payload = json.loads(compare_summary.read_text(encoding="utf-8"))
-    assert payload.get("selection_mode") == "auto_signal"
+    assert payload.get("selection_mode") == "auto_signal_cache"
+    assert payload.get("cache_built") is True
     assert int(payload.get("selected_uids_count", 0)) > 0
     assert isinstance(payload.get("coverage_score_stats"), dict)
+    signal_cache_uid_dir = selection_dir / "signal_cache" / uid
+    assert signal_cache_uid_dir.exists()
+    assert (signal_cache_uid_dir / "events_v1_meta.json").exists()
 
     with (selection_dir / "coverage.csv").open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
     assert rows
-

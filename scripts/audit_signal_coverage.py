@@ -4,6 +4,8 @@ import argparse
 import csv
 import json
 import re
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
@@ -16,6 +18,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", required=True, help="Output directory for coverage artifacts")
     parser.add_argument("--uids-file", default=None, help="Optional UID list file")
     parser.add_argument("--perception-dir", default=None, help="Optional perception output directory")
+    parser.add_argument("--signal-cache-dir", default=None, help="Optional signal cache dir (uid subdirs)")
+    parser.add_argument("--auto-build-cache", action="store_true", help="Build signal cache before auditing")
+    parser.add_argument("--cache-out", default=None, help="Signal cache output directory when auto-building")
     return parser.parse_args()
 
 
@@ -150,6 +155,64 @@ def _extract_perception_summary(uid: str, perception_dir: Path | None) -> tuple[
     return frames, contacts
 
 
+def _load_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _extract_cached(uid: str, signal_cache_dir: Path | None) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "cache_used": False,
+        "cache_missing_reason": "",
+        "events_v1_count": None,
+        "evidence_span_count": None,
+        "has_retrieval_hits": None,
+        "place_segments_count": None,
+        "interaction_events_count": None,
+        "object_vocab_size": None,
+        "object_memory_objects_total": None,
+        "lost_object_queries_total": None,
+    }
+    if signal_cache_dir is None:
+        result["cache_missing_reason"] = "cache_dir_not_provided"
+        return result
+    uid_dir = signal_cache_dir / uid
+    if not uid_dir.exists():
+        result["cache_missing_reason"] = "uid_cache_missing"
+        return result
+
+    events_meta = _load_json_if_exists(uid_dir / "events_v1_meta.json")
+    place_meta = _load_json_if_exists(uid_dir / "place_interaction.json")
+    object_meta = _load_json_if_exists(uid_dir / "object_memory.json")
+    lost_meta = _load_json_if_exists(uid_dir / "lost_object_queries.json")
+    if not events_meta and not place_meta and not object_meta and not lost_meta:
+        result["cache_missing_reason"] = "cache_files_missing"
+        return result
+
+    result["cache_used"] = True
+    result["cache_missing_reason"] = ""
+    if events_meta:
+        result["events_v1_count"] = int(_to_float(events_meta.get("events_v1_count"), default=0.0))
+        result["evidence_span_count"] = int(_to_float(events_meta.get("evidence_span_count"), default=0.0))
+        result["has_retrieval_hits"] = 1 if _to_float(events_meta.get("retrieval_hit_count"), default=0.0) > 0 else 0
+        result["object_vocab_size"] = int(_to_float(events_meta.get("object_vocab_size"), default=0.0))
+    if place_meta:
+        result["place_segments_count"] = int(_to_float(place_meta.get("place_segments_count"), default=0.0))
+        result["interaction_events_count"] = int(_to_float(place_meta.get("interaction_events_count"), default=0.0))
+    if object_meta:
+        result["object_memory_objects_total"] = int(_to_float(object_meta.get("objects_total"), default=0.0))
+    if lost_meta:
+        result["lost_object_queries_total"] = int(_to_float(lost_meta.get("lost_object_queries_total"), default=0.0))
+    return result
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     cols: list[str] = []
@@ -187,6 +250,34 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     perception_dir = Path(args.perception_dir) if args.perception_dir else None
+    signal_cache_dir = Path(args.signal_cache_dir) if args.signal_cache_dir else None
+
+    cache_build_snapshot: dict[str, Any] | None = None
+    cache_built = False
+    if args.auto_build_cache:
+        cache_out = Path(args.cache_out) if args.cache_out else (out_dir / "signal_cache")
+        cmd = [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts" / "build_signal_cache.py"),
+            "--pov-json-dir",
+            str(pov_json_dir),
+            "--out_dir",
+            str(cache_out),
+        ]
+        if args.uids_file:
+            cmd.extend(["--uids-file", str(args.uids_file)])
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        (out_dir / "build_signal_cache.stdout.log").write_text(proc.stdout or "", encoding="utf-8")
+        (out_dir / "build_signal_cache.stderr.log").write_text(proc.stderr or "", encoding="utf-8")
+        if proc.returncode != 0:
+            print(proc.stdout or "")
+            print(proc.stderr or "")
+            print("error=auto-build-cache failed")
+            return int(proc.returncode)
+        signal_cache_dir = cache_out
+        cache_built = True
+        snap = _load_json_if_exists(cache_out / "snapshot.json")
+        cache_build_snapshot = snap if isinstance(snap, dict) else {}
 
     discovered = _discover_jsons(pov_json_dir)
     if not discovered:
@@ -260,6 +351,25 @@ def main() -> int:
         place_segments_count = len(place_ids)
         object_vocab_size = len(object_vocab)
 
+        cached = _extract_cached(uid, signal_cache_dir)
+        cache_used = bool(cached.get("cache_used"))
+        if cached.get("events_v1_count") is not None:
+            events_v1_count = int(cached.get("events_v1_count") or 0)
+        if cached.get("evidence_span_count") is not None:
+            evidence_span_count = int(cached.get("evidence_span_count") or 0)
+        if cached.get("has_retrieval_hits") is not None:
+            has_retrieval_hits = int(cached.get("has_retrieval_hits") or 0)
+        if cached.get("place_segments_count") is not None:
+            place_segments_count = int(cached.get("place_segments_count") or 0)
+        if cached.get("interaction_events_count") is not None:
+            interaction_events_count = int(cached.get("interaction_events_count") or 0)
+        if cached.get("object_vocab_size") is not None:
+            object_vocab_size = int(cached.get("object_vocab_size") or 0)
+        if cached.get("object_memory_objects_total") is not None:
+            object_memory_total = int(cached.get("object_memory_objects_total") or 0)
+        if cached.get("lost_object_queries_total") is not None:
+            lost_object_queries_total = int(cached.get("lost_object_queries_total") or 0)
+
         chain_queries_total, chain_success_rate = _extract_chain_metrics(uid, pov_json_dir)
         frames_processed, contact_events = _extract_perception_summary(uid, perception_dir)
 
@@ -278,6 +388,15 @@ def main() -> int:
             + weight_terms["perception_contact_nonzero"] * perception_contact_nonzero
             + weight_terms["events_v1_nonzero"] * events_v1_nonzero
         )
+
+        score_components = {
+            "has_place": has_place,
+            "has_interaction": has_interaction,
+            "object_vocab_nonzero": object_vocab_nonzero,
+            "lost_object_nonzero": lost_object_nonzero,
+            "perception_contact_nonzero": perception_contact_nonzero,
+            "events_v1_nonzero": events_v1_nonzero,
+        }
 
         row = {
             "uid": uid,
@@ -298,6 +417,9 @@ def main() -> int:
             "missing_lost_object": 1 if (lost_object_queries_total == 0) else 0,
             "missing_chain": 1 if (chain_queries_total is None) else 0,
             "missing_perception": 1 if (frames_processed is None and contact_events is None) else 0,
+            "cache_used": 1 if cache_used else 0,
+            "cache_missing_reason": str(cached.get("cache_missing_reason", "")),
+            "score_components": json.dumps(score_components, ensure_ascii=False, sort_keys=True),
             "coverage_score": round(float(coverage_score), 6),
         }
         rows.append(row)
@@ -318,6 +440,9 @@ def main() -> int:
             "pov_json_dir": str(pov_json_dir),
             "uids_file": str(args.uids_file) if args.uids_file else None,
             "perception_dir": str(perception_dir) if perception_dir else None,
+            "signal_cache_dir": str(signal_cache_dir) if signal_cache_dir else None,
+            "auto_build_cache": bool(args.auto_build_cache),
+            "cache_out": str(args.cache_out) if args.cache_out else str(out_dir / "signal_cache"),
         },
         "selection": {
             "selection_mode": selection_mode,
@@ -337,11 +462,17 @@ def main() -> int:
             "coverage_md": str(coverage_md),
             "uid_candidates": str(uid_candidates),
         },
+        "cache": {
+            "cache_built": bool(cache_built),
+            "cache_snapshot": cache_build_snapshot,
+        },
     }
     snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"selection_mode={selection_mode}")
     print(f"uids_found={len(selected_uids)}")
+    print(f"cache_used_dir={str(signal_cache_dir) if signal_cache_dir else ''}")
+    print(f"cache_built={str(cache_built).lower()}")
     print(f"saved_coverage_csv={coverage_csv}")
     print(f"saved_uid_candidates={uid_candidates}")
     print(f"saved_snapshot={snapshot_path}")
@@ -350,4 +481,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
