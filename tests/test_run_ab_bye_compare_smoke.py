@@ -147,6 +147,15 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
         "--with-reranker-sweep",
         "--reranker-sweep-grid",
         "w_trigger=0.2,0.8;w_action=0.3",
+        "--with-decisions-backend-compare",
+        "--stub-decisions-backend",
+        "heuristic",
+        "--real-decisions-backend",
+        "model",
+        "--real-model-provider",
+        "fake",
+        "--real-model-fake-mode",
+        "diverse",
         "--nlq-eval-script",
         str(fake_eval),
         "--bye-root",
@@ -206,6 +215,12 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "paper_ready" / "figures" / "fig_nlq_critical_fn_rate_vs_seconds.png").exists()
     assert (compare_dir / "paper_ready" / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.png").exists()
     assert (compare_dir / "paper_ready" / "tables" / "table_streaming_chain_backoff_compare.csv").exists()
+    assert (compare_dir / "decisions_backend" / "tables" / "table_decisions_backend_compare.csv").exists()
+    assert (compare_dir / "decisions_backend" / "tables" / "table_decisions_backend_compare.md").exists()
+    assert (compare_dir / "decisions_backend" / "figures" / "fig_decisions_backend_delta.png").exists()
+    assert (compare_dir / "decisions_backend" / "figures" / "fig_decisions_backend_tradeoff.png").exists()
+    assert (compare_dir / "paper_ready" / "decisions_backend" / "table_decisions_backend_compare.csv").exists()
+    assert (compare_dir / "paper_ready" / "figures" / "fig_decisions_backend_delta.png").exists()
     assert (compare_dir / "reranker_sweep" / "stub" / "aggregate" / "metrics_by_weights.csv").exists()
     assert (compare_dir / "reranker_sweep" / "real" / "aggregate" / "metrics_by_weights.csv").exists()
     assert (compare_dir / "paper_ready" / "reranker_sweep" / "metrics_by_weights.csv").exists()

@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from compare_bye_report_metrics.py output",
     )
     parser.add_argument(
+        "--decisions-backend-compare-dir",
+        default=None,
+        help="Optional directory from run_decisions_backend_compare.py compare output",
+    )
+    parser.add_argument(
         "--lost-object-panel-dir",
         default=None,
         help="Optional directory containing table_lost_object_budget.(csv/md) and optional figures",
@@ -1126,6 +1131,51 @@ def main() -> int:
             except Exception:
                 pass
 
+    decisions_backend_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "summary": {},
+    }
+    if args.decisions_backend_compare_dir:
+        db_dir = Path(args.decisions_backend_compare_dir)
+        decisions_backend_compare["enabled"] = True
+        decisions_backend_compare["source_dir"] = str(db_dir)
+        dst_root = out_dir / "decisions_backend"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            db_dir / "tables" / "table_decisions_backend_compare.csv",
+            db_dir / "tables" / "table_decisions_backend_compare.md",
+            db_dir / "compare_summary.json",
+            db_dir / "figures" / "fig_decisions_backend_delta.png",
+            db_dir / "figures" / "fig_decisions_backend_delta.pdf",
+            db_dir / "figures" / "fig_decisions_backend_tradeoff.png",
+            db_dir / "figures" / "fig_decisions_backend_tradeoff.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        decisions_backend_compare["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        summary_src = db_dir / "compare_summary.json"
+        if summary_src.exists():
+            try:
+                payload = json.loads(summary_src.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    decisions_backend_compare["summary"] = dict(payload)
+            except Exception:
+                pass
+
     lost_object_panel: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1433,6 +1483,19 @@ def main() -> int:
             )
         else:
             report_lines.append("- bye_report_compare: source provided but artifacts missing.")
+    if args.decisions_backend_compare_dir:
+        if decisions_backend_compare.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Decisions Backend Compare",
+                    "",
+                    f"- decisions_backend_compare_dir: `{decisions_backend_compare.get('source_dir')}`",
+                    f"- decisions_backend_compare_files: `{decisions_backend_compare.get('copied_files')}`",
+                    f"- decisions_backend_compare_summary: `{json.dumps(decisions_backend_compare.get('summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- decisions_backend_compare: source provided but artifacts missing.")
     if args.lost_object_panel_dir:
         if lost_object_panel.get("copied_files"):
             report_lines.extend(
@@ -1532,6 +1595,9 @@ def main() -> int:
             else None,
             "component_attribution_dir": str(args.component_attribution_dir) if args.component_attribution_dir else None,
             "bye_report_compare_dir": str(args.bye_report_compare_dir) if args.bye_report_compare_dir else None,
+            "decisions_backend_compare_dir": str(args.decisions_backend_compare_dir)
+            if args.decisions_backend_compare_dir
+            else None,
             "lost_object_panel_dir": str(args.lost_object_panel_dir) if args.lost_object_panel_dir else None,
             "chain_nlq_dir": str(args.chain_nlq_dir) if args.chain_nlq_dir else None,
             "chain_repo_compare_dir": str(args.chain_repo_compare_dir) if args.chain_repo_compare_dir else None,
@@ -1561,6 +1627,7 @@ def main() -> int:
             "repo_query_selection_sweep": repo_query_selection_sweep,
             "component_attribution": component_attribution,
             "bye_report_compare": bye_report_compare,
+            "decisions_backend_compare": decisions_backend_compare,
             "lost_object_panel": lost_object_panel,
             "chain_nlq_panel": chain_nlq_panel,
             "chain_repo_compare_panel": chain_repo_compare_panel,

@@ -68,6 +68,74 @@ def _anchor_types_for_event_v1(event: Any) -> list[str]:
     return sorted(out)
 
 
+def _nearest_event_id_for_span(output: Output, t0_s: float, t1_s: float) -> str:
+    best_id = ""
+    best_dist = float("inf")
+    center = 0.5 * (float(t0_s) + float(t1_s))
+    for ev in list(output.events_v1 or []):
+        c = 0.5 * (float(ev.t0) + float(ev.t1))
+        dist = abs(c - center)
+        if dist < best_dist:
+            best_dist = dist
+            best_id = str(ev.id)
+    if best_id:
+        return best_id
+    for ev in list(output.events or []):
+        c = 0.5 * (float(ev.t0) + float(ev.t1))
+        dist = abs(c - center)
+        if dist < best_dist:
+            best_dist = dist
+            best_id = str(ev.id)
+    return best_id
+
+
+def _decision_pool(output: Output) -> tuple[str, list[dict[str, Any]]]:
+    model_rows = list(getattr(output, "decisions_model_v1", []) or [])
+    pool_model: list[dict[str, Any]] = []
+    for i, item in enumerate(model_rows, start=1):
+        if not isinstance(item, dict):
+            continue
+        try:
+            t0_ms = int(round(float(item.get("t0_ms", 0))))
+            t1_ms = int(round(float(item.get("t1_ms", t0_ms + 1000))))
+        except Exception:
+            continue
+        t0_s = max(0.0, float(t0_ms) / 1000.0)
+        t1_s = max(t0_s + 1e-3, float(t1_ms) / 1000.0)
+        evidence = item.get("evidence", {})
+        if not isinstance(evidence, dict):
+            evidence = {}
+        source_event = str(evidence.get("event_id", "")).strip() or _nearest_event_id_for_span(output, t0_s, t1_s)
+        pool_model.append(
+            {
+                "id": str(item.get("id", "")).strip() or f"model_decision_{i:04d}",
+                "t0": t0_s,
+                "t1": t1_s,
+                "source_event": source_event,
+                "action_type": str(item.get("decision_type", item.get("action_type", ""))).strip(),
+                "conf": float(item.get("conf", item.get("confidence", 0.5)) or 0.5),
+                "source_kind": "decisions_model_v1",
+            }
+        )
+    if pool_model:
+        return "decisions_model_v1", pool_model
+
+    pool_heur: list[dict[str, Any]] = []
+    for dp in list(output.decision_points or []):
+        pool_heur.append(
+            {
+                "id": str(dp.id),
+                "t0": float(dp.t0),
+                "t1": float(dp.t1),
+                "source_event": str(dp.source_event),
+                "action_type": str(dp.action.get("type", "")),
+                "conf": float(dp.conf),
+                "source_kind": "decision_points",
+            }
+        )
+    return "decision_points", pool_heur
+
+
 def _sample_segment_vector(
     times: np.ndarray,
     frame_embeds: np.ndarray,
@@ -134,6 +202,8 @@ class IndexBuilder:
         event_count = 0
         event_v0_count = 0
         highlight_count = 0
+        decision_count = 0
+        decision_source_kind, decision_rows = _decision_pool(output)
         for event in output.events_v1:
             vec = _sample_segment_vector(
                 times=times_arr,
@@ -245,11 +315,41 @@ class IndexBuilder:
             )
             highlight_count += 1
 
+        for drow in decision_rows:
+            vec = _sample_segment_vector(
+                times=times_arr,
+                frame_embeds=frame_matrix,
+                t0=float(drow.get("t0", 0.0)),
+                t1=float(drow.get("t1", 0.0)),
+                max_frames_per_segment=self.cfg.max_frames_per_segment,
+            )
+            if vec is None:
+                continue
+            index.add(
+                item_id=str(drow.get("id", "")),
+                vec=vec,
+                meta={
+                    "kind": "decision",
+                    "id": str(drow.get("id", "")),
+                    "t0": float(drow.get("t0", 0.0)),
+                    "t1": float(drow.get("t1", 0.0)),
+                    "source_event": str(drow.get("source_event", "")),
+                    "action_type": str(drow.get("action_type", "")),
+                    "conf": float(drow.get("conf", 0.0) or 0.0),
+                    "decision_source_kind": str(drow.get("source_kind", decision_source_kind)),
+                    "embedding_backend": embedder.backend_name,
+                },
+            )
+            decision_count += 1
+
         stats = {
             "num_event_v1_vecs": int(event_v1_count),
             "num_event_vecs": int(event_count),
             "num_event_v0_vecs": int(event_v0_count),
             "num_highlight_vecs": int(highlight_count),
+            "num_decision_vecs": int(decision_count),
+            "decision_source_kind": str(decision_source_kind),
+            "decision_count": int(len(decision_rows)),
             "dim": int(index.dim),
             "backend": index.backend,
             "embedding_backend": embedder.backend_name,
@@ -265,6 +365,16 @@ class IndexBuilder:
         index, stats = self.build(video_path=video_path, output_json=output_json)
         npz_path, meta_path = index.save(out_prefix)
         result = dict(stats)
+        # Persist a small index-level summary for downstream diagnostics.
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                payload["decision_source_kind"] = str(result.get("decision_source_kind", ""))
+                payload["decision_count"] = int(result.get("decision_count", 0))
+                payload["num_decision_vecs"] = int(result.get("num_decision_vecs", 0))
+                meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
         result["index_npz"] = str(npz_path)
         result["index_meta"] = str(meta_path)
         return result

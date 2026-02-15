@@ -45,6 +45,9 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- chosen_plan_intent: {plan.get('intent', '')}")
     lines.append(f"- rerank_cfg_hash: {trace.get('rerank_cfg_hash', '')}")
     lines.append(f"- top1_kind: {trace.get('top1_kind', '')}")
+    lines.append(f"- decision_pool_kind: {trace.get('decision_pool_kind', '')}")
+    lines.append(f"- decision_pool_count: {int(trace.get('decision_pool_count', 0))}")
+    lines.append(f"- decision_model_meta: `{json.dumps(trace.get('decision_model_meta', {}), ensure_ascii=False, sort_keys=True)}`")
     lines.append(f"- parsed_constraints: `{json.dumps(plan.get('constraints', {}), ensure_ascii=False, sort_keys=True)}`")
     lines.append(f"- enable_constraints: {str(bool(ctrace.get('enable_constraints', True))).lower()}")
     lines.append(f"- applied_constraints: {ctrace.get('applied_constraints', [])}")
@@ -159,6 +162,8 @@ def _render_markdown(trace: dict[str, Any]) -> str:
         if isinstance(attempts2, list) and attempts2:
             lines.append(f"- chain_backoff_attempts: `{json.dumps(attempts2, ensure_ascii=False)}`")
         lines.append(f"- top1_kind: {step2.get('top1_kind', '')}")
+        lines.append(f"- decision_pool_kind: {step2.get('decision_pool_kind', trace.get('decision_pool_kind', ''))}")
+        lines.append(f"- decision_pool_count: {int(step2.get('decision_pool_count', trace.get('decision_pool_count', 0)))}")
         lines.append("")
 
     lines.append("## Object Memory V0")
@@ -348,6 +353,11 @@ def main() -> int:
     print(f"video_id={trace.get('video_id', '')}")
     print(f"query={trace.get('query', '')}")
     print(f"chosen_plan_intent={trace.get('plan', {}).get('intent', '')}")
+    print(f"decision_pool_kind={trace.get('decision_pool_kind', '')}")
+    print(f"decision_pool_count={int(trace.get('decision_pool_count', 0))}")
+    model_meta = trace.get("decision_model_meta", {})
+    if isinstance(model_meta, dict) and model_meta:
+        print(f"decision_model_meta={model_meta}")
     chain = trace.get("chain", {})
     is_chain = bool(isinstance(chain, dict) and chain.get("is_chain", False))
     if is_chain:

@@ -173,7 +173,7 @@ def redact_url(url: str) -> str:
         for k, v in q:
             kn = str(k).strip().lower()
             if any(tok in kn for tok in _SENSITIVE_KEYWORDS):
-                redacted.append((k, "***"))
+                redacted.append(("redacted", "***"))
             else:
                 redacted.append((k, v))
         new_query = urlencode(redacted, doseq=True)

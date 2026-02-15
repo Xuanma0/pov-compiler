@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout_s", type=int, default=60)
     parser.add_argument("--max_tokens", type=int, default=800)
     parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--fake-mode", choices=["minimal", "diverse"], default="minimal")
     parser.add_argument("--print_env_hint", action="store_true", help="Print expected env var name (never prints values)")
     return parser.parse_args()
 
@@ -90,6 +91,7 @@ def main() -> int:
         timeout_s=int(args.timeout_s),
         max_tokens=int(args.max_tokens),
         temperature=float(args.temperature),
+        extra={"fake_mode": str(args.fake_mode)},
     )
     if args.print_env_hint and cfg.provider != "fake":
         print(f"env_hint={cfg.api_key_env}")

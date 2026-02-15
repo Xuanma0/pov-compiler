@@ -496,6 +496,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Strict perception mode: no fallback, fail on missing deps/frame errors",
     )
+    parser.add_argument("--decisions-backend", choices=["heuristic", "model"], default="heuristic")
+    parser.add_argument(
+        "--model-provider",
+        choices=["fake", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
+        default="fake",
+    )
+    parser.add_argument("--model-name", default=None)
+    parser.add_argument("--model-base-url", default=None)
+    parser.add_argument("--model-api-key-env", default=None)
+    parser.add_argument("--model-timeout-s", type=int, default=None)
+    parser.add_argument("--model-max-tokens", type=int, default=None)
+    parser.add_argument("--model-temperature", type=float, default=None)
+    parser.add_argument("--model-fake-mode", choices=["minimal", "diverse"], default="minimal")
 
     parser.add_argument("--min-size-bytes", "--min_size_bytes", dest="min_size_bytes", type=int, default=MIN_SIZE_DEFAULT)
     parser.add_argument("--min-duration-s", type=float, default=None)
@@ -574,6 +587,16 @@ def _load_bye_numeric_metrics(path: Path) -> dict[str, float]:
 
 
 def _load_bye_report_metrics(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_index_meta(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
@@ -839,6 +862,15 @@ def _process_video(
     perception_fallback_stub: bool,
     perception_strict: bool,
     perception_cache_root: Path,
+    decisions_backend: str,
+    model_provider: str,
+    model_name: str | None,
+    model_base_url: str | None,
+    model_api_key_env: str | None,
+    model_timeout_s: int | None,
+    model_max_tokens: int | None,
+    model_temperature: float | None,
+    model_fake_mode: str,
     run_eval: bool,
     sweep: bool,
     run_nlq: bool,
@@ -918,9 +950,26 @@ def _process_video(
         last_error = log
 
     if actions["run_offline"]:
+        run_offline_args = ["--video", str(input_path), "--out", str(json_path)]
+        run_offline_args.extend(["--decisions-backend", str(decisions_backend)])
+        if str(decisions_backend).strip().lower() == "model":
+            run_offline_args.extend(["--model-provider", str(model_provider)])
+            if model_name:
+                run_offline_args.extend(["--model-name", str(model_name)])
+            if model_base_url:
+                run_offline_args.extend(["--model-base-url", str(model_base_url)])
+            if model_api_key_env:
+                run_offline_args.extend(["--model-api-key-env", str(model_api_key_env)])
+            if model_timeout_s is not None:
+                run_offline_args.extend(["--model-timeout-s", str(int(model_timeout_s))])
+            if model_max_tokens is not None:
+                run_offline_args.extend(["--model-max-tokens", str(int(model_max_tokens))])
+            if model_temperature is not None:
+                run_offline_args.extend(["--model-temperature", str(float(model_temperature))])
+            run_offline_args.extend(["--model-fake-mode", str(model_fake_mode)])
         ok, log = _run_python_script(
             run_offline_script,
-            ["--video", str(input_path), "--out", str(json_path)],
+            run_offline_args,
             cwd=ROOT,
         )
         if not ok:
@@ -944,6 +993,22 @@ def _process_video(
             status_stage = "build_index"
     elif status == "ok":
         stage_results["build_index"] = "skipped"
+
+    decisions_model_count = 0
+    decisions_total = 0
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8")) if json_path.exists() else {}
+        if isinstance(payload, dict):
+            decisions_model_count = len(payload.get("decisions_model_v1", []) or [])
+            decisions_total = len(payload.get("decision_points", []) or [])
+    except Exception:
+        decisions_model_count = 0
+        decisions_total = 0
+    decision_pool_kind = ""
+    index_meta_path = Path(f"{index_prefix}.index_meta.json")
+    index_meta = _load_index_meta(index_meta_path)
+    if isinstance(index_meta, dict):
+        decision_pool_kind = str(index_meta.get("decision_source_kind", "") or "")
 
     perception_json_path = perception_dir / "perception.json"
     perception_report_path = perception_dir / "report.md"
@@ -1193,6 +1258,11 @@ def _process_video(
         "perception_json_path": str(perception_json_path),
         "perception_report_path": str(perception_report_path),
         "event_json_path": str(event_json_path),
+        "decisions_backend": str(decisions_backend),
+        "decisions_model_used": bool(str(decisions_backend).strip().lower() == "model" and decisions_model_count > 0),
+        "decisions_model_count": int(decisions_model_count),
+        "decisions_count": int(decisions_total),
+        "decision_pool_kind": str(decision_pool_kind),
         "status_stage": status_stage if status == "ok" else status,
         "stage_results": stage_results,
         "error_tail": last_error[-800:] if last_error else "",
@@ -1289,6 +1359,11 @@ def _write_summary(
             "uids_found": int(selection_info.get("uids_found", 0)),
             "uids_missing_count": int(selection_info.get("uids_missing_count", 0)),
             "uids_missing_sample": str(selection_info.get("uids_missing_sample", "")),
+            "decisions_backend": str(record.get("decisions_backend", "")),
+            "decisions_model_used": str(bool(record.get("decisions_model_used", False))).lower(),
+            "decisions_model_count": int(record.get("decisions_model_count", 0)),
+            "decisions_count": int(record.get("decisions_count", 0)),
+            "decision_pool_kind": str(record.get("decision_pool_kind", "")),
         }
         if run_bye:
             row["bye_status"] = record.get("bye_status", "")
@@ -1432,6 +1507,11 @@ def _write_summary(
         lines.append(f"- bye_dir: `{record.get('bye_dir', '')}`")
         lines.append(f"- perception_dir: `{record.get('perception_dir', '')}`")
         lines.append(f"- event_dir: `{record.get('event_dir', '')}`")
+        lines.append(f"- decisions_backend: `{record.get('decisions_backend', '')}`")
+        lines.append(f"- decisions_model_used: `{str(bool(record.get('decisions_model_used', False))).lower()}`")
+        lines.append(f"- decisions_model_count: `{record.get('decisions_model_count', 0)}`")
+        lines.append(f"- decisions_count: `{record.get('decisions_count', 0)}`")
+        lines.append(f"- decision_pool_kind: `{record.get('decision_pool_kind', '')}`")
         if run_bye:
             lines.append(f"- bye_status: `{record.get('bye_status', '')}`")
             lines.append(f"- bye_report_rc: `{record.get('bye_report_rc', '')}`")
@@ -1593,6 +1673,12 @@ def main() -> int:
         print(f"perception_backend={str(args.perception_backend)}")
         print(f"perception_fallback_stub={str(bool(args.perception_fallback_stub)).lower()}")
         print(f"perception_strict={str(bool(args.perception_strict)).lower()}")
+    print(f"decisions_backend={str(args.decisions_backend)}")
+    if str(args.decisions_backend).strip().lower() == "model":
+        print(f"model_provider={str(args.model_provider)}")
+        print(f"model_name={str(args.model_name) if args.model_name else ''}")
+        print(f"model_api_key_env={str(args.model_api_key_env) if args.model_api_key_env else ''}")
+        print(f"model_fake_mode={str(args.model_fake_mode)}")
 
     # Proxy stage (parallel, capped for safety).
     if proxy_enabled and chosen_entries:
@@ -1667,6 +1753,15 @@ def main() -> int:
         "perception_fallback_stub": bool(args.perception_fallback_stub),
         "perception_strict": bool(args.perception_strict),
         "perception_cache_root": out_dir / "perception_cache",
+        "decisions_backend": str(args.decisions_backend),
+        "model_provider": str(args.model_provider),
+        "model_name": str(args.model_name) if args.model_name else None,
+        "model_base_url": str(args.model_base_url) if args.model_base_url else None,
+        "model_api_key_env": str(args.model_api_key_env) if args.model_api_key_env else None,
+        "model_timeout_s": int(args.model_timeout_s) if args.model_timeout_s is not None else None,
+        "model_max_tokens": int(args.model_max_tokens) if args.model_max_tokens is not None else None,
+        "model_temperature": float(args.model_temperature) if args.model_temperature is not None else None,
+        "model_fake_mode": str(args.model_fake_mode),
         "run_eval": bool(args.run_eval),
         "sweep": bool(args.sweep),
         "run_nlq": bool(args.run_nlq),

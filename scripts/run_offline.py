@@ -76,6 +76,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--perception-fps", type=float, default=None, help="Perception sampling fps")
     parser.add_argument("--perception-max-frames", type=int, default=None, help="Perception frame cap")
     parser.add_argument("--with-repo", action="store_true", help="Enable RepoV0 chunk write/dedup in pipeline output")
+    parser.add_argument("--decisions-backend", choices=["heuristic", "model"], default=None, help="Decisions backend")
+    parser.add_argument(
+        "--model-provider",
+        choices=["fake", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
+        default=None,
+        help="Model provider (used when --decisions-backend=model)",
+    )
+    parser.add_argument("--model-name", default=None, help="Model name for decisions backend=model")
+    parser.add_argument("--model-base-url", default=None, help="Model base URL")
+    parser.add_argument("--model-api-key-env", default=None, help="API key environment variable name")
+    parser.add_argument("--model-timeout-s", type=int, default=None)
+    parser.add_argument("--model-max-tokens", type=int, default=None)
+    parser.add_argument("--model-temperature", type=float, default=None)
+    parser.add_argument("--model-fake-mode", choices=["minimal", "diverse"], default=None)
     return parser.parse_args()
 
 
@@ -109,6 +123,27 @@ def main() -> int:
         config.setdefault("perception", {})["max_frames"] = int(args.perception_max_frames)
     if args.with_repo:
         config.setdefault("repo", {})["enable"] = True
+    if args.decisions_backend is not None:
+        config.setdefault("decisions", {})["backend"] = str(args.decisions_backend)
+    model_cfg = config.setdefault("decisions", {}).setdefault("model_client", {})
+    if args.model_provider is not None:
+        model_cfg["provider"] = str(args.model_provider)
+    if args.model_name is not None:
+        model_cfg["model"] = str(args.model_name)
+    if args.model_base_url is not None:
+        model_cfg["base_url"] = str(args.model_base_url)
+    if args.model_api_key_env is not None:
+        model_cfg["api_key_env"] = str(args.model_api_key_env)
+    if args.model_timeout_s is not None:
+        model_cfg["timeout_s"] = int(args.model_timeout_s)
+    if args.model_max_tokens is not None:
+        model_cfg["max_tokens"] = int(args.model_max_tokens)
+    if args.model_temperature is not None:
+        model_cfg["temperature"] = float(args.model_temperature)
+    if args.model_fake_mode is not None:
+        model_cfg.setdefault("extra", {})
+        if isinstance(model_cfg["extra"], dict):
+            model_cfg["extra"]["fake_mode"] = str(args.model_fake_mode)
     if config.get("perception", {}).get("enabled", False):
         config.setdefault("perception", {})
         if not config["perception"].get("cache_dir"):
@@ -155,6 +190,11 @@ def main() -> int:
     print(f"tokens_context_default={tokens_context_default}")
     print(f"decision_points_total={decisions_total}")
     print(f"decisions_model_v1_total={decisions_model_total}")
+    print(f"decisions_backend={output.meta.get('decisions_backend', 'heuristic')}")
+    if output.meta.get("decisions_model_provider"):
+        print(f"decisions_model_provider={output.meta.get('decisions_model_provider', '')}")
+        print(f"decisions_model_name={output.meta.get('decisions_model_name', '')}")
+        print(f"decisions_model_cfg_hash={output.meta.get('decisions_model_cfg_hash', '')}")
     print(f"decisions_context_default={decisions_context_default}")
     if isinstance(output.perception, dict) and output.perception:
         p_meta = output.perception.get("meta", {}) if isinstance(output.perception.get("meta", {}), dict) else {}

@@ -9,6 +9,7 @@ import shutil
 import shlex
 import subprocess
 import sys
+import re
 from pathlib import Path
 from statistics import median
 
@@ -84,6 +85,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--perception-max-frames", type=int, default=300)
     _parse_bool_with_neg(parser, "real-perception-strict", default=True)
     _parse_bool_with_neg(parser, "stub-perception-strict", default=False)
+    parser.add_argument("--stub-decisions-backend", choices=["heuristic", "model"], default="heuristic")
+    parser.add_argument("--real-decisions-backend", choices=["heuristic", "model"], default="heuristic")
+    parser.add_argument("--stub-model-provider", choices=["fake", "openai_compat", "gemini", "qwen", "deepseek", "glm"], default="fake")
+    parser.add_argument("--real-model-provider", choices=["fake", "openai_compat", "gemini", "qwen", "deepseek", "glm"], default="fake")
+    parser.add_argument("--stub-model-name", default=None)
+    parser.add_argument("--real-model-name", default=None)
+    parser.add_argument("--stub-model-base-url", default=None)
+    parser.add_argument("--real-model-base-url", default=None)
+    parser.add_argument("--stub-model-api-key-env", default=None)
+    parser.add_argument("--real-model-api-key-env", default=None)
+    parser.add_argument("--stub-model-fake-mode", choices=["minimal", "diverse"], default="minimal")
+    parser.add_argument("--real-model-fake-mode", choices=["minimal", "diverse"], default="minimal")
+    _parse_bool_with_neg(parser, "with-decisions-backend-compare", default=False)
 
     _parse_bool_with_neg(parser, "with-bye", default=False)
     _parse_bool_with_neg(parser, "with-bye-report", default=True)
@@ -118,8 +132,34 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _redact_cli_token(token: str, prev: str | None) -> str:
+    value = str(token)
+    p = str(prev or "").strip().lower()
+    if p in {"--model-base-url", "--stub-model-base-url", "--real-model-base-url", "--base_url", "--base-url"}:
+        value = re.sub(r"([?&](?:key|api_key|token|secret)=)[^&\\s]+", r"\1***", value, flags=re.IGNORECASE)
+    if p in {
+        "--model-api-key-env",
+        "--stub-model-api-key-env",
+        "--real-model-api-key-env",
+        "--api-key-env",
+        "--api_key_env",
+    }:
+        return "***ENV***"
+    if re.search(r"(api[_-]?key|token|secret|authorization)", value, flags=re.IGNORECASE):
+        if "=" in value:
+            key, _, _ = value.partition("=")
+            return f"{key}=***"
+    return value
+
+
 def _render_cmd(cmd: list[str]) -> str:
-    return " ".join(shlex.quote(str(x)) for x in cmd)
+    redacted: list[str] = []
+    prev: str | None = None
+    for item in cmd:
+        item_s = str(item)
+        redacted.append(shlex.quote(_redact_cli_token(item_s, prev)))
+        prev = item_s
+    return " ".join(redacted)
 
 
 def _run(cmd: list[str], *, cwd: Path, log_prefix: Path, commands_file: Path) -> int:
@@ -155,6 +195,12 @@ def _build_smoke_cmd(
     perception_strict: bool,
     perception_fps: float,
     perception_max_frames: int,
+    decisions_backend: str,
+    model_provider: str,
+    model_name: str | None,
+    model_base_url: str | None,
+    model_api_key_env: str | None,
+    model_fake_mode: str,
     with_bye: bool,
     with_bye_report: bool,
     bye_root: str | None,
@@ -224,6 +270,17 @@ def _build_smoke_cmd(
             cmd.append("--perception-strict")
     else:
         cmd.append("--no-run-perception")
+
+    cmd.extend(["--decisions-backend", str(decisions_backend)])
+    if str(decisions_backend).strip().lower() == "model":
+        cmd.extend(["--model-provider", str(model_provider)])
+        if model_name:
+            cmd.extend(["--model-name", str(model_name)])
+        if model_base_url:
+            cmd.extend(["--model-base-url", str(model_base_url)])
+        if model_api_key_env:
+            cmd.extend(["--model-api-key-env", str(model_api_key_env)])
+        cmd.extend(["--model-fake-mode", str(model_fake_mode)])
 
     if with_bye:
         cmd.append("--run-bye")
@@ -373,6 +430,7 @@ def _write_compare_readme(
     cmd_streaming_chain_backoff: list[list[str]],
     cmd_reranker_sweep: list[list[str]],
     cmd_budget_recommend: list[list[str]],
+    cmd_decisions_compare: list[str] | None,
     cmd_paper_ready: list[list[str]],
     fig_cmds: list[list[str]],
 ) -> None:
@@ -406,6 +464,8 @@ def _write_compare_readme(
         lines.append(_render_cmd(cmd))
     for cmd in cmd_budget_recommend:
         lines.append(_render_cmd(cmd))
+    if cmd_decisions_compare:
+        lines.append(_render_cmd(cmd_decisions_compare))
     for cmd in cmd_paper_ready:
         lines.append(_render_cmd(cmd))
     for cmd in fig_cmds:
@@ -430,6 +490,7 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'nlq_budget' / 'real' / 'aggregate' / 'table_lost_object_budget.csv'}`",
             f"- `{out_dir / 'compare' / 'streaming_budget'}`",
             f"- `{out_dir / 'compare' / 'streaming_chain_backoff'}`",
+            f"- `{out_dir / 'compare' / 'decisions_backend'}`",
             f"- `{out_dir / 'compare' / 'reranker_sweep'}`",
             f"- `{out_dir / 'compare' / 'budget_recommend'}`",
             f"- `{out_dir / 'compare' / 'paper_ready'}`",
@@ -470,6 +531,12 @@ def _write_compare_readme(
             f"- compare table: `{out_dir / 'compare' / 'streaming_chain_backoff' / 'compare' / 'tables' / 'table_streaming_chain_backoff_compare.csv'}`",
             f"- success curve: `{out_dir / 'compare' / 'streaming_chain_backoff' / 'compare' / 'figures' / 'fig_streaming_chain_backoff_success_vs_budget_seconds.png'}`",
             f"- delta figure: `{out_dir / 'compare' / 'streaming_chain_backoff' / 'compare' / 'figures' / 'fig_streaming_chain_backoff_delta.png'}`",
+            "",
+            "## Decisions Backend Compare",
+            "",
+            f"- table: `{out_dir / 'compare' / 'decisions_backend' / 'tables' / 'table_decisions_backend_compare.csv'}`",
+            f"- delta figure: `{out_dir / 'compare' / 'decisions_backend' / 'figures' / 'fig_decisions_backend_delta.png'}`",
+            f"- tradeoff figure: `{out_dir / 'compare' / 'decisions_backend' / 'figures' / 'fig_decisions_backend_tradeoff.png'}`",
         ]
     )
     (out_dir / "compare" / "README.md").write_text("\n".join(lines), encoding="utf-8")
@@ -492,6 +559,7 @@ def main() -> int:
     compare_streaming_budget_stub = compare_dir / "streaming_budget" / "stub"
     compare_streaming_budget_real = compare_dir / "streaming_budget" / "real"
     compare_streaming_chain_backoff = compare_dir / "streaming_chain_backoff"
+    compare_decisions_backend = compare_dir / "decisions_backend"
     compare_reranker_sweep_stub = compare_dir / "reranker_sweep" / "stub"
     compare_reranker_sweep_real = compare_dir / "reranker_sweep" / "real"
     compare_budget_recommend_stub = compare_dir / "budget_recommend" / "stub"
@@ -511,6 +579,7 @@ def main() -> int:
     compare_streaming_budget_stub.mkdir(parents=True, exist_ok=True)
     compare_streaming_budget_real.mkdir(parents=True, exist_ok=True)
     compare_streaming_chain_backoff.mkdir(parents=True, exist_ok=True)
+    compare_decisions_backend.mkdir(parents=True, exist_ok=True)
     compare_reranker_sweep_stub.mkdir(parents=True, exist_ok=True)
     compare_reranker_sweep_real.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_stub.mkdir(parents=True, exist_ok=True)
@@ -636,6 +705,12 @@ def main() -> int:
         perception_strict=bool(args.stub_perception_strict),
         perception_fps=args.perception_fps,
         perception_max_frames=args.perception_max_frames,
+        decisions_backend=str(args.stub_decisions_backend),
+        model_provider=str(args.stub_model_provider),
+        model_name=str(args.stub_model_name) if args.stub_model_name else None,
+        model_base_url=str(args.stub_model_base_url) if args.stub_model_base_url else None,
+        model_api_key_env=str(args.stub_model_api_key_env) if args.stub_model_api_key_env else None,
+        model_fake_mode=str(args.stub_model_fake_mode),
         with_bye=args.with_bye,
         with_bye_report=args.with_bye_report,
         bye_root=bye_root,
@@ -688,6 +763,12 @@ def main() -> int:
         perception_strict=bool(args.real_perception_strict),
         perception_fps=args.perception_fps,
         perception_max_frames=args.perception_max_frames,
+        decisions_backend=str(args.real_decisions_backend),
+        model_provider=str(args.real_model_provider),
+        model_name=str(args.real_model_name) if args.real_model_name else None,
+        model_base_url=str(args.real_model_base_url) if args.real_model_base_url else None,
+        model_api_key_env=str(args.real_model_api_key_env) if args.real_model_api_key_env else None,
+        model_fake_mode=str(args.real_model_fake_mode),
         with_bye=args.with_bye,
         with_bye_report=args.with_bye_report,
         bye_root=bye_root,
@@ -709,6 +790,34 @@ def main() -> int:
     rc = _run(cmd_real, cwd=ROOT, log_prefix=compare_dir / "run_real", commands_file=commands_file)
     if rc != 0:
         return rc
+
+    decisions_compare_enabled = bool(args.with_decisions_backend_compare) or (
+        str(args.stub_decisions_backend).strip().lower() != str(args.real_decisions_backend).strip().lower()
+    )
+    cmd_decisions_compare: list[str] | None = None
+    if decisions_compare_enabled:
+        cmd_decisions_compare = [
+            sys.executable,
+            str(ROOT / "scripts" / "run_decisions_backend_compare.py"),
+            "--run-a-dir",
+            str(run_stub),
+            "--run-b-dir",
+            str(run_real),
+            "--out_dir",
+            str(compare_decisions_backend),
+            "--a-label",
+            "stub",
+            "--b-label",
+            "real",
+        ]
+        rc = _run(
+            cmd_decisions_compare,
+            cwd=ROOT,
+            log_prefix=compare_dir / "decisions_backend_compare",
+            commands_file=commands_file,
+        )
+        if rc != 0:
+            return rc
 
     cmd_bye_compare = [
         sys.executable,
@@ -1171,6 +1280,8 @@ def main() -> int:
             cmd_paper_ready.extend(
                 ["--streaming-chain-backoff-compare-dir", str(compare_streaming_chain_backoff / "compare")]
             )
+        if decisions_compare_enabled:
+            cmd_paper_ready.extend(["--decisions-backend-compare-dir", str(compare_decisions_backend)])
         if signal_selection_mode == "auto_signal_cache":
             cmd_paper_ready.extend(["--signal-selection-dir", str(compare_selection_dir)])
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
@@ -1206,6 +1317,7 @@ def main() -> int:
             "run_real": str(run_real),
             "compare_dir": str(compare_dir),
             "selection_dir": str(compare_selection_dir),
+            "decisions_backend_dir": str(compare_decisions_backend),
         },
         "selection": {
             "selection_mode": signal_selection_mode,
@@ -1225,6 +1337,12 @@ def main() -> int:
             "step_s": float(chain_backoff_step_s),
             "seed": int(chain_backoff_seed),
         },
+        "decisions_backend_compare": {
+            "enabled": bool(decisions_compare_enabled),
+            "dir": str(compare_decisions_backend),
+            "stub_backend": str(args.stub_decisions_backend),
+            "real_backend": str(args.real_decisions_backend),
+        },
     }
     (compare_dir / "snapshot.json").write_text(json.dumps(compare_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     selected_uids_count = 0
@@ -1241,6 +1359,9 @@ def main() -> int:
         "cache_built": bool(signal_cache_built),
         "cache_uid_coverage": signal_cache_uid_coverage,
         "selection_artifacts": signal_artifacts,
+        "decisions_backend_compare_enabled": bool(decisions_compare_enabled),
+        "decisions_backend_stub": str(args.stub_decisions_backend),
+        "decisions_backend_real": str(args.real_decisions_backend),
     }
     (compare_dir / "compare_summary.json").write_text(json.dumps(compare_summary, ensure_ascii=False, indent=2), encoding="utf-8")
     _write_compare_readme(
@@ -1257,6 +1378,7 @@ def main() -> int:
         cmd_streaming_chain_backoff=streaming_chain_backoff_cmds,
         cmd_reranker_sweep=reranker_sweep_cmds,
         cmd_budget_recommend=budget_recommend_cmds,
+        cmd_decisions_compare=cmd_decisions_compare,
         cmd_paper_ready=paper_ready_cmds,
         fig_cmds=fig_cmds,
     )
@@ -1296,6 +1418,8 @@ def main() -> int:
     if args.with_streaming_chain_backoff:
         print(f"streaming_chain_backoff_saved={compare_streaming_chain_backoff}")
         print(f"streaming_chain_backoff_compare_saved={compare_streaming_chain_backoff / 'compare'}")
+    if decisions_compare_enabled:
+        print(f"decisions_backend_compare_saved={compare_decisions_backend}")
     if args.with_reranker_sweep:
         print(f"reranker_sweep_stub_saved={compare_reranker_sweep_stub}")
         print(f"reranker_sweep_real_saved={compare_reranker_sweep_real}")
@@ -1316,6 +1440,9 @@ def main() -> int:
         if args.with_streaming_chain_backoff:
             chain_fig = compare_paper_ready / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.png"
             print(f"paper_ready_chain_backoff_fig_exists={str(chain_fig.exists()).lower()}")
+        if decisions_compare_enabled:
+            dec_fig = compare_paper_ready / "figures" / "fig_decisions_backend_delta.png"
+            print(f"paper_ready_decisions_backend_fig_exists={str(dec_fig.exists()).lower()}")
         panel_csv = compare_paper_ready / "tables" / "table_budget_panel.csv"
         if panel_csv.exists():
             try:

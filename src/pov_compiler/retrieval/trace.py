@@ -125,6 +125,9 @@ def trace_query(
         combined = dict(step2_trace)
         combined["query"] = str(query)
         combined["is_chain"] = True
+        combined["decision_pool_kind"] = str(step2_trace.get("decision_pool_kind", step1_trace.get("decision_pool_kind", "")))
+        combined["decision_pool_count"] = int(step2_trace.get("decision_pool_count", step1_trace.get("decision_pool_count", 0)) or 0)
+        combined["decision_model_meta"] = dict(step2_trace.get("decision_model_meta", step1_trace.get("decision_model_meta", {})))
         combined["chain"] = {
             "is_chain": True,
             "chain_rel": str(chain_query.rel),
@@ -160,6 +163,8 @@ def trace_query(
                 "topk_hits": list(step2_trace.get("hits", []))[: max(1, int(top_k))],
                 "chosen_top1": dict(step2_trace.get("hits", [{}])[0]) if list(step2_trace.get("hits", [])) else {},
                 "top1_kind": str(step2_trace.get("top1_kind", "")),
+                "decision_pool_kind": str(step2_trace.get("decision_pool_kind", "")),
+                "decision_pool_count": int(step2_trace.get("decision_pool_count", 0) or 0),
             },
         }
         return combined
@@ -372,6 +377,9 @@ def trace_query(
             "candidates": candidates,
             "debug": dict(plan.debug),
         },
+        "decision_pool_kind": str(getattr(retriever, "decision_pool_kind", "")),
+        "decision_pool_count": int(getattr(retriever, "decision_pool_count", 0)),
+        "decision_model_meta": dict(getattr(retriever, "decision_model_meta", {})),
         "constraint_trace": {
             "enable_constraints": bool(enable_constraints),
             "applied_constraints": list(constraint_result.applied),

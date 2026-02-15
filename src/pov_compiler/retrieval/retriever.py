@@ -12,6 +12,7 @@ from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
 from pov_compiler.retrieval.query_parser import ParsedQuery, QueryChain, parse_query, parse_query_chain
 from pov_compiler.retrieval.reranker import Hit
+from pov_compiler.models.client import redact_url
 from pov_compiler.schemas import DecisionPoint, Output
 
 
@@ -83,6 +84,9 @@ class Retriever:
             prefer=str(cfg.get("prefer", "highlight")),
         )
         self.output = ensure_events_v1(_as_output(output_json))
+        self.decision_pool_kind, self.decision_points = self._resolve_decision_pool()
+        self.decision_pool_count = len(self.decision_points)
+        self.decision_model_meta = self._decision_model_meta()
         if isinstance(index, VectorIndex):
             self.index = index
         elif index is None:
@@ -90,6 +94,100 @@ class Retriever:
         else:
             self.index = VectorIndex.load(index)
         self._text_encoder: _OpenCLIPTextEncoder | None = None
+
+    def _decision_model_meta(self) -> dict[str, Any]:
+        meta = dict(getattr(self.output, "meta", {}) or {})
+        provider = str(meta.get("decisions_model_provider", "")).strip()
+        model = str(meta.get("decisions_model_name", "")).strip()
+        base_url = redact_url(str(meta.get("decisions_model_base_url", "")).strip())
+        if not provider and not model and not base_url:
+            return {}
+        return {
+            "provider": provider,
+            "model": model,
+            "base_url": base_url,
+        }
+
+    def _nearest_event_id(self, t0_s: float, t1_s: float) -> str:
+        best_id = ""
+        best_dist = float("inf")
+        center = 0.5 * (float(t0_s) + float(t1_s))
+        for ev in list(getattr(self.output, "events_v1", []) or []):
+            c = 0.5 * (float(getattr(ev, "t0", 0.0)) + float(getattr(ev, "t1", 0.0)))
+            dist = abs(c - center)
+            if dist < best_dist:
+                best_dist = dist
+                best_id = str(getattr(ev, "id", ""))
+        if best_id:
+            return best_id
+        for ev in list(getattr(self.output, "events", []) or []):
+            c = 0.5 * (float(getattr(ev, "t0", 0.0)) + float(getattr(ev, "t1", 0.0)))
+            dist = abs(c - center)
+            if dist < best_dist:
+                best_dist = dist
+                best_id = str(getattr(ev, "id", ""))
+        return best_id
+
+    def _model_decision_to_decision_point(self, item: dict[str, Any], idx: int) -> DecisionPoint | None:
+        if not isinstance(item, dict):
+            return None
+        decision_type = str(item.get("decision_type", item.get("action_type", ""))).strip()
+        if not decision_type:
+            return None
+        try:
+            t0_ms = int(round(float(item.get("t0_ms", item.get("t0", 0.0) * 1000.0))))
+            t1_ms = int(round(float(item.get("t1_ms", item.get("t1", 0.0) * 1000.0))))
+        except Exception:
+            return None
+        t0_s = max(0.0, float(t0_ms) / 1000.0)
+        t1_s = max(t0_s, float(t1_ms) / 1000.0)
+        if t1_s <= t0_s:
+            t1_s = t0_s + 1e-3
+        try:
+            conf = float(item.get("conf", item.get("confidence", 0.5)))
+        except Exception:
+            conf = 0.5
+        conf = float(max(0.0, min(1.0, conf)))
+        evidence = item.get("evidence", {})
+        if not isinstance(evidence, dict):
+            evidence = {}
+        source_event = str(evidence.get("event_id", "")).strip()
+        if not source_event:
+            source_event = self._nearest_event_id(t0_s, t1_s)
+        dp_id = str(item.get("id", "")).strip() or f"model_decision_{idx:04d}"
+        return DecisionPoint(
+            id=dp_id,
+            t=0.5 * (t0_s + t1_s),
+            t0=t0_s,
+            t1=t1_s,
+            source_event=source_event,
+            source_highlight=None,
+            trigger={"type": "MODEL", "anchor_types": [], "conf": conf},
+            state={"nearby_tokens": [], "scene_change_nearby": False},
+            action={"type": decision_type},
+            constraints=[],
+            outcome={"type": "MODEL_PRED"},
+            alternatives=[],
+            conf=conf,
+            meta={
+                "decision_source_kind": "decisions_model_v1",
+                "evidence_span": str(evidence.get("span", "")),
+                "model_provider": str(self._decision_model_meta().get("provider", "")),
+                "model_name": str(self._decision_model_meta().get("model", "")),
+                "model_base_url": str(self._decision_model_meta().get("base_url", "")),
+            },
+        )
+
+    def _resolve_decision_pool(self) -> tuple[str, list[DecisionPoint]]:
+        model_rows = list(getattr(self.output, "decisions_model_v1", []) or [])
+        out_model: list[DecisionPoint] = []
+        for i, item in enumerate(model_rows, start=1):
+            dp = self._model_decision_to_decision_point(item, i)
+            if dp is not None:
+                out_model.append(dp)
+        if out_model:
+            return "decisions_model_v1", out_model
+        return "decision_points", list(getattr(self.output, "decision_points", []) or [])
 
     def _event_pool(self) -> list[Any]:
         if self.output.events_v1:
@@ -540,7 +638,7 @@ class Retriever:
         event_obj_map = {event.id: event for event in event_pool}
         highlight_map = {hl.id: hl for hl in self.output.highlights}
         token_map = {token.id: token for token in self.output.token_codec.tokens}
-        decision_map = {decision.id: decision for decision in self.output.decision_points}
+        decision_map = {decision.id: decision for decision in self.decision_points}
 
         current_events: set[str] | None = None
         current_highlights: set[str] | None = None
@@ -557,7 +655,7 @@ class Retriever:
             tokens_new = {token.id for token in self.output.token_codec.tokens if _overlap(token.t0, token.t1, t0, t1)}
             decisions_new = {
                 decision.id
-                for decision in self.output.decision_points
+                for decision in self.decision_points
                 if _overlap(decision.t0, decision.t1, t0, t1)
             }
             current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
@@ -583,17 +681,17 @@ class Retriever:
                     highlights_new.add(hl.id)
             decisions_new: set[str] = set()
             if "DECISION" in token_types:
-                decisions_new = {decision.id for decision in self.output.decision_points}
-                events_new.update(decision.source_event for decision in self.output.decision_points)
+                decisions_new = {decision.id for decision in self.decision_points}
+                events_new.update(decision.source_event for decision in self.decision_points)
                 highlights_new.update(
                     decision.source_highlight
-                    for decision in self.output.decision_points
+                    for decision in self.decision_points
                     if decision.source_highlight is not None
                 )
-                for decision in self.output.decision_points:
+                for decision in self.decision_points:
                     tokens_new.update(self._tokens_for_decision(decision))
             else:
-                for decision in self.output.decision_points:
+                for decision in self.decision_points:
                     if any(token_id in tokens_new for token_id in self._tokens_for_decision(decision)):
                         decisions_new.add(decision.id)
 
@@ -631,7 +729,7 @@ class Retriever:
             }
             decisions_new = {
                 decision.id
-                for decision in self.output.decision_points
+                for decision in self.decision_points
                 if anchor_types.intersection({str(x).lower() for x in decision.trigger.get("anchor_types", [])})
             }
             for decision_id in decisions_new:
@@ -653,7 +751,7 @@ class Retriever:
             decision_types = set(parsed.decision_types)
             matched = [
                 decision
-                for decision in self.output.decision_points
+                for decision in self.decision_points
                 if str(decision.action.get("type", "")).upper() in decision_types
             ]
             decisions_new = {decision.id for decision in matched}
@@ -680,7 +778,7 @@ class Retriever:
             events_new = {event_id for event_id in requested if event_id in event_obj_map}
             highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
             tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
-            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            decisions_new = {decision.id for decision in self.decision_points if decision.source_event in events_new}
             current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                 current_events,
                 current_highlights,
@@ -698,7 +796,7 @@ class Retriever:
             events_new = {event.id for event in event_pool if self._event_label(event).strip().lower() in labels}
             highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
             tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
-            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            decisions_new = {decision.id for decision in self.decision_points if decision.source_event in events_new}
             current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                 current_events,
                 current_highlights,
@@ -716,7 +814,7 @@ class Retriever:
             events_new = {event.id for event in event_pool if self._event_contact_peak(event) >= threshold}
             highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
             tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
-            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            decisions_new = {decision.id for decision in self.decision_points if decision.source_event in events_new}
             current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                 current_events,
                 current_highlights,
@@ -734,7 +832,7 @@ class Retriever:
             events_new = {event.id for event in event_pool if self._event_place_segment_id(event) in segment_ids}
             highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
             tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
-            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            decisions_new = {decision.id for decision in self.decision_points if decision.source_event in events_new}
             current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                 current_events,
                 current_highlights,
@@ -752,7 +850,7 @@ class Retriever:
             events_new = {event.id for event in event_pool if self._event_interaction_score(event) >= threshold}
             highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
             tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
-            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            decisions_new = {decision.id for decision in self.decision_points if decision.source_event in events_new}
             current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                 current_events,
                 current_highlights,
@@ -778,7 +876,7 @@ class Retriever:
             }
             highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in events_new}
             tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in events_new}
-            decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in events_new}
+            decisions_new = {decision.id for decision in self.decision_points if decision.source_event in events_new}
             current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                 current_events,
                 current_highlights,
@@ -804,7 +902,7 @@ class Retriever:
                     highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in kept_events}
                     tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in kept_events}
                     decisions_new = {
-                        decision.id for decision in self.output.decision_points if decision.source_event in kept_events
+                        decision.id for decision in self.decision_points if decision.source_event in kept_events
                     }
                     current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                         current_events,
@@ -860,7 +958,7 @@ class Retriever:
                             tokens_new.update(self._tokens_in_range(t0, t1))
                             decisions_new.update(
                                 decision.id
-                                for decision in self.output.decision_points
+                                for decision in self.decision_points
                                 if _overlap(decision.t0, decision.t1, t0, t1)
                             )
                         elif kind in {"event", "event_v0", "event_v1"}:
@@ -870,7 +968,7 @@ class Retriever:
                             tokens_new.update(self._tokens_in_range(t0, t1))
                             decisions_new.update(
                                 decision.id
-                                for decision in self.output.decision_points
+                                for decision in self.decision_points
                                 if decision.source_event == hid
                             )
                     current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
@@ -901,7 +999,7 @@ class Retriever:
                     kept_events.add(str(pick.id))
                 highlights_new = {hl.id for hl in self.output.highlights if hl.source_event in kept_events}
                 tokens_new = {token.id for token in self.output.token_codec.tokens if token.source_event in kept_events}
-                decisions_new = {decision.id for decision in self.output.decision_points if decision.source_event in kept_events}
+                decisions_new = {decision.id for decision in self.decision_points if decision.source_event in kept_events}
                 current_events, current_highlights, current_tokens, current_decisions = self._apply_constraint(
                     current_events,
                     current_highlights,
@@ -918,7 +1016,7 @@ class Retriever:
             sorted_hls = sorted(self.output.highlights, key=lambda h: (h.conf, h.t1 - h.t0), reverse=True)
             selected_highlights = [hl.id for hl in sorted_hls[:top_k]]
             sorted_decisions = sorted(
-                self.output.decision_points,
+                self.decision_points,
                 key=lambda d: (1 if d.source_highlight else 0, float(d.conf)),
                 reverse=True,
             )
@@ -1020,6 +1118,9 @@ class Retriever:
                 "filters_applied": list(parsed.filters_applied),
                 "parse_warnings": list(parsed.parse_warnings),
                 "search_hits": search_hits_payload,
+                "decision_pool_kind": str(self.decision_pool_kind),
+                "decision_pool_count": int(self.decision_pool_count),
+                "decision_model_meta": dict(self.decision_model_meta),
             },
         }
         return result
@@ -1192,7 +1293,7 @@ class Retriever:
             event_map = {event.id: event for event in self.output.events_v1}
         highlight_map = {hl.id: hl for hl in self.output.highlights}
         token_map = {token.id: token for token in self.output.token_codec.tokens}
-        decision_map = {decision.id: decision for decision in self.output.decision_points}
+        decision_map = {decision.id: decision for decision in self.decision_points}
 
         text_score_lookup: dict[tuple[str, str], float] = {}
         for item in result.get("debug", {}).get("search_hits", []) or []:
@@ -1309,6 +1410,10 @@ class Retriever:
                     source_query=query,
                     meta={
                         "conf": float(getattr(dp, "conf", 0.0)),
+                        "decision_source_kind": str(getattr(dp, "meta", {}).get("decision_source_kind", self.decision_pool_kind)),
+                        "model_provider": str(getattr(dp, "meta", {}).get("model_provider", "")),
+                        "model_name": str(getattr(dp, "meta", {}).get("model_name", "")),
+                        "model_base_url": str(getattr(dp, "meta", {}).get("model_base_url", "")),
                         "action_type": str(action.get("type", "")),
                         "source_event": str(getattr(dp, "source_event", "")),
                         "source_highlight": getattr(dp, "source_highlight", None),

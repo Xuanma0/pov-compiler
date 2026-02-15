@@ -35,10 +35,16 @@ def test_model_smoke_snapshot_redacted(tmp_path: Path) -> None:
         str(out_dir),
         "--provider",
         "fake",
+        "--base_url",
+        "https://example.invalid/v1beta/models/test:generateContent?key=SECRET123",
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
     snap_text = (out_dir / "snapshot.json").read_text(encoding="utf-8").lower()
+    report_text = (out_dir / "report.md").read_text(encoding="utf-8").lower()
+    stdout_text = (proc.stdout or "").lower()
     banned = ["api_key", "authorization", "bearer ", "aiza", "?key="]
     for token in banned:
         assert token not in snap_text
+        assert token not in report_text
+        assert token not in stdout_text

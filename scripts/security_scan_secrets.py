@@ -13,6 +13,7 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("aws_akia", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("bearer", re.compile(r"Bearer\s+[A-Za-z0-9_\-\.]{20,}", re.IGNORECASE)),
     ("api_key_literal", re.compile(r"(?i)api[_-]?key\s*[:=]\s*[\"'][A-Za-z0-9_\-]{12,}[\"']")),
+    ("query_key_like", re.compile(r"(?i)[?&](?:key|api_key|token|secret)=[A-Za-z0-9_\-]{12,}")),
     ("dashscope_like", re.compile(r"(?i)dashscope[^\\n]{0,40}(key|token)[^\\n]{0,20}[A-Za-z0-9_\-]{12,}")),
     ("zhipu_like", re.compile(r"(?i)zhipu[^\\n]{0,40}(key|token)[^\\n]{0,20}[A-Za-z0-9_\-]{12,}")),
 ]

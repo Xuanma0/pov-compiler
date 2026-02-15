@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -365,6 +367,7 @@ class OfflinePipeline:
             decision_compiler = DecisionCompiler(config=dict(decision_cfg))
             output.decision_points = decision_compiler.compile(output)
             backend = str(decision_cfg.get("backend", "heuristic")).strip().lower()
+            output.meta["decisions_backend"] = backend
             if backend == "model":
                 from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model
                 from pov_compiler.models import ModelClientConfig, make_client
@@ -387,6 +390,14 @@ class OfflinePipeline:
                 )
                 model_client = make_client(model_cfg)
                 output.decisions_model_v1 = compile_decisions_with_model(output=output, client=model_client, cfg=model_cfg)
+                public_cfg = model_cfg.to_public_dict()
+                cfg_hash = hashlib.sha256(
+                    json.dumps(public_cfg, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                ).hexdigest()[:12]
+                output.meta["decisions_model_provider"] = str(model_cfg.provider)
+                output.meta["decisions_model_name"] = str(model_cfg.model)
+                output.meta["decisions_model_base_url"] = str(public_cfg.get("base_url", ""))
+                output.meta["decisions_model_cfg_hash"] = cfg_hash
             else:
                 output.decisions_model_v1 = []
 

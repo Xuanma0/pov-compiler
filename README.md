@@ -120,6 +120,7 @@ docs/
 | `scripts\sweep_repo_budgets.py` | RepoV0 legacy budget sweep | `--json --out_dir --budgets` | `aggregate/metrics_by_budget.*`, `figures/fig_repo_quality_vs_budget_seconds.*`, `snapshot.json` |
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ/streaming budget sweeps, BYE report panel compare, reranker sweep, and recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-report --bye-gate --max-bye-critical-fn --with-bye-budget-sweep --with-nlq-budget-sweep --with-reranker-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_report/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/reranker_sweep/*`, `compare/budget_recommend/*` |
+| `scripts\run_decisions_backend_compare.py` | One-click heuristic vs model decisions backend compare (default model provider=`fake`) | `--root --out_dir [--uids-file] --model-provider --fake-mode` | `run_A/`, `run_B/`, `compare/tables/table_decisions_backend_compare.*`, `compare/figures/fig_decisions_backend_*`, `compare_summary.json` |
 | `scripts\run_component_attribution.py` | Component Attribution Panel (A/B/C/D) for Repo vs Perception vs Streaming contribution under same UID/budget/query set | `--root --uids-file --out_dir --budgets --with-nlq --with-streaming-budget --with-perception` | `run_A/..run_D/`, `compare/tables/table_component_attribution.*`, `compare/figures/fig_component_attribution_*`, `compare_summary.json`, `snapshot.json` |
 
 ## Output Directory Contract
@@ -707,3 +708,25 @@ Gemini example:
 ```text
 python scripts/model_decisions_smoke.py --json data/outputs/ego4d_ab_real_n6/json/<uid>_v03_decisions.json --out_dir data/outputs/model_decisions_gemini_demo --provider gemini --model gemini-1.5-flash --api_key_env GEMINI_API_KEY
 ```
+
+### v1.34 Decisions Backend AB (heuristic vs model)
+
+`decisions_model_v1` is now used as a first-class decision pool for index/retrieval when available (`decision_pool_kind=decisions_model_v1` appears in trace/index meta).
+
+Standalone backend compare (defaults to `provider=fake`, `fake_mode=diverse` so deltas are observable in demo runs):
+
+```text
+python scripts/run_decisions_backend_compare.py --root data/outputs/ab_v12_root --out_dir data/outputs/decisions_backend_compare_v134_demo --uids-file data/outputs/ab_v12_uids.txt --jobs 1 --model-provider fake --fake-mode diverse --min-size-bytes 0 --probe-candidates 0
+```
+
+Unified AB runner integration:
+
+```text
+python scripts/run_ab_bye_compare.py --root data/outputs/ab_v12_root --uids-file data/outputs/ab_v12_uids.txt --out_dir data/outputs/ab_v134_demo --jobs 1 --stub-decisions-backend heuristic --real-decisions-backend model --real-model-provider fake --real-model-fake-mode diverse --with-decisions-backend-compare --export-paper-ready
+```
+
+Key outputs:
+- `compare/decisions_backend/tables/table_decisions_backend_compare.csv`
+- `compare/decisions_backend/figures/fig_decisions_backend_delta.png`
+- `compare/paper_ready/decisions_backend/table_decisions_backend_compare.csv`
+- `compare/paper_ready/figures/fig_decisions_backend_delta.png`
