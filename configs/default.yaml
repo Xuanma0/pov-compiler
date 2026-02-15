@@ -164,6 +164,11 @@ streaming:
   context_use_repo: false
   repo_read_policy: budgeted_topk
   repo_budget: null
+  chain_backoff_strategy: strict
+  chain_backoff_fixed_level: 0
+  chain_backoff_seed: 0
+  chain_backoff_alpha_latency: 0.2
+  chain_backoff_beta_safety: 0.5
   queries:
     - anchor=turn_head top_k=6
     - token=SCENE_CHANGE top_k=6

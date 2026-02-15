@@ -214,6 +214,11 @@ def test_streaming_budget_smoke_safety_latency_chain_policy(tmp_path: Path) -> N
         "chain_fail_reason",
         "chain_step1_budget_seconds",
         "chain_step2_budget_seconds",
+        "chain_backoff_strategy",
+        "chain_backoff_level",
+        "chain_backoff_used",
+        "chain_backoff_exhausted",
+        "chain_backoff_reason",
     ):
         assert col in headers
 

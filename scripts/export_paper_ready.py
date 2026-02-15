@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from run_streaming_policy_compare.py compare/ output",
     )
     parser.add_argument(
+        "--streaming-chain-backoff-compare-dir",
+        default=None,
+        help="Optional directory from run_streaming_chain_backoff_compare.py compare/ output",
+    )
+    parser.add_argument(
         "--streaming-repo-compare-dir",
         default=None,
         help="Optional directory from run_streaming_repo_compare.py compare/ output",
@@ -716,6 +721,47 @@ def main() -> int:
         streaming_policy_compare["copied_summary"] = copied_summary
         figure_paths.extend(streaming_policy_compare["copied_figures"])
 
+    streaming_chain_backoff_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_tables": [],
+        "copied_figures": [],
+        "copied_summary": None,
+    }
+    if args.streaming_chain_backoff_compare_dir:
+        src_dir = Path(args.streaming_chain_backoff_compare_dir)
+        streaming_chain_backoff_compare["enabled"] = True
+        streaming_chain_backoff_compare["source_dir"] = str(src_dir)
+        table_src_csv = src_dir / "tables" / "table_streaming_chain_backoff_compare.csv"
+        table_src_md = src_dir / "tables" / "table_streaming_chain_backoff_compare.md"
+        fig1_png = src_dir / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.png"
+        fig1_pdf = src_dir / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.pdf"
+        fig2_png = src_dir / "figures" / "fig_streaming_chain_backoff_latency_vs_budget_seconds.png"
+        fig2_pdf = src_dir / "figures" / "fig_streaming_chain_backoff_latency_vs_budget_seconds.pdf"
+        fig3_png = src_dir / "figures" / "fig_streaming_chain_backoff_backoff_level_vs_budget_seconds.png"
+        fig3_pdf = src_dir / "figures" / "fig_streaming_chain_backoff_backoff_level_vs_budget_seconds.pdf"
+        fig4_png = src_dir / "figures" / "fig_streaming_chain_backoff_delta.png"
+        fig4_pdf = src_dir / "figures" / "fig_streaming_chain_backoff_delta.pdf"
+        summary_src = src_dir / "compare_summary.json"
+
+        copied_table_csv = _copy_if_exists(table_src_csv, tables_dir / table_src_csv.name)
+        copied_table_md = _copy_if_exists(table_src_md, tables_dir / table_src_md.name)
+        copied_summary = _copy_if_exists(summary_src, out_dir / "streaming_chain_backoff_compare_summary.json")
+        copied_figures = [
+            _copy_if_exists(fig1_png, figures_dir / fig1_png.name),
+            _copy_if_exists(fig1_pdf, figures_dir / fig1_pdf.name),
+            _copy_if_exists(fig2_png, figures_dir / fig2_png.name),
+            _copy_if_exists(fig2_pdf, figures_dir / fig2_pdf.name),
+            _copy_if_exists(fig3_png, figures_dir / fig3_png.name),
+            _copy_if_exists(fig3_pdf, figures_dir / fig3_pdf.name),
+            _copy_if_exists(fig4_png, figures_dir / fig4_png.name),
+            _copy_if_exists(fig4_pdf, figures_dir / fig4_pdf.name),
+        ]
+        streaming_chain_backoff_compare["copied_tables"] = [x for x in [copied_table_csv, copied_table_md] if x]
+        streaming_chain_backoff_compare["copied_figures"] = [x for x in copied_figures if x]
+        streaming_chain_backoff_compare["copied_summary"] = copied_summary
+        figure_paths.extend(streaming_chain_backoff_compare["copied_figures"])
+
     streaming_repo_compare: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1259,6 +1305,17 @@ def main() -> int:
             )
         else:
             report_lines.append("- streaming_policy_compare: source provided but artifacts missing.")
+    if args.streaming_chain_backoff_compare_dir:
+        if streaming_chain_backoff_compare.get("copied_tables") or streaming_chain_backoff_compare.get("copied_figures"):
+            report_lines.extend(
+                [
+                    f"- streaming_chain_backoff_compare_dir: `{streaming_chain_backoff_compare.get('source_dir')}`",
+                    f"- streaming_chain_backoff_compare_tables: `{streaming_chain_backoff_compare.get('copied_tables')}`",
+                    f"- streaming_chain_backoff_compare_figures: `{streaming_chain_backoff_compare.get('copied_figures')}`",
+                ]
+            )
+        else:
+            report_lines.append("- streaming_chain_backoff_compare: source provided but artifacts missing.")
     if args.streaming_repo_compare_dir:
         if streaming_repo_compare.get("copied_tables") or streaming_repo_compare.get("copied_figures"):
             report_lines.extend(
@@ -1412,6 +1469,9 @@ def main() -> int:
             "streaming_policy_compare_dir": str(args.streaming_policy_compare_dir)
             if args.streaming_policy_compare_dir
             else None,
+            "streaming_chain_backoff_compare_dir": str(args.streaming_chain_backoff_compare_dir)
+            if args.streaming_chain_backoff_compare_dir
+            else None,
             "streaming_repo_compare_dir": str(args.streaming_repo_compare_dir)
             if args.streaming_repo_compare_dir
             else None,
@@ -1447,6 +1507,7 @@ def main() -> int:
             "figures": figure_paths,
             "safety_figures": safety_figure_paths,
             "streaming_policy_compare": streaming_policy_compare,
+            "streaming_chain_backoff_compare": streaming_chain_backoff_compare,
             "streaming_repo_compare": streaming_repo_compare,
             "streaming_intervention_sweep": streaming_intervention_sweep,
             "streaming_codec_sweep": streaming_codec_sweep,

@@ -14,6 +14,12 @@ from pov_compiler.streaming.codec import (
     MemoryItem,
     build_streaming_codec,
 )
+from pov_compiler.streaming.chain_backoff_policy import (
+    AdaptiveChainBackoff,
+    ChainBackoffDecision,
+    FixedChainBackoff,
+    LadderFirstNonZero,
+)
 from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 from pov_compiler.streaming.interventions import (
     ACTION_ORDER_BY_ATTRIBUTION,
@@ -48,4 +54,8 @@ __all__ = [
     "AllEventsStreamingCodec",
     "FixedKStreamingCodec",
     "build_streaming_codec",
+    "ChainBackoffDecision",
+    "FixedChainBackoff",
+    "LadderFirstNonZero",
+    "AdaptiveChainBackoff",
 ]

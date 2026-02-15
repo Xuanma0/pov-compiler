@@ -364,6 +364,29 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"selection": {"uids_found": 1}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional streaming chain backoff compare input.
+    (compare_dir / "stream_chain_backoff_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_chain_backoff_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "stream_chain_backoff_cmp" / "tables" / "table_streaming_chain_backoff_compare.csv").write_text(
+        "strategy,budget_seconds,chain_success_rate,chain_backoff_mean_level\nstrict,20,0.2,0.0\nladder,20,0.4,1.0\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_chain_backoff_cmp" / "tables" / "table_streaming_chain_backoff_compare.md").write_text(
+        "# chain backoff compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_latency_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_latency_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_backoff_level_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_backoff_level_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_delta.png").write_bytes(b"PNG")
+    (compare_dir / "stream_chain_backoff_cmp" / "figures" / "fig_streaming_chain_backoff_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "stream_chain_backoff_cmp" / "compare_summary.json").write_text(
+        json.dumps({"policies": ["strict", "ladder", "adaptive"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -377,6 +400,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         "md+csv",
         "--streaming-policy-compare-dir",
         str(compare_dir / "stream_policy_cmp"),
+        "--streaming-chain-backoff-compare-dir",
+        str(compare_dir / "stream_chain_backoff_cmp"),
         "--streaming-repo-compare-dir",
         str(compare_dir / "stream_repo_cmp"),
         "--streaming-intervention-sweep-dir",
@@ -428,6 +453,12 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_streaming_policy_compare_delta.png").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_chain_success.png").exists()
     assert (out_dir / "figures" / "fig_streaming_policy_compare_chain_delta.png").exists()
+    assert (out_dir / "tables" / "table_streaming_chain_backoff_compare.csv").exists()
+    assert (out_dir / "tables" / "table_streaming_chain_backoff_compare.md").exists()
+    assert (out_dir / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_chain_backoff_latency_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_chain_backoff_backoff_level_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_streaming_chain_backoff_delta.png").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.csv").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.md").exists()
     assert (out_dir / "figures" / "fig_streaming_repo_compare_safety_latency.png").exists()

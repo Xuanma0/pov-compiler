@@ -611,3 +611,29 @@ Chain NLQ outputs now include backoff metrics in `table_chain_summary.(csv/md)`:
 - `fig_chain_attribution_backoff_vs_budget_seconds.(png/pdf)`
 
 And `export_paper_ready.py --chain-attribution-dir ...` copies this figure into paper-ready.
+
+### v1.29 Streaming Chain Backoff Policies
+
+Streaming chain queries now support per-query chain backoff strategies:
+- `strict` (fixed level, default level `0`)
+- `ladder` (first non-zero hit level)
+- `adaptive` (objective-based level selection)
+
+Run chain-backoff policy compare:
+
+```text
+python scripts\run_streaming_chain_backoff_compare.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\streaming_chain_backoff_compare_v129_demo --budgets "20/50/4,60/200/12" --step-s 8 --seed 0
+```
+
+Key outputs:
+- `compare/tables/table_streaming_chain_backoff_compare.(csv/md)`
+- `compare/figures/fig_streaming_chain_backoff_success_vs_budget_seconds.(png/pdf)`
+- `compare/figures/fig_streaming_chain_backoff_latency_vs_budget_seconds.(png/pdf)`
+- `compare/figures/fig_streaming_chain_backoff_backoff_level_vs_budget_seconds.(png/pdf)`
+- `compare/figures/fig_streaming_chain_backoff_delta.(png/pdf)`
+
+Include this panel in paper-ready export:
+
+```text
+python scripts\export_paper_ready.py --out_dir data\outputs\paper_ready_v129_demo --streaming-chain-backoff-compare-dir data\outputs\streaming_chain_backoff_compare_v129_demo\compare
+```

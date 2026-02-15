@@ -79,6 +79,10 @@ def _write_report(path: Path, payload: dict[str, Any], policy_gates: dict[str, A
     lines.append(f"- chain_queries_total: {int(summary.get('chain_queries_total', 0))}")
     lines.append(f"- chain_success_rate: {float(summary.get('chain_success_rate', 0.0)):.4f}")
     lines.append(f"- chain_waiting_rate: {float(summary.get('chain_waiting_rate', 0.0)):.4f}")
+    lines.append(f"- chain_backoff_strategy: {summary.get('chain_backoff_strategy', '')}")
+    lines.append(f"- chain_backoff_used_rate: {float(summary.get('chain_backoff_used_rate', 0.0)):.4f}")
+    lines.append(f"- chain_backoff_mean_level: {float(summary.get('chain_backoff_mean_level', 0.0)):.4f}")
+    lines.append(f"- chain_backoff_exhausted_rate: {float(summary.get('chain_backoff_exhausted_rate', 0.0)):.4f}")
     lines.append(
         f"- chain_constraints_over_filtered_rate: {float(summary.get('chain_constraints_over_filtered_rate', 0.0)):.4f}"
     )
@@ -365,6 +369,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-targets-json", default=None, help="JSON string/path for adaptive targets")
     parser.add_argument("--latency-cap-ms", type=float, default=25.0, help="Latency cap for safety_latency policy")
     parser.add_argument("--min-chain-success-rate", type=float, default=0.5, help="Minimum chain success target for safety_latency_chain policy")
+    parser.add_argument(
+        "--chain-backoff-strategy",
+        choices=["strict", "ladder", "adaptive"],
+        default="strict",
+        help="Chain step2 backoff strategy for streaming chain queries",
+    )
+    parser.add_argument("--chain-backoff-fixed-level", type=int, default=0, help="Fixed backoff level for strategy=strict")
+    parser.add_argument("--chain-backoff-seed", type=int, default=0, help="Deterministic seed for adaptive chain backoff")
+    parser.add_argument("--chain-backoff-alpha-latency", type=float, default=0.2, help="Adaptive backoff latency penalty weight")
+    parser.add_argument("--chain-backoff-beta-safety", type=float, default=0.5, help="Adaptive backoff safety penalty weight")
     parser.add_argument("--max-trials-per-query", "--max-trials", dest="max_trials_per_query", type=int, default=3, help="Max trials per query for safety policies")
     parser.add_argument("--strict-threshold", type=float, default=1.0, help="Strict hit@k threshold for safety intervention success")
     parser.add_argument("--max-top1-in-distractor-rate", type=float, default=0.2, help="Risk threshold for intervention success")
@@ -426,6 +440,11 @@ def main() -> int:
             context_use_repo=bool(args.context_use_repo),
             repo_read_policy=str(args.repo_read_policy),
             repo_budget=str(args.repo_budget) if args.repo_budget else None,
+            chain_backoff_strategy=str(args.chain_backoff_strategy),
+            chain_backoff_fixed_level=int(args.chain_backoff_fixed_level),
+            chain_backoff_seed=int(args.chain_backoff_seed),
+            chain_backoff_alpha_latency=float(args.chain_backoff_alpha_latency),
+            chain_backoff_beta_safety=float(args.chain_backoff_beta_safety),
             allow_gt_fallback=False,
             nlq_mode=str(args.mode),
             nlq_seed=int(args.seed),
@@ -469,6 +488,11 @@ def main() -> int:
             "context_use_repo": bool(args.context_use_repo),
             "repo_read_policy": str(args.repo_read_policy),
             "repo_budget": str(args.repo_budget) if args.repo_budget else None,
+            "chain_backoff_strategy": str(args.chain_backoff_strategy),
+            "chain_backoff_fixed_level": int(args.chain_backoff_fixed_level),
+            "chain_backoff_seed": int(args.chain_backoff_seed),
+            "chain_backoff_alpha_latency": float(args.chain_backoff_alpha_latency),
+            "chain_backoff_beta_safety": float(args.chain_backoff_beta_safety),
             "budget_policy": str(args.budget_policy),
             "fixed_budget": str(args.fixed_budget),
             "recommend_dir": str(args.recommend_dir) if args.recommend_dir else None,
@@ -520,6 +544,10 @@ def main() -> int:
     print(f"chain_queries_total={int(summary.get('chain_queries_total', 0))}")
     print(f"chain_success_rate={float(summary.get('chain_success_rate', 0.0)):.4f}")
     print(f"chain_waiting_rate={float(summary.get('chain_waiting_rate', 0.0)):.4f}")
+    print(f"chain_backoff_strategy={str(summary.get('chain_backoff_strategy', args.chain_backoff_strategy))}")
+    print(f"chain_backoff_used_rate={float(summary.get('chain_backoff_used_rate', 0.0)):.4f}")
+    print(f"chain_backoff_mean_level={float(summary.get('chain_backoff_mean_level', 0.0)):.4f}")
+    print(f"chain_backoff_exhausted_rate={float(summary.get('chain_backoff_exhausted_rate', 0.0)):.4f}")
     print(f"intervention_cfg_name={str(summary.get('intervention_cfg_name', ''))}")
     print(f"intervention_cfg_hash={str(summary.get('intervention_cfg_hash', ''))}")
     print(f"saved_steps={steps_csv}")

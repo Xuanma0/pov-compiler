@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import statistics
 import time
 from dataclasses import dataclass
@@ -35,6 +36,11 @@ from pov_compiler.streaming.budget_policy import (
     parse_budget_keys,
 )
 from pov_compiler.streaming.codec import build_streaming_codec
+from pov_compiler.streaming.chain_backoff_policy import (
+    AdaptiveChainBackoff,
+    FixedChainBackoff,
+    LadderFirstNonZero,
+)
 from pov_compiler.streaming.intervention_config import InterventionConfig, resolve_intervention_config
 from pov_compiler.streaming.interventions import (
     InterventionState,
@@ -215,12 +221,15 @@ def _infer_chain_fail_reason(
     top1_bad: bool,
     strict_hit: bool,
     safety_reason: str,
+    backoff_exhausted: bool = False,
 ) -> str:
     if waiting:
         return "pending"
     if not step1_has_hit:
         return "step1_no_hit"
     if not step2_has_hit:
+        if backoff_exhausted:
+            return "backoff_exhausted"
         if step2_before > 0 and step2_after == 0:
             return "constraints_over_filtered"
         return "step2_no_hit"
@@ -276,6 +285,93 @@ def _force_top_k(query: str, top_k: int) -> str:
     if _TOPK_PATTERN.search(text):
         text = _TOPK_PATTERN.sub(" ", text).strip()
     return f"{text} top_k={int(max(1, top_k))}"
+
+
+def _strip_query_keys(query: str, keys: set[str]) -> str:
+    try:
+        parts = shlex.split(str(query))
+    except Exception:
+        parts = str(query).split()
+    kept: list[str] = []
+    target = {str(k).strip().lower().replace("-", "_") for k in keys if str(k).strip()}
+    for part in parts:
+        if "=" not in part:
+            kept.append(part)
+            continue
+        key = str(part.split("=", 1)[0]).strip().lower().replace("-", "_")
+        if key in target:
+            continue
+        kept.append(part)
+    return " ".join(kept).strip()
+
+
+def _set_query_params(query: str, updates: dict[str, Any]) -> str:
+    try:
+        parts = shlex.split(str(query))
+    except Exception:
+        parts = str(query).split()
+    update_keys = {str(k).strip().lower().replace("-", "_") for k in updates.keys()}
+    kept: list[str] = []
+    for part in parts:
+        if "=" not in part:
+            kept.append(part)
+            continue
+        key = str(part.split("=", 1)[0]).strip().lower().replace("-", "_")
+        if key in update_keys:
+            continue
+        kept.append(part)
+    for key_raw, value in updates.items():
+        key = str(key_raw).strip()
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        kept.append(f"{key}={text}")
+    return " ".join(kept).strip()
+
+
+def _chain_step2_query_for_level(step2_query_derived: str, level: int) -> str:
+    lvl = max(0, int(level))
+    query = str(step2_query_derived).strip()
+    if lvl >= 1:
+        query = _set_query_params(
+            query,
+            {
+                "chain_object_mode": "off",
+                "chain_object_value": None,
+            },
+        )
+    if lvl >= 2:
+        query = _strip_query_keys(
+            query,
+            {
+                "object",
+                "object_name",
+                "lost_object",
+                "object_last_seen",
+                "interaction_object",
+            },
+        )
+    if lvl >= 3:
+        query = _strip_query_keys(
+            query,
+            {
+                "place",
+                "place_segment_id",
+                "place_segment_ids",
+            },
+        )
+    if lvl >= 4:
+        query = _set_query_params(
+            query,
+            {
+                "chain_time_mode": "off",
+                "chain_time_min_s": None,
+                "chain_time_max_s": None,
+            },
+        )
+    return query
 
 
 def _build_plan(sample: NLQSample, allow_gt_fallback: bool) -> QueryPlan:
@@ -368,6 +464,11 @@ def _evaluate_sample_once(
     chain_step1_budget: BudgetSpec | None = None,
     chain_step2_budget: BudgetSpec | None = None,
     step_end_t: float | None = None,
+    chain_backoff_strategy: str = "strict",
+    chain_backoff_fixed_level: int = 0,
+    chain_backoff_seed: int = 0,
+    chain_backoff_alpha_latency: float = 0.20,
+    chain_backoff_beta_safety: float = 0.50,
 ) -> dict[str, Any]:
     chain_query = parse_query_chain(str(sample.query))
     query_plan = _build_plan(sample, allow_gt_fallback=allow_gt_fallback) if chain_query is None else None
@@ -457,6 +558,11 @@ def _evaluate_sample_once(
             "chain_derived_place_used": 0.0,
             "chain_derived_object_used": 0.0,
             "chain_waiting": 0.0,
+            "chain_backoff_strategy": str(chain_backoff_strategy or "strict"),
+            "chain_backoff_level": float(max(0, int(chain_backoff_fixed_level))),
+            "chain_backoff_used": 0.0,
+            "chain_backoff_exhausted": 0.0,
+            "chain_backoff_reason": "non_chain",
             "chain_step1_budget_seconds": float(chain_step1_budget.seconds if chain_step1_budget else (budget.seconds if budget else 0.0)),
             "chain_step2_budget_seconds": float(chain_step2_budget.seconds if chain_step2_budget else (budget.seconds if budget else 0.0)),
             "hit_at_k": float(hit_at_k),
@@ -538,49 +644,203 @@ def _evaluate_sample_once(
     retrieval_step2 = _context_to_output(step2_base, context_payload_step2)
     retriever_step2 = Retriever(output_json=retrieval_step2, index=index, config=retrieval_config)
     step2_plain = retriever_step2.retrieve(step2_query)
-    step2_result = retriever_step2.retrieve(step2_query_derived)
     step2_before = int(retriever_step2._count_selected(step2_plain))  # type: ignore[attr-defined]
-    step2_after = int(retriever_step2._count_selected(step2_result))  # type: ignore[attr-defined]
-    step2_hits = retriever_step2._result_to_hits(step2_query_derived, step2_result)  # type: ignore[attr-defined]
-
-    pred_spans = _extract_pred_spans_from_hits(step2_hits, top_k=int(sample.top_k))
-    rank, best_iou = _rank_for_gt_span(pred_spans, sample.gt_span, min_iou=0.1)
-    hit_at_k = 1.0 if rank is not None and rank <= int(sample.top_k) else 0.0
-    hit_at_1 = 1.0 if rank == 1 else 0.0
-    top1_bad = 1.0 if _top1_in_distractor(pred_spans, sample.distractors, min_iou=0.1) else 0.0
-    hit_at_1_strict = 1.0 if hit_at_1 > 0.0 and top1_bad < 0.5 else 0.0
-    hit_at_k_strict = 1.0 if hit_at_k > 0.0 and top1_bad < 0.5 else 0.0
-    mrr = 1.0 / float(rank) if rank is not None else 0.0
-    top1_kind = str(step2_hits[0]["kind"]) if step2_hits else "none"
-    top1_source_query = str(step2_hits[0]["source_query"]) if step2_hits else ""
-    repo_trace = dict(context_payload_step2.get("repo_trace", {}))
-    repo_summary = summarize_repo_selection(repo_trace.get("selection_trace", {}))
-    context_len_chars, context_approx_tokens = _context_len_stats(context_payload_step2)
 
     derived_time = dict(derived.get("time", {})) if isinstance(derived.get("time", {}), dict) else {}
     derived_place = dict(derived.get("place", {})) if isinstance(derived.get("place", {}), dict) else {}
     derived_object = dict(derived.get("object", {})) if isinstance(derived.get("object", {}), dict) else {}
-    chain_waiting = 0.0
-    if (
-        str(getattr(chain_query, "rel", "after")).strip().lower() == "after"
-        and bool(derived_time.get("enabled", False))
-        and step_end_t is not None
-    ):
-        t_min = float(derived_time.get("t_min_s", 0.0) or 0.0)
-        chain_waiting = 1.0 if float(step_end_t) + 1e-6 < t_min else 0.0
-    chain_step2_has_hit = 1.0 if bool(step2_hits) else 0.0
-    chain_success = 1.0 if (step1_has_hit and chain_step2_has_hit > 0.0 and top1_bad < 0.5 and chain_waiting < 0.5) else 0.0
-    safety_reason = str(classify_failure_reason(
-        {
+    rel_norm = str(getattr(chain_query, "rel", "after")).strip().lower()
+    default_budget = chain_step2_budget if chain_step2_budget is not None else budget
+    budget_seconds = float(default_budget.seconds if default_budget is not None else 0.0)
+    budget_tokens = int(default_budget.max_tokens if default_budget is not None else 0)
+    budget_decisions = int(default_budget.max_decisions if default_budget is not None else 0)
+
+    level_eval: dict[int, dict[str, Any]] = {}
+    strategy = str(chain_backoff_strategy or "strict").strip().lower()
+    if strategy not in {"strict", "ladder", "adaptive"}:
+        strategy = "strict"
+    available_levels = [0, 1, 2, 3, 4]
+
+    def _eval_level(level: int) -> dict[str, Any]:
+        if int(level) in level_eval:
+            return dict(level_eval[int(level)])
+        q_level = _chain_step2_query_for_level(step2_query_derived, int(level))
+        parsed_level = parse_query(q_level)
+        step2_result_local = retriever_step2.retrieve(q_level)
+        step2_after_local = int(retriever_step2._count_selected(step2_result_local))  # type: ignore[attr-defined]
+        step2_hits_local = retriever_step2._result_to_hits(q_level, step2_result_local)  # type: ignore[attr-defined]
+        pred_spans_local = _extract_pred_spans_from_hits(step2_hits_local, top_k=int(sample.top_k))
+        rank_local, best_iou_local = _rank_for_gt_span(pred_spans_local, sample.gt_span, min_iou=0.1)
+        hit_at_k_local = 1.0 if rank_local is not None and rank_local <= int(sample.top_k) else 0.0
+        hit_at_1_local = 1.0 if rank_local == 1 else 0.0
+        top1_bad_local = 1.0 if _top1_in_distractor(pred_spans_local, sample.distractors, min_iou=0.1) else 0.0
+        hit_at_1_strict_local = 1.0 if hit_at_1_local > 0.0 and top1_bad_local < 0.5 else 0.0
+        hit_at_k_strict_local = 1.0 if hit_at_k_local > 0.0 and top1_bad_local < 0.5 else 0.0
+        mrr_local = 1.0 / float(rank_local) if rank_local is not None else 0.0
+        time_mode_level = str(parsed_level.chain_time_mode or "hard").strip().lower()
+        time_active_level = bool(
+            time_mode_level != "off"
+            and (parsed_level.chain_time_min_s is not None or parsed_level.chain_time_max_s is not None)
+        )
+        chain_waiting_local = 0.0
+        if rel_norm == "after" and time_active_level and step_end_t is not None:
+            t_min_level = float(parsed_level.chain_time_min_s or 0.0)
+            chain_waiting_local = 1.0 if float(step_end_t) + 1e-6 < t_min_level else 0.0
+        chain_step2_has_hit_local = 1.0 if bool(step2_hits_local) else 0.0
+        chain_success_local = 1.0 if (
+            step1_has_hit and chain_step2_has_hit_local > 0.0 and top1_bad_local < 0.5 and chain_waiting_local < 0.5
+        ) else 0.0
+        safety_reason_local = str(
+            classify_failure_reason(
+                {
+                    "filtered_hits_before": int(step2_before),
+                    "filtered_hits_after": int(step2_after_local),
+                    "candidate_count": int(step2_after_local),
+                    "top1_in_distractor": float(top1_bad_local),
+                    "budget_max_total_s": float(budget_seconds),
+                    "budget_max_tokens": int(budget_tokens),
+                    "budget_max_decisions": int(budget_decisions),
+                }
+            )
+        )
+        row = {
+            "level": int(level),
+            "query": q_level,
+            "result": step2_result_local,
+            "hits": step2_hits_local,
             "filtered_hits_before": int(step2_before),
-            "filtered_hits_after": int(step2_after),
-            "candidate_count": int(step2_after),
-            "top1_in_distractor": float(top1_bad),
-            "budget_max_total_s": float((chain_step2_budget.seconds if chain_step2_budget else (budget.seconds if budget else 0.0))),
-            "budget_max_tokens": int(chain_step2_budget.max_tokens if chain_step2_budget else (budget.max_tokens if budget else 0)),
-            "budget_max_decisions": int(chain_step2_budget.max_decisions if chain_step2_budget else (budget.max_decisions if budget else 0)),
+            "filtered_hits_after": int(step2_after_local),
+            "hit_count": int(step2_after_local),
+            "pred_spans": pred_spans_local,
+            "rank": int(rank_local) if rank_local is not None else -1,
+            "best_iou": float(best_iou_local),
+            "hit_at_k": float(hit_at_k_local),
+            "hit_at_1": float(hit_at_1_local),
+            "hit_at_1_strict": float(hit_at_1_strict_local),
+            "hit_at_k_strict": float(hit_at_k_strict_local),
+            "top1_in_distractor_rate": float(top1_bad_local),
+            "mrr": float(mrr_local),
+            "chain_waiting": float(chain_waiting_local),
+            "chain_step2_has_hit": float(chain_step2_has_hit_local),
+            "chain_success": float(chain_success_local),
+            "safety_reason": str(safety_reason_local),
+            "constraints_applied": _infer_chain_applied_constraints(q_level),
+            "top1_kind": str(step2_hits_local[0]["kind"]) if step2_hits_local else "none",
+            "top1_source_query": str(step2_hits_local[0]["source_query"]) if step2_hits_local else "",
         }
-    ))
+        level_eval[int(level)] = dict(row)
+        return row
+
+    attempts: list[dict[str, Any]] = []
+    if strategy == "strict":
+        fixed = FixedChainBackoff(level=int(chain_backoff_fixed_level))
+        decision = fixed.choose_level({"available_levels": available_levels})
+        chosen_level = int(decision.level)
+        chosen = _eval_level(chosen_level)
+        attempts.append(
+            {
+                "level": int(chosen_level),
+                "before": int(step2_before),
+                "after": int(chosen.get("filtered_hits_after", 0)),
+                "applied_constraints": list(chosen.get("constraints_applied", [])),
+            }
+        )
+        backoff_reason = str(decision.reason)
+    elif strategy == "ladder":
+        ladder = LadderFirstNonZero()
+        chosen = None
+        chosen_level = None
+        for lvl in available_levels:
+            row = _eval_level(lvl)
+            attempts.append(
+                {
+                    "level": int(lvl),
+                    "before": int(step2_before),
+                    "after": int(row.get("filtered_hits_after", 0)),
+                    "applied_constraints": list(row.get("constraints_applied", [])),
+                }
+            )
+            if int(row.get("filtered_hits_after", 0)) > 0:
+                chosen = row
+                chosen_level = int(lvl)
+                break
+        if chosen is None:
+            chosen_level = available_levels[-1]
+            chosen = _eval_level(chosen_level)
+        decision = ladder.choose_level(
+            {
+                "available_levels": available_levels,
+                "level_metrics": {
+                    lvl: {"hit_count": int(level_eval.get(lvl, {}).get("filtered_hits_after", 0))}
+                    for lvl in available_levels
+                    if lvl in level_eval
+                },
+            }
+        )
+        backoff_reason = str(decision.reason)
+    else:
+        for lvl in available_levels:
+            row = _eval_level(lvl)
+            attempts.append(
+                {
+                    "level": int(lvl),
+                    "before": int(step2_before),
+                    "after": int(row.get("filtered_hits_after", 0)),
+                    "applied_constraints": list(row.get("constraints_applied", [])),
+                }
+            )
+        adaptive = AdaptiveChainBackoff(
+            alpha_latency=float(chain_backoff_alpha_latency),
+            beta_safety=float(chain_backoff_beta_safety),
+            seed=int(chain_backoff_seed),
+        )
+        decision = adaptive.choose_level(
+            {
+                "available_levels": available_levels,
+                "latency_cap_ms": float(max(1.0, budget_seconds * 10.0)),
+                "max_trials_per_query": float(max(1.0, float(chain_step2_budget.seconds if chain_step2_budget else 3.0))),
+                "level_metrics": {
+                    lvl: {
+                        "hit_count": int(level_eval.get(lvl, {}).get("filtered_hits_after", 0)),
+                        "chain_success": float(level_eval.get(lvl, {}).get("chain_success", 0.0)),
+                        "hit_at_k_strict": float(level_eval.get(lvl, {}).get("hit_at_k_strict", 0.0)),
+                        "top1_in_distractor_rate": float(level_eval.get(lvl, {}).get("top1_in_distractor_rate", 0.0)),
+                        "safety_is_critical_fn": 1.0
+                        if str(level_eval.get(lvl, {}).get("safety_reason", "")).strip()
+                        not in {"", "pending"}
+                        else 0.0,
+                        "latency_e2e_ms": float(level_eval.get(lvl, {}).get("filtered_hits_after", 0.0)) * 0.2 + float(lvl) * 0.1,
+                    }
+                    for lvl in available_levels
+                },
+            }
+        )
+        chosen_level = int(decision.level)
+        chosen = _eval_level(chosen_level)
+        backoff_reason = str(decision.reason)
+
+    chosen_level = int(chosen_level if chosen_level is not None else 0)
+    step2_query_derived = str(chosen.get("query", step2_query_derived))
+    step2_hits = list(chosen.get("hits", []))
+    step2_after = int(chosen.get("filtered_hits_after", 0))
+    rank = int(chosen.get("rank", -1))
+    rank_opt = None if rank < 1 else rank
+    best_iou = float(chosen.get("best_iou", 0.0))
+    hit_at_k = float(chosen.get("hit_at_k", 0.0))
+    hit_at_1 = float(chosen.get("hit_at_1", 0.0))
+    hit_at_1_strict = float(chosen.get("hit_at_1_strict", 0.0))
+    hit_at_k_strict = float(chosen.get("hit_at_k_strict", 0.0))
+    top1_bad = float(chosen.get("top1_in_distractor_rate", 0.0))
+    mrr = float(chosen.get("mrr", 0.0))
+    chain_waiting = float(chosen.get("chain_waiting", 0.0))
+    chain_step2_has_hit = float(chosen.get("chain_step2_has_hit", 0.0))
+    chain_success = float(chosen.get("chain_success", 0.0))
+    safety_reason = str(chosen.get("safety_reason", ""))
+    inferred_applied = list(chosen.get("constraints_applied", []))
+    top1_kind = str(chosen.get("top1_kind", "none"))
+    top1_source_query = str(chosen.get("top1_source_query", ""))
+    chain_backoff_used = 1.0 if int(chosen_level) > 0 else 0.0
+    chain_backoff_exhausted = 1.0 if int(step2_after) <= 0 else 0.0
     chain_fail_reason = _infer_chain_fail_reason(
         waiting=bool(chain_waiting > 0.0),
         step1_has_hit=bool(step1_has_hit),
@@ -590,8 +850,11 @@ def _evaluate_sample_once(
         top1_bad=bool(top1_bad > 0.0),
         strict_hit=bool(hit_at_k_strict > 0.0),
         safety_reason=str(safety_reason),
+        backoff_exhausted=bool(chain_backoff_exhausted > 0.0),
     )
-    inferred_applied = _infer_chain_applied_constraints(step2_query_derived)
+    repo_trace = dict(context_payload_step2.get("repo_trace", {}))
+    repo_summary = summarize_repo_selection(repo_trace.get("selection_trace", {}))
+    context_len_chars, context_approx_tokens = _context_len_stats(context_payload_step2)
 
     return {
         "is_chain": 1.0,
@@ -605,6 +868,11 @@ def _evaluate_sample_once(
         "chain_derived_place_used": 1.0 if bool(derived_place.get("enabled", False)) else 0.0,
         "chain_derived_object_used": 1.0 if bool(derived_object.get("enabled", False)) else 0.0,
         "chain_waiting": float(chain_waiting),
+        "chain_backoff_strategy": str(strategy),
+        "chain_backoff_level": float(chosen_level),
+        "chain_backoff_used": float(chain_backoff_used),
+        "chain_backoff_exhausted": float(chain_backoff_exhausted),
+        "chain_backoff_reason": str(backoff_reason),
         "chain_step1_budget_seconds": float(chain_step1_budget.seconds if chain_step1_budget else (budget.seconds if budget else 0.0)),
         "chain_step2_budget_seconds": float(chain_step2_budget.seconds if chain_step2_budget else (budget.seconds if budget else 0.0)),
         "hit_at_k": float(hit_at_k),
@@ -614,7 +882,7 @@ def _evaluate_sample_once(
         "top1_in_distractor_rate": float(top1_bad),
         "fp_rate": float(top1_bad),
         "mrr": float(mrr),
-        "rank": int(rank) if rank is not None else -1,
+        "rank": int(rank_opt) if rank_opt is not None else -1,
         "best_iou": float(best_iou),
         "top1_kind": top1_kind,
         "top1_source_query": top1_source_query,
@@ -674,7 +942,15 @@ def _derive_safety_for_trial(metrics: dict[str, Any], budget: BudgetSpec) -> tup
         return 0, ""
     chain_reason = str(metrics.get("chain_fail_reason", "")).strip()
     if chain_reason:
-        if chain_reason in {"step1_no_hit", "step2_no_hit", "constraints_over_filtered", "retrieval_distractor", "evidence_missing", "budget_insufficient"}:
+        if chain_reason in {
+            "step1_no_hit",
+            "step2_no_hit",
+            "constraints_over_filtered",
+            "retrieval_distractor",
+            "evidence_missing",
+            "budget_insufficient",
+            "backoff_exhausted",
+        }:
             return 1, chain_reason
     row = {
         "filtered_hits_before": int(metrics.get("filtered_hits_before", 0) or 0),
@@ -772,6 +1048,11 @@ class StreamingConfig:
     context_use_repo: bool = False
     repo_read_policy: str = "budgeted_topk"
     repo_budget: str | None = None
+    chain_backoff_strategy: str = "strict"
+    chain_backoff_fixed_level: int = 0
+    chain_backoff_seed: int = 0
+    chain_backoff_alpha_latency: float = 0.20
+    chain_backoff_beta_safety: float = 0.50
     mode: str = "basic"
 
 
@@ -1169,6 +1450,11 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     chain_step1_budget=min_budget,
                     chain_step2_budget=budget,
                     step_end_t=float(end_t),
+                    chain_backoff_strategy=str(cfg.chain_backoff_strategy or "strict"),
+                    chain_backoff_fixed_level=int(cfg.chain_backoff_fixed_level),
+                    chain_backoff_seed=int(cfg.chain_backoff_seed),
+                    chain_backoff_alpha_latency=float(cfg.chain_backoff_alpha_latency),
+                    chain_backoff_beta_safety=float(cfg.chain_backoff_beta_safety),
                 )
                 eval_ms = float((time.perf_counter() - eval_start) * 1000.0)
                 retrieval_ms = float(metrics.get("retrieval_ms", eval_ms))
@@ -1375,6 +1661,11 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                     "chain_derived_place_used": int(float(trial_metrics.get("chain_derived_place_used", 0.0) or 0.0)),
                     "chain_derived_object_used": int(float(trial_metrics.get("chain_derived_object_used", 0.0) or 0.0)),
                     "chain_waiting": int(float(trial_metrics.get("chain_waiting", 0.0) or 0.0)),
+                    "chain_backoff_strategy": str(trial_metrics.get("chain_backoff_strategy", cfg.chain_backoff_strategy)),
+                    "chain_backoff_level": int(float(trial_metrics.get("chain_backoff_level", 0.0) or 0.0)),
+                    "chain_backoff_used": int(float(trial_metrics.get("chain_backoff_used", 0.0) or 0.0)),
+                    "chain_backoff_exhausted": int(float(trial_metrics.get("chain_backoff_exhausted", 0.0) or 0.0)),
+                    "chain_backoff_reason": str(trial_metrics.get("chain_backoff_reason", "")),
                     "chain_step1_budget_seconds": float(
                         trial_metrics.get("chain_step1_budget_seconds", min_budget.seconds)
                     ),
@@ -1477,6 +1768,15 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
                 ),
                 "chain_success_rate_step": _mean([float(x.get("chain_success", 0.0)) for x in metric_rows]),
                 "chain_waiting_rate_step": _mean([float(x.get("chain_waiting", 0.0)) for x in metric_rows]),
+                "chain_backoff_used_rate_step": _mean(
+                    [float(x.get("chain_backoff_used", 0.0)) for x in metric_rows if int(x.get("is_chain", 0)) > 0]
+                ),
+                "chain_backoff_mean_level_step": _mean(
+                    [float(x.get("chain_backoff_level", 0.0)) for x in metric_rows if int(x.get("is_chain", 0)) > 0]
+                ),
+                "chain_backoff_exhausted_rate_step": _mean(
+                    [float(x.get("chain_backoff_exhausted", 0.0)) for x in metric_rows if int(x.get("is_chain", 0)) > 0]
+                ),
                 "codec_name": codec_name,
                 "codec_k": int(cfg.codec_k),
                 "candidates_in_step": int(candidate_count),
@@ -1557,6 +1857,15 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "chain_queries_total": int(sum(1 for r in metric_rows if int(r.get("is_chain", 0)) > 0)),
         "chain_success_rate": _mean([float(r.get("chain_success", 0.0)) for r in metric_rows]),
         "chain_waiting_rate": _mean([float(r.get("chain_waiting", 0.0)) for r in metric_rows]),
+        "chain_backoff_used_rate": _mean(
+            [float(r.get("chain_backoff_used", 0.0)) for r in metric_rows if int(r.get("is_chain", 0)) > 0]
+        ),
+        "chain_backoff_mean_level": _mean(
+            [float(r.get("chain_backoff_level", 0.0)) for r in metric_rows if int(r.get("is_chain", 0)) > 0]
+        ),
+        "chain_backoff_exhausted_rate": _mean(
+            [float(r.get("chain_backoff_exhausted", 0.0)) for r in metric_rows if int(r.get("is_chain", 0)) > 0]
+        ),
         "chain_distractor_rate": _mean(
             [
                 float(r.get("top1_in_distractor_rate", 0.0))
@@ -1596,6 +1905,11 @@ def _run_streaming_budgeted(output: Output, cfg: StreamingConfig) -> dict[str, A
         "repo_read_policy": str(cfg.repo_read_policy),
         "repo_cfg_hash": str(repo_policy_hash),
         "repo_budget": str(cfg.repo_budget or ""),
+        "chain_backoff_strategy": str(cfg.chain_backoff_strategy or "strict"),
+        "chain_backoff_fixed_level": int(cfg.chain_backoff_fixed_level),
+        "chain_backoff_seed": int(cfg.chain_backoff_seed),
+        "chain_backoff_alpha_latency": float(cfg.chain_backoff_alpha_latency),
+        "chain_backoff_beta_safety": float(cfg.chain_backoff_beta_safety),
         "repo_selected_chunks_mean": _mean([float(r.get("repo_selected_chunks", 0.0)) for r in metric_rows]),
         "context_len_chars_mean": _mean([float(r.get("context_len_chars", 0.0)) for r in metric_rows]),
         "context_approx_tokens_mean": _mean([float(r.get("context_approx_tokens", 0.0)) for r in metric_rows]),
