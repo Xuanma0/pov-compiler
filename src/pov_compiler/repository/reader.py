@@ -12,6 +12,7 @@ def select_chunks_for_query(
     budget: dict[str, Any] | None = None,
     cfg: dict[str, Any] | None = None,
     query_info: dict[str, Any] | None = None,
+    query_hints: dict[str, Any] | None = None,
     return_trace: bool = False,
 ) -> list[RepoChunk] | tuple[list[RepoChunk], dict[str, Any]]:
     budget = dict(budget or {})
@@ -64,9 +65,16 @@ def select_chunks_for_query(
             query=query,
             budget_cfg=budget,
             query_info=query_info,
+            query_hints=query_hints,
         )
     else:
-        selected = policy.select(list(repo_chunks), query=query, budget_cfg=budget, query_info=query_info)
+        selected = policy.select(
+            list(repo_chunks),
+            query=query,
+            budget_cfg=budget,
+            query_info=query_info,
+            query_hints=query_hints,
+        )
         trace = {
             "policy_name": str(getattr(policy, "name", "")),
             "policy_hash": str(getattr(policy, "stable_hash", lambda: "")()),
@@ -74,6 +82,7 @@ def select_chunks_for_query(
             "selected_breakdown_by_level": {},
             "per_chunk_score_fields": {},
             "dropped_topN": [],
+            "query_hints": dict(query_hints or {}),
         }
     selected.sort(key=lambda c: (float(c.t0), float(c.t1), str(c.id)))
     if return_trace:

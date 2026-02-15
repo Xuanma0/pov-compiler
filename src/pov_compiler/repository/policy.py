@@ -64,6 +64,60 @@ def _estimate_tokens(text: str) -> int:
     return max(1, int(round(len(str(text)) / 4.0)))
 
 
+def _time_overlap_ratio(chunk_t0: float, chunk_t1: float, hint_t0: float | None, hint_t1: float | None) -> float:
+    t0 = float(chunk_t0)
+    t1 = float(chunk_t1)
+    if t1 < t0:
+        t0, t1 = t1, t0
+    if hint_t0 is None and hint_t1 is None:
+        return 0.0
+    h0 = float(hint_t0) if hint_t0 is not None else float("-inf")
+    h1 = float(hint_t1) if hint_t1 is not None else float("inf")
+    if h1 < h0:
+        h0, h1 = h1, h0
+    inter = max(0.0, min(t1, h1) - max(t0, h0))
+    duration = max(1e-9, t1 - t0)
+    return float(max(0.0, min(1.0, inter / duration)))
+
+
+def _chunk_place_values(chunk: RepoChunk) -> set[str]:
+    vals: set[str] = set()
+    meta = dict(chunk.meta or {})
+    for key in ("place_segment_id", "place_id"):
+        value = str(meta.get(key, "")).strip().lower()
+        if value:
+            vals.add(value)
+    for tag in chunk.tags or []:
+        text = str(tag).strip().lower()
+        if text.startswith("place:"):
+            value = text.split(":", 1)[1].strip()
+            if value:
+                vals.add(value)
+        elif text in {"first", "last", "any"}:
+            vals.add(text)
+    words = _norm_words(chunk.text)
+    for token in ("first", "last", "any"):
+        if token in words:
+            vals.add(token)
+    return vals
+
+
+def _chunk_object_values(chunk: RepoChunk) -> set[str]:
+    vals: set[str] = set()
+    meta = dict(chunk.meta or {})
+    for key in ("primary_object", "interaction_object", "interaction_primary_object", "object_name"):
+        value = str(meta.get(key, "")).strip().lower()
+        if value:
+            vals.add(value)
+    for tag in chunk.tags or []:
+        text = str(tag).strip().lower()
+        if text.startswith("obj:"):
+            value = text.split(":", 1)[1].strip()
+            if value:
+                vals.add(value)
+    return vals
+
+
 @dataclass
 class PolicyConfig:
     name: str
@@ -120,6 +174,7 @@ class ReadPolicy(ABC):
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
         query_info: dict[str, Any] | None = None,
+        query_hints: dict[str, Any] | None = None,
     ) -> list[RepoChunk]:
         raise NotImplementedError
 
@@ -130,6 +185,7 @@ class ReadPolicy(ABC):
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
         query_info: dict[str, Any] | None = None,
+        query_hints: dict[str, Any] | None = None,
     ) -> tuple[list[RepoChunk], dict[str, Any]]:
         selected = self.select(
             chunks=chunks,
@@ -137,6 +193,7 @@ class ReadPolicy(ABC):
             budget_cfg=budget_cfg,
             rng=rng,
             query_info=query_info,
+            query_hints=query_hints,
         )
         return selected, {
             "policy_name": self.name,
@@ -292,6 +349,7 @@ class BudgetedTopKReadPolicy(ReadPolicy):
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
         query_info: dict[str, Any] | None = None,
+        query_hints: dict[str, Any] | None = None,
     ) -> list[RepoChunk]:
         max_chunks, max_tokens, max_seconds = self._effective_budget(budget_cfg)
         ranked = sorted(
@@ -336,6 +394,7 @@ class DiverseReadPolicy(BudgetedTopKReadPolicy):
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
         query_info: dict[str, Any] | None = None,
+        query_hints: dict[str, Any] | None = None,
     ) -> list[RepoChunk]:
         max_chunks, max_tokens, max_seconds = self._effective_budget(budget_cfg)
         ranked = sorted(
@@ -378,6 +437,7 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         constraint_level_boost: dict[str, dict[str, float]] | None = None,
         recency_weight: float = 0.1,
         redundancy_penalty: float = 0.2,
+        hint_weight: float = 0.35,
         max_chunks_per_level: dict[str, int] | None = None,
         dedup_sim_threshold: float = 0.92,
         dropped_topn: int = 8,
@@ -416,6 +476,7 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
             }
         self.recency_weight = float(recency_weight)
         self.redundancy_penalty = float(redundancy_penalty)
+        self.hint_weight = float(hint_weight)
         self.max_chunks_per_level = {str(k).lower(): int(v) for k, v in dict(max_chunks_per_level or {}).items()}
         self.dedup_sim_threshold = float(dedup_sim_threshold)
         self.dropped_topn = int(max(1, dropped_topn))
@@ -427,6 +488,7 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
                 "constraint_level_boost": self.constraint_level_boost,
                 "recency_weight": self.recency_weight,
                 "redundancy_penalty": self.redundancy_penalty,
+                "hint_weight": self.hint_weight,
                 "max_chunks_per_level": self.max_chunks_per_level,
                 "dedup_sim_threshold": self.dedup_sim_threshold,
                 "dropped_topn": self.dropped_topn,
@@ -434,7 +496,79 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         )
 
     @staticmethod
-    def _safe_query_info(query: str, query_info: dict[str, Any] | None) -> dict[str, Any]:
+    def _normalize_query_hints(query_hints: dict[str, Any] | None) -> dict[str, Any]:
+        raw = dict(query_hints or {})
+        if isinstance(raw.get("derived_constraints"), dict):
+            dc = dict(raw.get("derived_constraints", {}))
+        else:
+            dc = {}
+        time_hint = dict(dc.get("time", {})) if isinstance(dc.get("time", {}), dict) else {}
+        place_hint = dict(dc.get("place", {})) if isinstance(dc.get("place", {}), dict) else {}
+        object_hint = dict(dc.get("object", {})) if isinstance(dc.get("object", {}), dict) else {}
+
+        def _norm_mode(value: Any, default: str = "soft") -> str:
+            mode = str(value or default).strip().lower()
+            if mode not in {"hard", "soft", "off"}:
+                mode = default
+            return mode
+
+        def _to_float(value: Any) -> float | None:
+            try:
+                out = float(value)
+            except Exception:
+                return None
+            if out != out:
+                return None
+            return float(out)
+
+        t_min = _to_float(time_hint.get("t_min_s", raw.get("chain_time_min_s", None)))
+        t_max = _to_float(time_hint.get("t_max_s", raw.get("chain_time_max_s", None)))
+        time_mode = _norm_mode(time_hint.get("mode", raw.get("chain_time_mode", "hard")), default="hard")
+        time_enabled = bool(time_hint.get("enabled", time_mode != "off" and (t_min is not None or t_max is not None)))
+
+        place_value = str(place_hint.get("value", raw.get("chain_place_value", ""))).strip().lower()
+        place_mode = _norm_mode(place_hint.get("mode", raw.get("chain_place_mode", "soft")))
+        place_enabled = bool(place_hint.get("enabled", place_mode != "off" and bool(place_value)))
+
+        object_value = str(object_hint.get("value", raw.get("chain_object_value", ""))).strip().lower()
+        object_mode = _norm_mode(object_hint.get("mode", raw.get("chain_object_mode", "soft")))
+        object_enabled = bool(object_hint.get("enabled", object_mode != "off" and bool(object_value)))
+
+        return {
+            "derived_constraints": {
+                "time": {
+                    "enabled": bool(time_enabled),
+                    "mode": str(time_mode),
+                    "t_min_s": t_min,
+                    "t_max_s": t_max,
+                    "source": str(time_hint.get("source", raw.get("chain_time_source", ""))),
+                    "disabled_reason": str(time_hint.get("disabled_reason", "")),
+                },
+                "place": {
+                    "enabled": bool(place_enabled),
+                    "mode": str(place_mode),
+                    "value": str(place_value),
+                    "source": str(place_hint.get("source", raw.get("chain_place_source", ""))),
+                    "disabled_reason": str(place_hint.get("disabled_reason", "")),
+                },
+                "object": {
+                    "enabled": bool(object_enabled),
+                    "mode": str(object_mode),
+                    "value": str(object_value),
+                    "source": str(object_hint.get("source", raw.get("chain_object_source", ""))),
+                    "disabled_reason": str(object_hint.get("disabled_reason", "")),
+                },
+            },
+            "chain_meta": dict(raw.get("chain_meta", {})) if isinstance(raw.get("chain_meta", {}), dict) else {},
+        }
+
+    @classmethod
+    def _safe_query_info(
+        cls,
+        query: str,
+        query_info: dict[str, Any] | None,
+        query_hints: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         out = dict(query_info or {})
         parsed_constraints = out.get("parsed_constraints")
         if not isinstance(parsed_constraints, dict):
@@ -448,6 +582,13 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
                 "decision_type": list(parsed.decision_types),
                 "token_type": list(parsed.token_types),
                 "time_range": parsed.time_range,
+                "chain_time_min_s": parsed.chain_time_min_s,
+                "chain_time_max_s": parsed.chain_time_max_s,
+                "chain_time_mode": parsed.chain_time_mode,
+                "chain_place_value": parsed.chain_place_value,
+                "chain_place_mode": parsed.chain_place_mode,
+                "chain_object_value": parsed.chain_object_value,
+                "chain_object_mode": parsed.chain_object_mode,
             }
         cleaned_constraints: dict[str, Any] = {}
         for key, value in dict(parsed_constraints).items():
@@ -466,6 +607,7 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
             out["top_k"] = int(out.get("top_k", 6))
         except Exception:
             out["top_k"] = 6
+        out["query_hints"] = cls._normalize_query_hints(query_hints)
         return out
 
     def _score_chunks(
@@ -479,6 +621,18 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         t1_max = max((float(c.t1) for c in chunks), default=1.0)
         intent = str(query_info.get("plan_intent", "mixed")).lower()
         constraints = dict(query_info.get("parsed_constraints", {}))
+        query_hints = dict(query_info.get("query_hints", {}))
+        derived = dict(query_hints.get("derived_constraints", {})) if isinstance(query_hints.get("derived_constraints", {}), dict) else {}
+        time_hint = dict(derived.get("time", {})) if isinstance(derived.get("time", {}), dict) else {}
+        place_hint = dict(derived.get("place", {})) if isinstance(derived.get("place", {}), dict) else {}
+        object_hint = dict(derived.get("object", {})) if isinstance(derived.get("object", {}), dict) else {}
+        hint_time_enabled = bool(time_hint.get("enabled", False))
+        hint_time_min = time_hint.get("t_min_s")
+        hint_time_max = time_hint.get("t_max_s")
+        hint_place_enabled = bool(place_hint.get("enabled", False))
+        hint_place_value = str(place_hint.get("value", "")).strip().lower()
+        hint_object_enabled = bool(object_hint.get("enabled", False))
+        hint_object_value = str(object_hint.get("value", "")).strip().lower()
         per_chunk: dict[str, dict[str, float]] = {}
         scored_rows: list[tuple[RepoChunk, dict[str, float]]] = []
         for chunk in chunks:
@@ -490,13 +644,32 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
             for ckey in constraints.keys():
                 constraint_boost += float(self.constraint_level_boost.get(str(ckey).lower(), {}).get(level, 0.0))
             recency = float(self.recency_weight) * float(max(0.0, min(1.0, float(chunk.t1) / max(1e-9, t1_max))))
-            final = base_score + level_boost + intent_boost + constraint_boost + recency
+            hint_time = _time_overlap_ratio(float(chunk.t0), float(chunk.t1), hint_time_min, hint_time_max) if hint_time_enabled else 0.0
+            place_values = _chunk_place_values(chunk)
+            hint_place = 0.0
+            if hint_place_enabled and hint_place_value:
+                if hint_place_value in {"first", "last", "any"}:
+                    hint_place = 1.0 if hint_place_value in place_values else 0.0
+                else:
+                    hint_place = 1.0 if hint_place_value in place_values else 0.0
+            object_values = _chunk_object_values(chunk)
+            hint_object = 0.0
+            if hint_object_enabled and hint_object_value:
+                hint_object = 1.0 if any((hint_object_value in ov or ov in hint_object_value) for ov in object_values) else 0.0
+            hint_score = (0.5 * hint_time) + (0.25 * hint_place) + (0.25 * hint_object)
+            hint_bonus = float(self.hint_weight) * float(hint_score)
+            final = base_score + level_boost + intent_boost + constraint_boost + recency + hint_bonus
             fields = {
                 "base_score": float(base_score),
                 "level_boost": float(level_boost),
                 "intent_boost": float(intent_boost),
                 "constraint_boost": float(constraint_boost),
                 "recency_boost": float(recency),
+                "hint_time": float(hint_time),
+                "hint_place": float(hint_place),
+                "hint_object": float(hint_object),
+                "hint_score": float(hint_score),
+                "w_hint": float(self.hint_weight),
                 "dedup_penalty": 0.0,
                 "final_score": float(final),
             }
@@ -519,11 +692,53 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
         query_info: dict[str, Any] | None = None,
+        query_hints: dict[str, Any] | None = None,
     ) -> tuple[list[RepoChunk], dict[str, Any]]:
         budget = dict(budget_cfg or {})
         max_chunks, max_tokens, max_seconds = self._effective_budget(budget)
-        info = self._safe_query_info(query, query_info)
+        info = self._safe_query_info(query, query_info, query_hints=query_hints)
         ranked, per_chunk = self._score_chunks(chunks=list(chunks), query=query, budget_cfg=budget, query_info=info)
+        derived = (
+            dict(info.get("query_hints", {}).get("derived_constraints", {}))
+            if isinstance(info.get("query_hints", {}).get("derived_constraints", {}), dict)
+            else {}
+        )
+        time_hint = dict(derived.get("time", {})) if isinstance(derived.get("time", {}), dict) else {}
+        place_hint = dict(derived.get("place", {})) if isinstance(derived.get("place", {}), dict) else {}
+        object_hint = dict(derived.get("object", {})) if isinstance(derived.get("object", {}), dict) else {}
+        hint_filter_before = int(len(ranked))
+        hint_filtered_reason_counts: dict[str, int] = {}
+        ranked_after_hints: list[tuple[RepoChunk, dict[str, float]]] = []
+        for chunk, fields in ranked:
+            reason = ""
+            if bool(time_hint.get("enabled", False)) and str(time_hint.get("mode", "soft")).strip().lower() == "hard":
+                t_min = time_hint.get("t_min_s")
+                t_max = time_hint.get("t_max_s")
+                if _time_overlap_ratio(float(chunk.t0), float(chunk.t1), t_min, t_max) <= 0.0:
+                    reason = "filtered_by_chain_time"
+            if not reason and bool(place_hint.get("enabled", False)) and str(place_hint.get("mode", "soft")).strip().lower() == "hard":
+                place_value = str(place_hint.get("value", "")).strip().lower()
+                if place_value:
+                    if place_value in {"first", "last", "any"}:
+                        has_place = place_value in _chunk_place_values(chunk)
+                    else:
+                        has_place = place_value in _chunk_place_values(chunk)
+                    if not has_place:
+                        reason = "filtered_by_chain_place"
+            if not reason and bool(object_hint.get("enabled", False)) and str(object_hint.get("mode", "soft")).strip().lower() == "hard":
+                object_value = str(object_hint.get("value", "")).strip().lower()
+                if object_value:
+                    object_values = _chunk_object_values(chunk)
+                    matched = any((object_value in v or v in object_value) for v in object_values)
+                    if not matched:
+                        reason = "filtered_by_chain_object"
+            if reason:
+                hint_filtered_reason_counts[reason] = hint_filtered_reason_counts.get(reason, 0) + 1
+                if "drop_reason" not in fields:
+                    fields["drop_reason"] = 0.0
+                continue
+            ranked_after_hints.append((chunk, fields))
+        ranked = ranked_after_hints
 
         selected: list[RepoChunk] = []
         selected_words: list[set[str]] = []
@@ -596,6 +811,10 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
                 "parsed_constraints": dict(info.get("parsed_constraints", {})),
                 "top_k": int(info.get("top_k", 6)),
             },
+            "query_hints": dict(info.get("query_hints", {})),
+            "hint_filter_before": int(hint_filter_before),
+            "hint_filter_after": int(len(ranked)),
+            "hint_filtered_reason_counts": dict(sorted(hint_filtered_reason_counts.items())),
         }
         return selected_sorted, trace
 
@@ -606,6 +825,7 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         budget_cfg: dict[str, Any] | None = None,
         rng: random.Random | None = None,
         query_info: dict[str, Any] | None = None,
+        query_hints: dict[str, Any] | None = None,
     ) -> list[RepoChunk]:
         selected, _ = self.select_with_trace(
             chunks=chunks,
@@ -613,6 +833,7 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
             budget_cfg=budget_cfg,
             rng=rng,
             query_info=query_info,
+            query_hints=query_hints,
         )
         return selected
 
@@ -666,6 +887,7 @@ def build_read_policy(cfg: dict[str, Any] | None = None) -> ReadPolicy:
             constraint_level_boost=dict(payload.get("constraint_level_boost", {})),
             recency_weight=float(payload.get("recency_weight", 0.1)),
             redundancy_penalty=float(payload.get("redundancy_penalty", 0.2)),
+            hint_weight=float(payload.get("hint_weight", 0.35)),
             max_chunks_per_level=dict(payload.get("max_chunks_per_level", {})),
             dedup_sim_threshold=float(payload.get("dedup_sim_threshold", 0.92)),
             dropped_topn=int(payload.get("dropped_topn", 8)),

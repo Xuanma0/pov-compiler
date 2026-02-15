@@ -310,6 +310,29 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "chain_nlq" / "fig_chain_failure_attribution_vs_budget_seconds.pdf").write_bytes(b"PDF")
     (compare_dir / "chain_nlq" / "fig_chain_success_vs_derive.png").write_bytes(b"PNG")
     (compare_dir / "chain_nlq" / "fig_chain_success_vs_derive.pdf").write_bytes(b"PDF")
+    # Optional chain repo compare input.
+    (compare_dir / "chain_repo_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "chain_repo_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "chain_repo_cmp" / "tables" / "table_chain_repo_compare.csv").write_text(
+        "uid,status_a,status_b,budget_seconds,chain_success_rate_a,chain_success_rate_b,delta_chain_success_rate\nu001,ok,ok,20,0.20,0.35,0.15\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_repo_cmp" / "tables" / "table_chain_repo_compare.md").write_text(
+        "# chain repo compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_repo_cmp" / "figures" / "fig_chain_repo_compare_success_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "chain_repo_cmp" / "figures" / "fig_chain_repo_compare_success_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_repo_cmp" / "figures" / "fig_chain_repo_compare_delta.png").write_bytes(b"PNG")
+    (compare_dir / "chain_repo_cmp" / "figures" / "fig_chain_repo_compare_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_repo_cmp" / "compare_summary.json").write_text(
+        json.dumps({"uids_total": 1, "budgets_matched": 1}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_repo_cmp" / "snapshot.json").write_text(
+        json.dumps({"selection": {"uids_found": 1}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -341,6 +364,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "bye_report_cmp"),
         "--chain-nlq-dir",
         str(compare_dir / "chain_nlq"),
+        "--chain-repo-compare-dir",
+        str(compare_dir / "chain_repo_cmp"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -410,6 +435,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_chain_success_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_chain_failure_attribution_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_chain_success_vs_derive.png").exists()
+    assert (out_dir / "chain_repo_compare" / "table_chain_repo_compare.csv").exists()
+    assert (out_dir / "chain_repo_compare" / "table_chain_repo_compare.md").exists()
+    assert (out_dir / "figures" / "fig_chain_repo_compare_success_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_chain_repo_compare_delta.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

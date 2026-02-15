@@ -202,25 +202,39 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     repo_selection = trace.get("repo_selection", {})
     if isinstance(repo_selection, dict) and repo_selection.get("enabled"):
         rtrace = dict(repo_selection.get("trace", {}))
+        st = dict(rtrace.get("selection_trace", {})) if isinstance(rtrace.get("selection_trace", {}), dict) else {}
         sel = list(repo_selection.get("selected_chunks", []))
-        lines.append(f"- policy_name: `{rtrace.get('selection_trace', {}).get('policy_name', '')}`")
-        lines.append(f"- policy_hash: `{rtrace.get('selection_trace', {}).get('policy_hash', '')}`")
+        lines.append(f"- policy_name: `{st.get('policy_name', '')}`")
+        lines.append(f"- policy_hash: `{st.get('policy_hash', '')}`")
         lines.append(f"- selected_chunks: {len(sel)}")
-        lines.append(f"- selected_breakdown_by_level: `{json.dumps(rtrace.get('selection_trace', {}).get('selected_breakdown_by_level', {}), ensure_ascii=False, sort_keys=True)}`")
-        lines.append(f"- dropped_topN: `{json.dumps(rtrace.get('selection_trace', {}).get('dropped_topN', []), ensure_ascii=False)}`")
+        lines.append(f"- selected_breakdown_by_level: `{json.dumps(st.get('selected_breakdown_by_level', {}), ensure_ascii=False, sort_keys=True)}`")
+        lines.append(
+            f"- repo_filtered_chunks_before/after: {int(st.get('hint_filter_before', 0))}->{int(st.get('hint_filter_after', 0))}"
+        )
+        lines.append(
+            f"- repo_filtered_reason_counts: `{json.dumps(st.get('hint_filtered_reason_counts', {}), ensure_ascii=False, sort_keys=True)}`"
+        )
+        lines.append(f"- query_hints: `{json.dumps(st.get('query_hints', {}), ensure_ascii=False, sort_keys=True)}`")
+        lines.append(f"- dropped_topN: `{json.dumps(st.get('dropped_topN', []), ensure_ascii=False)}`")
         if sel:
             lines.append("")
-            lines.append("| chunk_id | level | span | preview |")
-            lines.append("|---|---|---|---|")
+            lines.append("| chunk_id | level | span | hint_time | hint_place | hint_object | hint_score | final_score | preview |")
+            lines.append("|---|---|---|---:|---:|---:|---:|---:|---|")
+            fields_map = dict(st.get("per_chunk_score_fields", {})) if isinstance(st.get("per_chunk_score_fields", {}), dict) else {}
             for item in sel[:20]:
                 if not isinstance(item, dict):
                     continue
+                cid = str(item.get("id", item.get("chunk_id", "")))
+                fields = dict(fields_map.get(cid, {})) if isinstance(fields_map.get(cid, {}), dict) else {}
                 preview = str(item.get("text", "")).replace("|", " ").strip()
                 if len(preview) > 80:
                     preview = preview[:77] + "..."
                 lines.append(
-                    f"| {item.get('id', item.get('chunk_id', ''))} | {item.get('level', item.get('scale', ''))} | "
-                    f"{float(item.get('t0', 0.0)):.3f}-{float(item.get('t1', 0.0)):.3f} | {preview} |"
+                    f"| {cid} | {item.get('level', item.get('scale', ''))} | "
+                    f"{float(item.get('t0', 0.0)):.3f}-{float(item.get('t1', 0.0)):.3f} | "
+                    f"{float(fields.get('hint_time', 0.0)):.3f} | {float(fields.get('hint_place', 0.0)):.3f} | "
+                    f"{float(fields.get('hint_object', 0.0)):.3f} | {float(fields.get('hint_score', 0.0)):.3f} | "
+                    f"{float(fields.get('final_score', 0.0)):.3f} | {preview} |"
                 )
     else:
         lines.append("- repo_selection: disabled")
@@ -281,6 +295,7 @@ def parse_args() -> argparse.Namespace:
     group.add_argument("--no-enable-constraints", dest="enable_constraints", action="store_false")
     parser.set_defaults(enable_constraints=True)
     parser.add_argument("--use-repo", action="store_true", help="Enable repo-only context trace with query-aware selection")
+    parser.add_argument("--repo-policy", default="query_aware", help="Repo read policy when --use-repo is enabled")
     return parser.parse_args()
 
 
@@ -301,6 +316,7 @@ def main() -> int:
         top_k=int(args.top_k),
         enable_constraints=bool(args.enable_constraints),
         use_repo=bool(args.use_repo),
+        repo_policy=str(args.repo_policy),
     )
 
     out_dir = Path(args.out_dir)
@@ -355,6 +371,11 @@ def main() -> int:
             if isinstance(st, dict):
                 print(f"repo_policy={st.get('policy_name', '')}")
                 print(f"repo_selected_chunks={len(repo_sel.get('selected_chunks', []))}")
+                print(
+                    "repo_filtered_chunks_before="
+                    f"{int(st.get('hint_filter_before', 0))} repo_filtered_chunks_after={int(st.get('hint_filter_after', 0))}"
+                )
+                print(f"repo_filtered_reason_counts={st.get('hint_filtered_reason_counts', {})}")
     print(f"saved_report={report_md}")
     print(f"saved_trace={trace_json}")
     return 0

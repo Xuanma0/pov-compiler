@@ -45,6 +45,8 @@ def trace_query(
     top_k: int = 6,
     enable_constraints: bool = True,
     use_repo: bool = False,
+    repo_policy: str = "query_aware",
+    query_hints: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = ensure_events_v1(_as_output(output_json))
     retriever = Retriever(output_json=output, index=index_prefix, config=dict(retrieval_config or {}))
@@ -63,6 +65,8 @@ def trace_query(
             top_k=int(top_k),
             enable_constraints=bool(enable_constraints),
             use_repo=False,
+            repo_policy=str(repo_policy),
+            query_hints=None,
         )
         step1_hits = list(step1_trace.get("hits", []))
         step1_top = step1_hits[0] if step1_hits else None
@@ -105,6 +109,18 @@ def trace_query(
             top_k=int(top_k),
             enable_constraints=bool(enable_constraints),
             use_repo=bool(use_repo),
+            repo_policy=str(repo_policy),
+            query_hints={
+                "derived_constraints": dict(derived_constraints),
+                "chain_meta": {
+                    "is_chain": True,
+                    "chain_rel": str(chain_query.rel),
+                    "chain_step": "step2",
+                    "step1_query": step1_query,
+                    "step2_query": step2_query,
+                    "step2_query_derived": step2_query_derived,
+                },
+            },
         )
         combined = dict(step2_trace)
         combined["query"] = str(query)
@@ -270,8 +286,8 @@ def trace_query(
             mode="repo_only",
             budget={
                 "use_repo": True,
-                "repo_read_policy": "query_aware",
-                "repo_strategy": "query_aware",
+                "repo_read_policy": str(repo_policy),
+                "repo_strategy": str(repo_policy),
                 "repo_query": str(query),
                 "max_repo_chunks": max(6, int(top_k) * 4),
                 "max_repo_tokens": 240,
@@ -285,10 +301,12 @@ def trace_query(
                 "plan_intent": str(plan.intent),
                 "parsed_constraints": dict(plan.constraints),
                 "top_k": int(top_k),
+                "query_hints": dict(query_hints or {}),
             },
         )
         repo_selection = {
             "enabled": True,
+            "repo_policy": str(repo_policy),
             "selected_chunks": list(repo_ctx.get("repo_chunks", [])),
             "trace": dict(repo_ctx.get("repo_trace", {})),
         }

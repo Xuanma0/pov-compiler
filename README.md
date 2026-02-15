@@ -540,3 +540,23 @@ Chain mode now emits:
 - streaming chain policy smoke also exports:
   - `fig_streaming_chain_success_vs_budget_seconds.(png/pdf)`
   - `fig_streaming_chain_failure_attribution.(png/pdf)`
+
+### v1.26 Chain x Repo Query-Aware
+
+Trace chain query with repo-aware context selection:
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\trace_chain_repo_v126_demo --query "lost_object=door which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object chain_object_mode=hard" --use-repo --repo-policy query_aware
+```
+
+Run A/B compare for hard_pseudo_chain (`use_repo=False` vs `use_repo=True`):
+
+```text
+python scripts\run_chain_repo_compare.py --pov-json-dir data\outputs\ego4d_ab_real_n6\json --uids-file data\outputs\uids_match_real_n6.txt --out_dir data\outputs\chain_repo_compare_v126_demo --budgets "20/50/4,60/200/12" --repo-policy query_aware
+```
+
+Optional paper-ready integration:
+
+```text
+python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v18_demo\compare --out_dir data\outputs\ab_v18_demo\compare\paper_ready --chain-repo-compare-dir data\outputs\chain_repo_compare_v126_demo\compare
+```

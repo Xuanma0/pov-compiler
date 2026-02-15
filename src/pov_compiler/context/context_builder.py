@@ -521,6 +521,17 @@ def build_context(
         repo_query = str((budget or {}).get("repo_query", ""))
         if not repo_query and query_info and str(query_info.get("query", "")).strip():
             repo_query = str(query_info.get("query", "")).strip()
+        repo_query_hints: dict[str, Any] = {}
+        if isinstance(query_info, dict):
+            hints_raw = query_info.get("query_hints", None)
+            if isinstance(hints_raw, dict):
+                repo_query_hints.update(dict(hints_raw))
+            derived_raw = query_info.get("derived_constraints", None)
+            if isinstance(derived_raw, dict):
+                repo_query_hints["derived_constraints"] = dict(derived_raw)
+            chain_meta_raw = query_info.get("chain_meta", None)
+            if isinstance(chain_meta_raw, dict):
+                repo_query_hints["chain_meta"] = dict(chain_meta_raw)
         repo_selected_models, repo_selection_trace = select_chunks_for_query(
             repo_models,
             query=repo_query,
@@ -538,6 +549,7 @@ def build_context(
                 },
             },
             query_info=query_info,
+            query_hints=repo_query_hints if repo_query_hints else None,
             return_trace=True,
         )
         repo_selected = [_model_dump(chunk) for chunk in repo_selected_models]
