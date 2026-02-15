@@ -637,3 +637,16 @@ Include this panel in paper-ready export:
 ```text
 python scripts\export_paper_ready.py --out_dir data\outputs\paper_ready_v129_demo --streaming-chain-backoff-compare-dir data\outputs\streaming_chain_backoff_compare_v129_demo\compare
 ```
+
+### v1.30 Unified AB Integration for Streaming Chain Backoff
+
+Unified AB runner can now trigger streaming chain-backoff compare and auto-include it in paper-ready:
+
+```text
+python scripts\run_ab_bye_compare.py --root data\outputs\ab_v12_root --uids-file data\outputs\ab_v12_uids.txt --out_dir data\outputs\ab_v130_demo --jobs 1 --with-perception --stub-perception-backend stub --real-perception-backend stub --with-nlq --nlq-mode hard_pseudo_nlq --no-with-figs --with-streaming-budget --streaming-step-s 8 --with-streaming-chain-backoff --export-paper-ready
+```
+
+Key outputs:
+- `compare/streaming_chain_backoff/compare/tables/table_streaming_chain_backoff_compare.(csv/md)`
+- `compare/streaming_chain_backoff/compare/figures/fig_streaming_chain_backoff_*.png`
+- `compare/paper_ready/figures/fig_streaming_chain_backoff_*.png`

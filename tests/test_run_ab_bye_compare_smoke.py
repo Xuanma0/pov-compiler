@@ -134,6 +134,15 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
         "--with-streaming-budget",
         "--streaming-step-s",
         "8",
+        "--with-streaming-chain-backoff",
+        "--streaming-chain-backoff-budgets",
+        "20/50/4,40/100/8",
+        "--streaming-chain-backoff-step-s",
+        "8",
+        "--streaming-chain-backoff-policies",
+        "strict,ladder,adaptive",
+        "--streaming-chain-backoff-seed",
+        "0",
         "--export-paper-ready",
         "--with-reranker-sweep",
         "--reranker-sweep-grid",
@@ -176,6 +185,17 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "nlq_budget" / "real" / "figures" / "fig_nlq_critical_fn_rate_vs_budget_seconds.png").exists()
     assert (compare_dir / "streaming_budget" / "stub" / "aggregate" / "metrics_by_budget.csv").exists()
     assert (compare_dir / "streaming_budget" / "real" / "aggregate" / "metrics_by_budget.csv").exists()
+    assert (compare_dir / "streaming_chain_backoff" / "compare" / "tables" / "table_streaming_chain_backoff_compare.csv").exists()
+    assert (compare_dir / "streaming_chain_backoff" / "compare" / "tables" / "table_streaming_chain_backoff_compare.md").exists()
+    assert (
+        compare_dir
+        / "streaming_chain_backoff"
+        / "compare"
+        / "figures"
+        / "fig_streaming_chain_backoff_success_vs_budget_seconds.png"
+    ).exists()
+    assert (compare_dir / "streaming_chain_backoff" / "compare" / "figures" / "fig_streaming_chain_backoff_delta.png").exists()
+    assert (compare_dir / "streaming_chain_backoff" / "compare" / "snapshot.json").exists()
     assert (compare_dir / "budget_recommend" / "stub" / "tables" / "table_budget_recommend.csv").exists()
     assert (compare_dir / "budget_recommend" / "real" / "tables" / "table_budget_recommend.csv").exists()
     assert (compare_dir / "paper_ready" / "tables" / "table_budget_panel.csv").exists()
@@ -184,11 +204,20 @@ def test_run_ab_bye_compare_minimal(tmp_path: Path) -> None:
     assert (compare_dir / "paper_ready" / "report.md").exists()
     assert (compare_dir / "paper_ready" / "snapshot.json").exists()
     assert (compare_dir / "paper_ready" / "figures" / "fig_nlq_critical_fn_rate_vs_seconds.png").exists()
+    assert (compare_dir / "paper_ready" / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.png").exists()
+    assert (compare_dir / "paper_ready" / "tables" / "table_streaming_chain_backoff_compare.csv").exists()
     assert (compare_dir / "reranker_sweep" / "stub" / "aggregate" / "metrics_by_weights.csv").exists()
     assert (compare_dir / "reranker_sweep" / "real" / "aggregate" / "metrics_by_weights.csv").exists()
     assert (compare_dir / "paper_ready" / "reranker_sweep" / "metrics_by_weights.csv").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
+    assert (compare_dir / "snapshot.json").exists()
+    compare_snapshot = json.loads((compare_dir / "snapshot.json").read_text(encoding="utf-8"))
+    chain_backoff_cfg = compare_snapshot.get("streaming_chain_backoff", {})
+    assert chain_backoff_cfg.get("enabled") is True
+    assert str(chain_backoff_cfg.get("budgets")) == "20/50/4,40/100/8"
+    assert float(chain_backoff_cfg.get("step_s", -1.0)) == 8.0
+    assert int(chain_backoff_cfg.get("seed", -1)) == 0
 
 
 def test_run_ab_bye_compare_generates_uids_used_when_missing(tmp_path: Path) -> None:

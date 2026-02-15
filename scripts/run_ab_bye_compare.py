@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--uids-file", default=None, help="Optional UID list file for reproducible AB")
     parser.add_argument("--out_dir", required=True, help="Output root")
     parser.add_argument("--run-label", default="", help="Optional run label for trace/snapshot naming")
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--n", type=int, default=None)
 
@@ -46,6 +47,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nlq-budgets", default="20/50/4,40/100/8,60/200/12")
     _parse_bool_with_neg(parser, "with-streaming-budget", default=True)
     parser.add_argument("--streaming-step-s", type=float, default=8.0)
+    _parse_bool_with_neg(parser, "with-streaming-chain-backoff", default=False)
+    parser.add_argument("--streaming-chain-backoff-budgets", default=None)
+    parser.add_argument("--streaming-chain-backoff-step-s", type=float, default=None)
+    parser.add_argument("--streaming-chain-backoff-policies", default="strict,ladder,adaptive")
+    parser.add_argument("--streaming-chain-backoff-seed", type=int, default=None)
     _parse_bool_with_neg(parser, "with-repo", default=False)
     parser.add_argument("--repo-read-policy", default="query_aware")
     parser.add_argument("--repo-budget", default=None)
@@ -243,6 +249,26 @@ def _copy_snapshots(run_dir: Path, label: str, snapshots_root: Path) -> list[str
     return out
 
 
+def _pick_streaming_json(preferred_json_dir: Path, fallback_json_dir: Path, uids_file: Path | None) -> Path | None:
+    def _scan(dir_path: Path) -> list[Path]:
+        return sorted(dir_path.glob("*_v03_decisions.json"), key=lambda p: p.name.lower()) if dir_path.exists() else []
+
+    preferred_hits = _scan(preferred_json_dir)
+    fallback_hits = _scan(fallback_json_dir)
+    if uids_file and uids_file.exists():
+        requested_uids = [x.strip() for x in uids_file.read_text(encoding="utf-8").splitlines() if x.strip()]
+        for uid in requested_uids:
+            for base_dir in (preferred_json_dir, fallback_json_dir):
+                cand = base_dir / f"{uid}_v03_decisions.json"
+                if cand.exists():
+                    return cand
+    if preferred_hits:
+        return preferred_hits[0]
+    if fallback_hits:
+        return fallback_hits[0]
+    return None
+
+
 def _write_compare_readme(
     out_dir: Path,
     *,
@@ -255,6 +281,7 @@ def _write_compare_readme(
     cmd_bye_budget: list[list[str]],
     cmd_nlq_budget: list[list[str]],
     cmd_streaming_budget: list[list[str]],
+    cmd_streaming_chain_backoff: list[list[str]],
     cmd_reranker_sweep: list[list[str]],
     cmd_budget_recommend: list[list[str]],
     cmd_paper_ready: list[list[str]],
@@ -284,6 +311,8 @@ def _write_compare_readme(
         lines.append(_render_cmd(cmd))
     for cmd in cmd_streaming_budget:
         lines.append(_render_cmd(cmd))
+    for cmd in cmd_streaming_chain_backoff:
+        lines.append(_render_cmd(cmd))
     for cmd in cmd_reranker_sweep:
         lines.append(_render_cmd(cmd))
     for cmd in cmd_budget_recommend:
@@ -310,6 +339,7 @@ def _write_compare_readme(
             f"- `{out_dir / 'compare' / 'nlq_budget'}`",
             f"- `{out_dir / 'compare' / 'nlq_budget' / 'real' / 'aggregate' / 'table_lost_object_budget.csv'}`",
             f"- `{out_dir / 'compare' / 'streaming_budget'}`",
+            f"- `{out_dir / 'compare' / 'streaming_chain_backoff'}`",
             f"- `{out_dir / 'compare' / 'reranker_sweep'}`",
             f"- `{out_dir / 'compare' / 'budget_recommend'}`",
             f"- `{out_dir / 'compare' / 'paper_ready'}`",
@@ -343,6 +373,12 @@ def _write_compare_readme(
             f"- stub sweep: `{out_dir / 'compare' / 'reranker_sweep' / 'stub' / 'aggregate' / 'metrics_by_weights.csv'}`",
             f"- real sweep: `{out_dir / 'compare' / 'reranker_sweep' / 'real' / 'aggregate' / 'metrics_by_weights.csv'}`",
             "- includes decision-aligned score decomposition weights and strict+distractor objective.",
+            "",
+            "## Streaming Chain Backoff",
+            "",
+            f"- compare table: `{out_dir / 'compare' / 'streaming_chain_backoff' / 'compare' / 'tables' / 'table_streaming_chain_backoff_compare.csv'}`",
+            f"- success curve: `{out_dir / 'compare' / 'streaming_chain_backoff' / 'compare' / 'figures' / 'fig_streaming_chain_backoff_success_vs_budget_seconds.png'}`",
+            f"- delta figure: `{out_dir / 'compare' / 'streaming_chain_backoff' / 'compare' / 'figures' / 'fig_streaming_chain_backoff_delta.png'}`",
         ]
     )
     (out_dir / "compare" / "README.md").write_text("\n".join(lines), encoding="utf-8")
@@ -364,6 +400,7 @@ def main() -> int:
     compare_nlq_budget_real = compare_dir / "nlq_budget" / "real"
     compare_streaming_budget_stub = compare_dir / "streaming_budget" / "stub"
     compare_streaming_budget_real = compare_dir / "streaming_budget" / "real"
+    compare_streaming_chain_backoff = compare_dir / "streaming_chain_backoff"
     compare_reranker_sweep_stub = compare_dir / "reranker_sweep" / "stub"
     compare_reranker_sweep_real = compare_dir / "reranker_sweep" / "real"
     compare_budget_recommend_stub = compare_dir / "budget_recommend" / "stub"
@@ -382,6 +419,7 @@ def main() -> int:
     compare_nlq_budget_real.mkdir(parents=True, exist_ok=True)
     compare_streaming_budget_stub.mkdir(parents=True, exist_ok=True)
     compare_streaming_budget_real.mkdir(parents=True, exist_ok=True)
+    compare_streaming_chain_backoff.mkdir(parents=True, exist_ok=True)
     compare_reranker_sweep_stub.mkdir(parents=True, exist_ok=True)
     compare_reranker_sweep_real.mkdir(parents=True, exist_ok=True)
     compare_budget_recommend_stub.mkdir(parents=True, exist_ok=True)
@@ -716,6 +754,48 @@ def main() -> int:
                 return rc
             streaming_budget_cmds.append(cmd)
 
+    chain_backoff_budgets = str(args.streaming_chain_backoff_budgets).strip() if args.streaming_chain_backoff_budgets else str(args.nlq_budgets)
+    chain_backoff_step_s = (
+        float(args.streaming_chain_backoff_step_s)
+        if args.streaming_chain_backoff_step_s is not None
+        else float(args.streaming_step_s if args.streaming_step_s is not None else 8.0)
+    )
+    chain_backoff_seed = int(args.streaming_chain_backoff_seed) if args.streaming_chain_backoff_seed is not None else int(args.seed)
+    streaming_chain_backoff_cmds: list[list[str]] = []
+    if args.with_streaming_chain_backoff:
+        chain_backoff_compare_script = ROOT / "scripts" / "run_streaming_chain_backoff_compare.py"
+        chosen_json = _pick_streaming_json(run_real / "json", run_stub / "json", effective_uids_file)
+        if chosen_json is None:
+            print("error=with-streaming-chain-backoff enabled but no *_v03_decisions.json found in run_real/run_stub")
+            return 6
+        cmd_chain_backoff = [
+            sys.executable,
+            str(chain_backoff_compare_script),
+            "--json",
+            str(chosen_json),
+            "--out_dir",
+            str(compare_streaming_chain_backoff),
+            "--budgets",
+            str(chain_backoff_budgets),
+            "--step-s",
+            str(float(chain_backoff_step_s)),
+            "--policies",
+            str(args.streaming_chain_backoff_policies),
+            "--seed",
+            str(int(chain_backoff_seed)),
+            "--mode",
+            str(args.nlq_mode),
+        ]
+        rc = _run(
+            cmd_chain_backoff,
+            cwd=ROOT,
+            log_prefix=compare_dir / "streaming_chain_backoff_compare",
+            commands_file=commands_file,
+        )
+        if rc != 0:
+            return rc
+        streaming_chain_backoff_cmds.append(cmd_chain_backoff)
+
     reranker_sweep_cmds: list[list[str]] = []
     if args.with_reranker_sweep:
         sweep_script = ROOT / "scripts" / "sweep_reranker.py"
@@ -905,6 +985,10 @@ def main() -> int:
             cmd_paper_ready.extend(["--lost-object-panel-dir", str(compare_nlq_budget_real / "aggregate")])
             if str(args.nlq_mode).strip().lower() == "hard_pseudo_chain":
                 cmd_paper_ready.extend(["--chain-nlq-dir", str(compare_nlq_budget_real / "aggregate")])
+        if args.with_streaming_chain_backoff:
+            cmd_paper_ready.extend(
+                ["--streaming-chain-backoff-compare-dir", str(compare_streaming_chain_backoff / "compare")]
+            )
         rc = _run(cmd_paper_ready, cwd=ROOT, log_prefix=compare_dir / "paper_ready_export", commands_file=commands_file)
         if rc != 0:
             return rc
@@ -912,6 +996,35 @@ def main() -> int:
 
     _copy_snapshots(run_stub, "stub", compare_snapshots)
     _copy_snapshots(run_real, "real", compare_snapshots)
+    compare_snapshot = {
+        "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "inputs": {
+            "root": str(args.root),
+            "uids_file": str(effective_uids_file) if effective_uids_file else None,
+            "seed": int(args.seed),
+            "with_eval": bool(args.with_eval),
+            "with_nlq": bool(args.with_nlq),
+            "nlq_mode": str(args.nlq_mode),
+            "with_streaming_budget": bool(args.with_streaming_budget),
+            "streaming_step_s": float(args.streaming_step_s),
+            "with_streaming_chain_backoff": bool(args.with_streaming_chain_backoff),
+            "export_paper_ready": bool(args.export_paper_ready),
+        },
+        "outputs": {
+            "run_stub": str(run_stub),
+            "run_real": str(run_real),
+            "compare_dir": str(compare_dir),
+        },
+        "streaming_chain_backoff": {
+            "enabled": bool(args.with_streaming_chain_backoff),
+            "dir": str(compare_streaming_chain_backoff),
+            "policies": str(args.streaming_chain_backoff_policies),
+            "budgets": str(chain_backoff_budgets),
+            "step_s": float(chain_backoff_step_s),
+            "seed": int(chain_backoff_seed),
+        },
+    }
+    (compare_dir / "snapshot.json").write_text(json.dumps(compare_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     _write_compare_readme(
         out_dir,
         run_label=str(args.run_label),
@@ -923,6 +1036,7 @@ def main() -> int:
         cmd_bye_budget=bye_budget_cmds,
         cmd_nlq_budget=nlq_budget_cmds,
         cmd_streaming_budget=streaming_budget_cmds,
+        cmd_streaming_chain_backoff=streaming_chain_backoff_cmds,
         cmd_reranker_sweep=reranker_sweep_cmds,
         cmd_budget_recommend=budget_recommend_cmds,
         cmd_paper_ready=paper_ready_cmds,
@@ -955,6 +1069,9 @@ def main() -> int:
     if args.with_streaming_budget:
         print(f"streaming_budget_stub_saved={compare_streaming_budget_stub}")
         print(f"streaming_budget_real_saved={compare_streaming_budget_real}")
+    if args.with_streaming_chain_backoff:
+        print(f"streaming_chain_backoff_saved={compare_streaming_chain_backoff}")
+        print(f"streaming_chain_backoff_compare_saved={compare_streaming_chain_backoff / 'compare'}")
     if args.with_reranker_sweep:
         print(f"reranker_sweep_stub_saved={compare_reranker_sweep_stub}")
         print(f"reranker_sweep_real_saved={compare_reranker_sweep_real}")
@@ -972,6 +1089,9 @@ def main() -> int:
                     pass
     if args.export_paper_ready:
         print(f"paper_ready_saved={compare_paper_ready}")
+        if args.with_streaming_chain_backoff:
+            chain_fig = compare_paper_ready / "figures" / "fig_streaming_chain_backoff_success_vs_budget_seconds.png"
+            print(f"paper_ready_chain_backoff_fig_exists={str(chain_fig.exists()).lower()}")
         panel_csv = compare_paper_ready / "tables" / "table_budget_panel.csv"
         if panel_csv.exists():
             try:
