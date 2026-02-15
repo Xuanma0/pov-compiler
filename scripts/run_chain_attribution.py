@@ -232,11 +232,15 @@ def _extract_metrics(nlq_summary_csv: Path, safety_json: Path) -> dict[str, floa
         "chain_success_rate": _num("chain_success_rate"),
         "chain_waiting_rate": _num("chain_waiting_rate"),
         "chain_fail_constraints_over_filtered_rate": _num("chain_fail_constraints_over_filtered_rate"),
+        "chain_fail_backoff_exhausted_rate": _num("chain_fail_backoff_exhausted_rate"),
         "chain_fail_retrieval_distractor_rate": _num("chain_fail_retrieval_distractor_rate"),
         "chain_fail_evidence_missing_rate": _num("chain_fail_evidence_missing_rate"),
         "mrr_strict": _num("mrr"),
         "hit_at_k_strict": _num("hit_at_k_strict"),
         "top1_in_distractor_rate": _num("top1_in_distractor_rate"),
+        "backoff_used_rate": _num("backoff_used_rate"),
+        "backoff_mean_level": _num("backoff_mean_level"),
+        "backoff_exhausted_rate": _num("backoff_exhausted_rate"),
         "critical_fn_rate": float(_to_float(safety_payload.get("critical_fn_rate")) or 0.0),
     }
 
@@ -351,6 +355,35 @@ def _make_figures(rows: list[dict[str, Any]], out_dir: Path, formats: list[str])
         plt.savefig(p)
         fig_paths.append(str(p))
     plt.close()
+
+    # 5) Backoff vs budget (used rate + mean level).
+    p5 = out_dir / "fig_chain_attribution_backoff_vs_budget_seconds"
+    fig, axes = plt.subplots(1, 2, figsize=(10.2, 4.1))
+    ax0, ax1 = axes
+    for code in variants:
+        ys_used: list[float] = []
+        ys_level: list[float] = []
+        for x in xs:
+            row = by_budget.get(x, {}).get(code, {})
+            ys_used.append(float(_to_float(row.get("backoff_used_rate")) or 0.0))
+            ys_level.append(float(_to_float(row.get("backoff_mean_level")) or 0.0))
+        ax0.plot(xs, ys_used, marker="o", label=f"variant_{code}")
+        ax1.plot(xs, ys_level, marker="o", label=f"variant_{code}")
+    ax0.set_xlabel("budget_seconds")
+    ax0.set_ylabel("backoff_used_rate")
+    ax0.set_title("Backoff Used Rate")
+    ax0.grid(True, alpha=0.35)
+    ax1.set_xlabel("budget_seconds")
+    ax1.set_ylabel("backoff_mean_level")
+    ax1.set_title("Backoff Mean Level")
+    ax1.grid(True, alpha=0.35)
+    ax1.legend(ncol=2, fontsize=8)
+    fig.tight_layout()
+    for ext in formats:
+        p = p5.with_suffix(f".{ext}")
+        fig.savefig(p)
+        fig_paths.append(str(p))
+    plt.close(fig)
 
     return fig_paths
 
@@ -526,12 +559,18 @@ def main() -> int:
                 "chain_fail_constraints_over_filtered_rate": _mean(
                     [float(v.get("chain_fail_constraints_over_filtered_rate", 0.0)) for v in vals]
                 ),
+                "chain_fail_backoff_exhausted_rate": _mean(
+                    [float(v.get("chain_fail_backoff_exhausted_rate", 0.0)) for v in vals]
+                ),
                 "chain_fail_retrieval_distractor_rate": _mean(
                     [float(v.get("chain_fail_retrieval_distractor_rate", 0.0)) for v in vals]
                 ),
                 "chain_fail_evidence_missing_rate": _mean(
                     [float(v.get("chain_fail_evidence_missing_rate", 0.0)) for v in vals]
                 ),
+                "backoff_used_rate": _mean([float(v.get("backoff_used_rate", 0.0)) for v in vals]),
+                "backoff_mean_level": _mean([float(v.get("backoff_mean_level", 0.0)) for v in vals]),
+                "backoff_exhausted_rate": _mean([float(v.get("backoff_exhausted_rate", 0.0)) for v in vals]),
                 "mrr_strict": _mean([float(v.get("mrr_strict", 0.0)) for v in vals]),
                 "hit_at_k_strict": _mean([float(v.get("hit_at_k_strict", 0.0)) for v in vals]),
                 "top1_in_distractor_rate": _mean([float(v.get("top1_in_distractor_rate", 0.0)) for v in vals]),
@@ -548,11 +587,23 @@ def main() -> int:
             row["delta_fail_constraints_over_filtered"] = float(row.get("chain_fail_constraints_over_filtered_rate", 0.0)) - float(
                 baseline.get("chain_fail_constraints_over_filtered_rate", 0.0)
             )
+            row["delta_fail_backoff_exhausted"] = float(row.get("chain_fail_backoff_exhausted_rate", 0.0)) - float(
+                baseline.get("chain_fail_backoff_exhausted_rate", 0.0)
+            )
             row["delta_fail_retrieval_distractor"] = float(row.get("chain_fail_retrieval_distractor_rate", 0.0)) - float(
                 baseline.get("chain_fail_retrieval_distractor_rate", 0.0)
             )
             row["delta_fail_evidence_missing"] = float(row.get("chain_fail_evidence_missing_rate", 0.0)) - float(
                 baseline.get("chain_fail_evidence_missing_rate", 0.0)
+            )
+            row["delta_backoff_used_rate"] = float(row.get("backoff_used_rate", 0.0)) - float(
+                baseline.get("backoff_used_rate", 0.0)
+            )
+            row["delta_backoff_mean_level"] = float(row.get("backoff_mean_level", 0.0)) - float(
+                baseline.get("backoff_mean_level", 0.0)
+            )
+            row["delta_backoff_exhausted_rate"] = float(row.get("backoff_exhausted_rate", 0.0)) - float(
+                baseline.get("backoff_exhausted_rate", 0.0)
             )
             agg_rows.append(row)
             failure_rows.append(
@@ -562,6 +613,7 @@ def main() -> int:
                     "variant_code": variant.code,
                     "variant_name": variant.name,
                     "chain_fail_constraints_over_filtered_rate": row.get("chain_fail_constraints_over_filtered_rate", 0.0),
+                    "chain_fail_backoff_exhausted_rate": row.get("chain_fail_backoff_exhausted_rate", 0.0),
                     "chain_fail_retrieval_distractor_rate": row.get("chain_fail_retrieval_distractor_rate", 0.0),
                     "chain_fail_evidence_missing_rate": row.get("chain_fail_evidence_missing_rate", 0.0),
                 }
@@ -580,8 +632,12 @@ def main() -> int:
         "chain_success_rate",
         "chain_waiting_rate",
         "chain_fail_constraints_over_filtered_rate",
+        "chain_fail_backoff_exhausted_rate",
         "chain_fail_retrieval_distractor_rate",
         "chain_fail_evidence_missing_rate",
+        "backoff_used_rate",
+        "backoff_mean_level",
+        "backoff_exhausted_rate",
         "mrr_strict",
         "hit_at_k_strict",
         "top1_in_distractor_rate",
@@ -589,8 +645,12 @@ def main() -> int:
         "delta_success",
         "delta_waiting",
         "delta_fail_constraints_over_filtered",
+        "delta_fail_backoff_exhausted",
         "delta_fail_retrieval_distractor",
         "delta_fail_evidence_missing",
+        "delta_backoff_used_rate",
+        "delta_backoff_mean_level",
+        "delta_backoff_exhausted_rate",
     ]
     failure_cols = [
         "budget_key",
@@ -598,6 +658,7 @@ def main() -> int:
         "variant_code",
         "variant_name",
         "chain_fail_constraints_over_filtered_rate",
+        "chain_fail_backoff_exhausted_rate",
         "chain_fail_retrieval_distractor_rate",
         "chain_fail_evidence_missing_rate",
     ]
@@ -658,6 +719,12 @@ def main() -> int:
             "table_chain_failure_breakdown_csv": str(fail_csv),
             "table_chain_failure_breakdown_md": str(fail_md),
             "figures": figure_paths,
+            "backoff_metrics_present": bool(
+                any(
+                    ("backoff_used_rate" in row) or ("backoff_mean_level" in row) or ("backoff_exhausted_rate" in row)
+                    for row in agg_rows
+                )
+            ),
         },
     }
     compare_summary_path = compare_dir / "compare_summary.json"

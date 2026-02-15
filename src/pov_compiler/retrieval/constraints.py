@@ -111,6 +111,14 @@ class ConstraintApplyResult:
     filtered_before: int
     filtered_after: int
     steps: list["ConstraintStepTrace"]
+    chain_backoff_enabled: bool = False
+    chain_backoff_attempts: list[dict[str, Any]] = None  # type: ignore[assignment]
+    chain_backoff_chosen_level: int | None = None
+    chain_backoff_exhausted: bool = False
+
+    def __post_init__(self) -> None:
+        if self.chain_backoff_attempts is None:
+            self.chain_backoff_attempts = []
 
 
 @dataclass
@@ -473,6 +481,64 @@ def _apply_once(
     return working, applied, steps
 
 
+def _is_chain_query(constraints: dict[str, Any]) -> bool:
+    keys = (
+        "chain_time_mode",
+        "chain_time_min_s",
+        "chain_time_max_s",
+        "chain_place_mode",
+        "chain_place_value",
+        "chain_object_mode",
+        "chain_object_value",
+    )
+    return any(k in constraints for k in keys)
+
+
+def _chain_backoff_levels(
+    *,
+    enabled: set[str],
+    constraints: dict[str, Any],
+) -> list[tuple[int, set[str]]]:
+    levels: list[tuple[int, set[str]]] = []
+    base = set(enabled)
+    levels.append((0, set(base)))
+
+    lvl1 = set(base)
+    lvl1.discard("chain_object_match")
+    levels.append((1, lvl1))
+
+    lvl2 = set(lvl1)
+    lvl2.discard("object_match")
+    levels.append((2, lvl2))
+
+    lvl3 = set(lvl2)
+    lvl3.discard("place_first_last")
+    levels.append((3, lvl3))
+
+    lvl4 = set(lvl3)
+    lvl4.discard("chain_time_range")
+    levels.append((4, lvl4))
+
+    dedup: list[tuple[int, set[str]]] = []
+    seen: set[tuple[str, ...]] = set()
+    for level, en in levels:
+        key = tuple(sorted(str(x) for x in en))
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append((level, en))
+    return dedup
+
+
+def _attempt_payload(level: int, before: int, after: int, applied: list[str]) -> dict[str, Any]:
+    return {
+        "level": int(level),
+        "before": int(before),
+        "after": int(after),
+        "applied_constraints": [str(x) for x in applied],
+    }
+
+
 def apply_constraints_detailed(
     hits: list[Hit],
     query_plan: QueryPlan,
@@ -524,8 +590,13 @@ def apply_constraints_detailed(
             filtered_before=before,
             filtered_after=len(filtered),
             steps=all_steps,
+            chain_backoff_enabled=False,
+            chain_backoff_attempts=[],
+            chain_backoff_chosen_level=None,
+            chain_backoff_exhausted=False,
         )
 
+    chain_query = _is_chain_query(constraints)
     chain_hard_active = bool(
         (
             str(constraints.get("chain_time_mode", "")).strip().lower() == "hard"
@@ -543,15 +614,58 @@ def apply_constraints_detailed(
             and bool(str(constraints.get("chain_object_value", "")).strip())
         )
     )
-    if chain_hard_active:
+
+    if chain_query and chain_hard_active:
+        attempts: list[dict[str, Any]] = []
+        strict_level_after = int(len(filtered))
+        attempts.append(_attempt_payload(0, before, strict_level_after, applied))
+        levels = _chain_backoff_levels(enabled=enabled, constraints=constraints)
+        chosen_hits: list[Hit] = []
+        chosen_applied: list[str] = list(applied)
+        chosen_steps: list[ConstraintStepTrace] = list(steps)
+        chosen_level: int | None = None
+        for level, level_enabled in levels:
+            if int(level) == 0:
+                if filtered:
+                    chosen_hits = list(filtered)
+                    chosen_level = 0
+                    break
+                continue
+            cand_hits, cand_applied, cand_steps = _apply_once(hits, query_plan, resolved, level_enabled, output)
+            attempts.append(_attempt_payload(level, before, len(cand_hits), cand_applied))
+            if cand_hits:
+                chosen_hits = list(cand_hits)
+                chosen_applied = list(cand_applied)
+                chosen_steps = list(cand_steps)
+                chosen_level = int(level)
+                break
+        if chosen_level is not None and chosen_hits:
+            relaxed = [f"chain_backoff_level_{k}" for k in range(1, int(chosen_level) + 1)]
+            return ConstraintApplyResult(
+                hits=chosen_hits,
+                applied=list(dict.fromkeys(chosen_applied)),
+                relaxed=relaxed,
+                used_fallback=False,
+                filtered_before=before,
+                filtered_after=len(chosen_hits),
+                steps=chosen_steps,
+                chain_backoff_enabled=True,
+                chain_backoff_attempts=attempts,
+                chain_backoff_chosen_level=int(chosen_level),
+                chain_backoff_exhausted=False,
+            )
         return ConstraintApplyResult(
             hits=[],
-            applied=applied_union,
-            relaxed=relaxed,
+            applied=list(dict.fromkeys(chosen_applied)),
+            relaxed=[f"chain_backoff_level_{k}" for k in range(1, 5)],
             used_fallback=False,
             filtered_before=before,
             filtered_after=0,
-            steps=all_steps,
+            steps=chosen_steps,
+            chain_backoff_enabled=True,
+            chain_backoff_attempts=attempts,
+            chain_backoff_chosen_level=None,
+            chain_backoff_exhausted=True,
         )
 
     if not resolved.relax_on_empty:
@@ -563,6 +677,10 @@ def apply_constraints_detailed(
             filtered_before=before,
             filtered_after=0,
             steps=all_steps,
+            chain_backoff_enabled=False,
+            chain_backoff_attempts=[],
+            chain_backoff_chosen_level=None,
+            chain_backoff_exhausted=False,
         )
 
     current_enabled = set(enabled)
@@ -586,6 +704,10 @@ def apply_constraints_detailed(
                 filtered_before=before,
                 filtered_after=len(filtered_try),
                 steps=all_steps,
+                chain_backoff_enabled=False,
+                chain_backoff_attempts=[],
+                chain_backoff_chosen_level=None,
+                chain_backoff_exhausted=False,
             )
 
     return ConstraintApplyResult(
@@ -596,6 +718,10 @@ def apply_constraints_detailed(
         filtered_before=before,
         filtered_after=len(hits),
         steps=all_steps,
+        chain_backoff_enabled=False,
+        chain_backoff_attempts=[],
+        chain_backoff_chosen_level=None,
+        chain_backoff_exhausted=False,
     )
 
 

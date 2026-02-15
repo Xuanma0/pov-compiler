@@ -408,6 +408,7 @@ def _make_report(
                 "step1_no_hit",
                 "step2_no_hit",
                 "constraints_over_filtered",
+                "backoff_exhausted",
                 "retrieval_distractor",
                 "evidence_missing",
                 "budget_insufficient",
@@ -534,6 +535,11 @@ def _write_chain_summary(
                 "chain_filtered_ratio_step2": float(
                     sum(float(r.get("chain_filtered_ratio_step2", 0.0)) for r in rows) / n
                 ),
+                "backoff_used_rate": float(sum(float(r.get("chain_backoff_used", 0.0)) for r in rows) / n),
+                "backoff_mean_level": float(sum(float(r.get("chain_backoff_level", 0.0)) for r in rows) / n),
+                "backoff_exhausted_rate": float(
+                    sum(1.0 if bool(r.get("chain_backoff_exhausted", False)) else 0.0 for r in rows) / n
+                ),
             }
         )
 
@@ -543,15 +549,18 @@ def _write_chain_summary(
     md_lines: list[str] = [
         "# Chain Summary",
         "",
-        "| variant | chain_combo | chain_derive | budget | hit@k_strict | chain_success | top1_in_distractor_rate |",
-        "|---|---|---|---|---:|---:|---:|",
+        "| variant | chain_combo | chain_derive | budget | hit@k_strict | chain_success | top1_in_distractor_rate | backoff_used_rate | backoff_mean_level | backoff_exhausted_rate |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in out_rows:
         budget_key = f"{int(float(row.get('budget_max_total_s', 0.0)))}/{int(row.get('budget_max_tokens', 0))}/{int(row.get('budget_max_decisions', 0))}"
         md_lines.append(
             f"| {row.get('variant', '')} | {row.get('chain_combo', '')} | {row.get('chain_derive', '')} | {budget_key} | "
             f"{float(row.get('hit_at_k_strict', 0.0)):.4f} | {float(row.get('chain_success_rate', 0.0)):.4f} | "
-            f"{float(row.get('top1_in_distractor_rate', 0.0)):.4f} |"
+            f"{float(row.get('top1_in_distractor_rate', 0.0)):.4f} | "
+            f"{float(row.get('backoff_used_rate', 0.0)):.4f} | "
+            f"{float(row.get('backoff_mean_level', 0.0)):.4f} | "
+            f"{float(row.get('backoff_exhausted_rate', 0.0)):.4f} |"
         )
     table_md.write_text("\n".join(md_lines), encoding="utf-8")
 
@@ -597,6 +606,7 @@ def _write_chain_failure_attribution(
         "step1_no_hit",
         "step2_no_hit",
         "constraints_over_filtered",
+        "backoff_exhausted",
         "retrieval_distractor",
         "evidence_missing",
         "budget_insufficient",
@@ -643,8 +653,8 @@ def _write_chain_failure_attribution(
     md_lines: list[str] = [
         "# Chain Failure Attribution",
         "",
-        "| variant | chain_derive | budget | chain_success | step1_no_hit | step2_no_hit | constraints_over_filtered | retrieval_distractor | evidence_missing | budget_insufficient | other |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| variant | chain_derive | budget | chain_success | step1_no_hit | step2_no_hit | constraints_over_filtered | backoff_exhausted | retrieval_distractor | evidence_missing | budget_insufficient | other |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in out_rows:
         budget_key = (
@@ -658,6 +668,7 @@ def _write_chain_failure_attribution(
             f"{float(row.get('chain_fail_step1_no_hit_rate', 0.0)):.4f} | "
             f"{float(row.get('chain_fail_step2_no_hit_rate', 0.0)):.4f} | "
             f"{float(row.get('chain_fail_constraints_over_filtered_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_backoff_exhausted_rate', 0.0)):.4f} | "
             f"{float(row.get('chain_fail_retrieval_distractor_rate', 0.0)):.4f} | "
             f"{float(row.get('chain_fail_evidence_missing_rate', 0.0)):.4f} | "
             f"{float(row.get('chain_fail_budget_insufficient_rate', 0.0)):.4f} | "

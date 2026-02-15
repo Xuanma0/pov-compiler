@@ -354,6 +354,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_failure_attribution_vs_budget_seconds.pdf").write_bytes(b"PDF")
     (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_tradeoff.png").write_bytes(b"PNG")
     (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_tradeoff.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_backoff_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_backoff_vs_budget_seconds.pdf").write_bytes(b"PDF")
     (compare_dir / "chain_attr" / "compare_summary.json").write_text(
         json.dumps({"budgets_matched": 1}, ensure_ascii=False),
         encoding="utf-8",
@@ -476,6 +478,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "chain_attribution" / "table_chain_failure_breakdown.md").exists()
     assert (out_dir / "figures" / "fig_chain_attribution_success_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_chain_attribution_delta_success_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_chain_attribution_backoff_vs_budget_seconds.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

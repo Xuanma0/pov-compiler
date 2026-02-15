@@ -153,6 +153,10 @@ def trace_query(
                 "applied_constraints": list(step2_trace.get("constraint_trace", {}).get("applied_constraints", [])),
                 "filtered_hits_before": int(step2_trace.get("constraint_trace", {}).get("filtered_hits_before", 0)),
                 "filtered_hits_after": int(step2_trace.get("constraint_trace", {}).get("filtered_hits_after", 0)),
+                "chain_backoff_enabled": bool(step2_trace.get("constraint_trace", {}).get("chain_backoff_enabled", False)),
+                "chain_backoff_chosen_level": step2_trace.get("constraint_trace", {}).get("chain_backoff_chosen_level", None),
+                "chain_backoff_exhausted": bool(step2_trace.get("constraint_trace", {}).get("chain_backoff_exhausted", False)),
+                "chain_backoff_attempts": list(step2_trace.get("constraint_trace", {}).get("chain_backoff_attempts", [])),
                 "topk_hits": list(step2_trace.get("hits", []))[: max(1, int(top_k))],
                 "chosen_top1": dict(step2_trace.get("hits", [{}])[0]) if list(step2_trace.get("hits", [])) else {},
                 "top1_kind": str(step2_trace.get("top1_kind", "")),
@@ -375,6 +379,14 @@ def trace_query(
             "filtered_hits_before": int(constraint_result.filtered_before),
             "filtered_hits_after": int(constraint_result.filtered_after),
             "used_fallback": bool(constraint_result.used_fallback),
+            "chain_backoff_enabled": bool(constraint_result.chain_backoff_enabled),
+            "chain_backoff_attempts": [dict(x) for x in list(constraint_result.chain_backoff_attempts)],
+            "chain_backoff_chosen_level": (
+                int(constraint_result.chain_backoff_chosen_level)
+                if constraint_result.chain_backoff_chosen_level is not None
+                else None
+            ),
+            "chain_backoff_exhausted": bool(constraint_result.chain_backoff_exhausted),
             "constraint_steps": [
                 {
                     "name": str(step.name),

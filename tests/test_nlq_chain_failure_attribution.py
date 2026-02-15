@@ -47,6 +47,7 @@ def test_chain_failure_reason_columns_exist() -> None:
         "step1_no_hit",
         "step2_no_hit",
         "constraints_over_filtered",
+        "backoff_exhausted",
         "retrieval_distractor",
         "evidence_missing",
         "budget_insufficient",

@@ -587,3 +587,27 @@ Include chain attribution panel in paper-ready export:
 ```text
 python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v18_demo\compare --out_dir data\outputs\paper_ready_v127_demo --chain-attribution-dir data\outputs\chain_attr_v127_demo\compare
 ```
+
+### v1.28 Chain Backoff Ladder
+
+Chain step2 now uses a deterministic backoff ladder when strict chain constraints produce zero hits:
+- `chain_backoff_enabled`
+- `chain_backoff_attempts` (level/before/after/applied_constraints)
+- `chain_backoff_chosen_level`
+- `chain_backoff_exhausted`
+
+Minimal trace command:
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\trace_chain_backoff_v128_demo --query "lost_object=door which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object chain_object_mode=hard"
+```
+
+Chain NLQ outputs now include backoff metrics in `table_chain_summary.(csv/md)`:
+- `backoff_used_rate`
+- `backoff_mean_level`
+- `backoff_exhausted_rate`
+
+`run_chain_attribution.py` also exports:
+- `fig_chain_attribution_backoff_vs_budget_seconds.(png/pdf)`
+
+And `export_paper_ready.py --chain-attribution-dir ...` copies this figure into paper-ready.

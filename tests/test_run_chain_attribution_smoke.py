@@ -93,6 +93,7 @@ def test_run_chain_attribution_smoke(tmp_path: Path) -> None:
     assert (compare_dir / "tables" / "table_chain_failure_breakdown.md").exists()
     assert (compare_dir / "figures" / "fig_chain_attribution_success_vs_budget_seconds.png").exists()
     assert (compare_dir / "figures" / "fig_chain_attribution_delta_success_vs_budget_seconds.png").exists()
+    assert (compare_dir / "figures" / "fig_chain_attribution_backoff_vs_budget_seconds.png").exists()
     assert (compare_dir / "snapshot.json").exists()
     assert (compare_dir / "commands.sh").exists()
     assert (compare_dir / "README.md").exists()
@@ -101,4 +102,3 @@ def test_run_chain_attribution_smoke(tmp_path: Path) -> None:
         rows = list(csv.DictReader(f))
     assert rows
     assert "delta_success" in rows[0]
-

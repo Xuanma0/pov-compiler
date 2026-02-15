@@ -426,6 +426,14 @@ def evaluate_nlq_samples(
                     "filtered_hits_before": int(cresult.filtered_before),
                     "filtered_hits_after": int(cresult.filtered_after),
                     "used_fallback": bool(cresult.used_fallback),
+                    "chain_backoff_enabled": bool(cresult.chain_backoff_enabled),
+                    "chain_backoff_chosen_level": (
+                        int(cresult.chain_backoff_chosen_level)
+                        if cresult.chain_backoff_chosen_level is not None
+                        else -1
+                    ),
+                    "chain_backoff_exhausted": bool(cresult.chain_backoff_exhausted),
+                    "chain_backoff_attempts": json.dumps(list(cresult.chain_backoff_attempts), ensure_ascii=False),
                     "relaxed_first_constraint": relaxed_first,
                     "top1_kind": top1_kind,
                     "top1_source_query": top1_source_query,
@@ -512,7 +520,9 @@ def evaluate_nlq_samples(
                 if chain_step1_has_hit <= 0.0:
                     chain_fail_reason = "step1_no_hit"
                 elif chain_step2_has_hit <= 0.0:
-                    if step2_before > 0.0 and step2_after <= 0.0:
+                    if bool(cresult.chain_backoff_exhausted):
+                        chain_fail_reason = "backoff_exhausted"
+                    elif step2_before > 0.0 and step2_after <= 0.0:
                         chain_fail_reason = "constraints_over_filtered"
                     else:
                         chain_fail_reason = "step2_no_hit"
@@ -541,6 +551,12 @@ def evaluate_nlq_samples(
                 row["chain_derived_place_used"] = float(chain_derived_place_used)
                 row["chain_derived_object_used"] = float(chain_derived_object_used)
                 row["chain_derived_nonempty"] = float(chain_derived_nonempty)
+                row["chain_backoff_used"] = float(1.0 if bool(cresult.chain_backoff_enabled) else 0.0)
+                row["chain_backoff_level"] = float(
+                    cresult.chain_backoff_chosen_level
+                    if cresult.chain_backoff_chosen_level is not None
+                    else (4.0 if bool(cresult.chain_backoff_exhausted) else 0.0)
+                )
 
                 row.update(base)
                 local_rows.append(row)
@@ -585,6 +601,11 @@ def evaluate_nlq_samples(
                     "chain_derived_place_used_rate": _mean([float(r.get("chain_derived_place_used", 0.0)) for r in local_rows]),
                     "chain_derived_object_used_rate": _mean([float(r.get("chain_derived_object_used", 0.0)) for r in local_rows]),
                     "chain_derived_nonempty_rate": _mean([float(r.get("chain_derived_nonempty", 0.0)) for r in local_rows]),
+                    "backoff_used_rate": _mean([float(r.get("chain_backoff_used", 0.0)) for r in local_rows]),
+                    "backoff_mean_level": _mean([float(r.get("chain_backoff_level", 0.0)) for r in local_rows]),
+                    "backoff_exhausted_rate": _mean(
+                        [1.0 if bool(r.get("chain_backoff_exhausted", False)) else 0.0 for r in local_rows]
+                    ),
                     "chain_fail_step1_no_hit_rate": _mean(
                         [1.0 if str(r.get("chain_fail_reason", "")) == "step1_no_hit" else 0.0 for r in local_rows]
                     ),
@@ -602,6 +623,9 @@ def evaluate_nlq_samples(
                     ),
                     "chain_fail_budget_insufficient_rate": _mean(
                         [1.0 if str(r.get("chain_fail_reason", "")) == "budget_insufficient" else 0.0 for r in local_rows]
+                    ),
+                    "chain_fail_backoff_exhausted_rate": _mean(
+                        [1.0 if str(r.get("chain_fail_reason", "")) == "backoff_exhausted" else 0.0 for r in local_rows]
                     ),
                     "mrr": _mean([float(r["mrr"]) for r in local_rows]),
                     **base,
@@ -669,6 +693,11 @@ def evaluate_nlq_samples(
                         "chain_derived_place_used_rate": _mean([float(r.get("chain_derived_place_used", 0.0)) for r in rows]),
                         "chain_derived_object_used_rate": _mean([float(r.get("chain_derived_object_used", 0.0)) for r in rows]),
                         "chain_derived_nonempty_rate": _mean([float(r.get("chain_derived_nonempty", 0.0)) for r in rows]),
+                        "backoff_used_rate": _mean([float(r.get("chain_backoff_used", 0.0)) for r in rows]),
+                        "backoff_mean_level": _mean([float(r.get("chain_backoff_level", 0.0)) for r in rows]),
+                        "backoff_exhausted_rate": _mean(
+                            [1.0 if bool(r.get("chain_backoff_exhausted", False)) else 0.0 for r in rows]
+                        ),
                         "chain_fail_step1_no_hit_rate": _mean(
                             [1.0 if str(r.get("chain_fail_reason", "")) == "step1_no_hit" else 0.0 for r in rows]
                         ),
@@ -686,6 +715,9 @@ def evaluate_nlq_samples(
                         ),
                         "chain_fail_budget_insufficient_rate": _mean(
                             [1.0 if str(r.get("chain_fail_reason", "")) == "budget_insufficient" else 0.0 for r in rows]
+                        ),
+                        "chain_fail_backoff_exhausted_rate": _mean(
+                            [1.0 if str(r.get("chain_fail_reason", "")) == "backoff_exhausted" else 0.0 for r in rows]
                         ),
                         "mrr": _mean([float(r["mrr"]) for r in rows]),
                         "hit_at_k_event": _mean([float(r["hit_at_k_event"]) for r in rows]),

@@ -1210,6 +1210,8 @@ def main() -> int:
             ca_dir / "figures" / "fig_chain_attribution_failure_attribution_vs_budget_seconds.pdf",
             ca_dir / "figures" / "fig_chain_attribution_tradeoff.png",
             ca_dir / "figures" / "fig_chain_attribution_tradeoff.pdf",
+            ca_dir / "figures" / "fig_chain_attribution_backoff_vs_budget_seconds.png",
+            ca_dir / "figures" / "fig_chain_attribution_backoff_vs_budget_seconds.pdf",
         ]
         copied: list[str] = []
         for src in to_copy:
@@ -1379,6 +1381,7 @@ def main() -> int:
                 [
                     f"- chain_attribution_dir: `{chain_attribution_panel.get('source_dir')}`",
                     f"- chain_attribution_files: `{chain_attribution_panel.get('copied_files')}`",
+                    "- chain_attribution_backoff_metrics: available when table contains backoff_used_rate/backoff_mean_level/backoff_exhausted_rate.",
                 ]
             )
         else:

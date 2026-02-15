@@ -51,6 +51,9 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- filtered_hits_before: {int(ctrace.get('filtered_hits_before', 0))}")
     lines.append(f"- filtered_hits_after: {int(ctrace.get('filtered_hits_after', 0))}")
     lines.append(f"- relax_steps: {ctrace.get('constraints_relaxed', [])}")
+    lines.append(f"- chain_backoff_enabled: {str(bool(ctrace.get('chain_backoff_enabled', False))).lower()}")
+    lines.append(f"- chain_backoff_chosen_level: {ctrace.get('chain_backoff_chosen_level', None)}")
+    lines.append(f"- chain_backoff_exhausted: {str(bool(ctrace.get('chain_backoff_exhausted', False))).lower()}")
     lines.append("")
     lines.append("## Plan")
     lines.append("")
@@ -71,6 +74,12 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- filtered_hits_before: {int(ctrace.get('filtered_hits_before', 0))}")
     lines.append(f"- filtered_hits_after: {int(ctrace.get('filtered_hits_after', 0))}")
     lines.append(f"- used_fallback: {str(bool(ctrace.get('used_fallback', False))).lower()}")
+    lines.append(f"- chain_backoff_enabled: {str(bool(ctrace.get('chain_backoff_enabled', False))).lower()}")
+    lines.append(f"- chain_backoff_chosen_level: {ctrace.get('chain_backoff_chosen_level', None)}")
+    lines.append(f"- chain_backoff_exhausted: {str(bool(ctrace.get('chain_backoff_exhausted', False))).lower()}")
+    attempts = ctrace.get("chain_backoff_attempts", [])
+    if isinstance(attempts, list) and attempts:
+        lines.append(f"- chain_backoff_attempts: `{json.dumps(attempts, ensure_ascii=False)}`")
     steps = ctrace.get("constraint_steps", [])
     if isinstance(steps, list) and steps:
         lines.append("")
@@ -143,6 +152,12 @@ def _render_markdown(trace: dict[str, Any]) -> str:
         lines.append(
             f"- filtered_hits_before/after: {int(step2.get('filtered_hits_before', 0))}->{int(step2.get('filtered_hits_after', 0))}"
         )
+        lines.append(f"- chain_backoff_enabled: {str(bool(step2.get('chain_backoff_enabled', False))).lower()}")
+        lines.append(f"- chain_backoff_chosen_level: {step2.get('chain_backoff_chosen_level', None)}")
+        lines.append(f"- chain_backoff_exhausted: {str(bool(step2.get('chain_backoff_exhausted', False))).lower()}")
+        attempts2 = step2.get("chain_backoff_attempts", [])
+        if isinstance(attempts2, list) and attempts2:
+            lines.append(f"- chain_backoff_attempts: `{json.dumps(attempts2, ensure_ascii=False)}`")
         lines.append(f"- top1_kind: {step2.get('top1_kind', '')}")
         lines.append("")
 
@@ -349,12 +364,24 @@ def main() -> int:
             f"{int(step2.get('filtered_hits_before', 0))} step2_filtered_hits_after={int(step2.get('filtered_hits_after', 0))}"
         )
         print(f"step2_applied_constraints={step2.get('applied_constraints', [])}")
+        print(
+            "step2_chain_backoff="
+            f"enabled={str(bool(step2.get('chain_backoff_enabled', False))).lower()} "
+            f"chosen_level={step2.get('chain_backoff_chosen_level', None)} "
+            f"exhausted={str(bool(step2.get('chain_backoff_exhausted', False))).lower()}"
+        )
         print(f"step1_top1_kind={step1.get('top1_kind', '')} step2_top1_kind={step2.get('top1_kind', '')}")
     print(f"parsed_constraints={trace.get('plan', {}).get('constraints', {})}")
     print(f"applied_constraints={trace.get('constraint_trace', {}).get('applied_constraints', [])}")
     print(f"filtered_hits_before={trace.get('constraint_trace', {}).get('filtered_hits_before', 0)}")
     print(f"filtered_hits_after={trace.get('constraint_trace', {}).get('filtered_hits_after', 0)}")
     print(f"relax_steps={trace.get('constraint_trace', {}).get('constraints_relaxed', [])}")
+    print(f"chain_backoff_enabled={str(bool(trace.get('constraint_trace', {}).get('chain_backoff_enabled', False))).lower()}")
+    print(f"chain_backoff_chosen_level={trace.get('constraint_trace', {}).get('chain_backoff_chosen_level', None)}")
+    print(f"chain_backoff_exhausted={str(bool(trace.get('constraint_trace', {}).get('chain_backoff_exhausted', False))).lower()}")
+    attempts = trace.get("constraint_trace", {}).get("chain_backoff_attempts", [])
+    if isinstance(attempts, list) and attempts:
+        print(f"chain_backoff_attempts={attempts}")
     step_rows = trace.get("constraint_trace", {}).get("constraint_steps", [])
     if isinstance(step_rows, list) and step_rows:
         summary_parts: list[str] = []
