@@ -77,9 +77,11 @@ def test_trace_chain_repo_section_contains_hint_fields(tmp_path: Path) -> None:
     report_text = (out_dir / "trace_report.md").read_text(encoding="utf-8")
     assert "## Repo selection (query-aware)" in report_text
     assert "repo_filtered_chunks_before/after" in report_text
+    assert "repo_time_filter_mode" in report_text
     assert "hint_object" in report_text
 
     trace_payload = json.loads((out_dir / "trace.json").read_text(encoding="utf-8"))
     repo_trace = trace_payload.get("repo_selection", {}).get("trace", {}).get("selection_trace", {})
     assert isinstance(repo_trace, dict)
     assert "query_hints" in repo_trace
+    assert str(repo_trace.get("repo_time_filter_mode", "")) == "overlap"

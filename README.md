@@ -560,3 +560,30 @@ Optional paper-ready integration:
 ```text
 python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v18_demo\compare --out_dir data\outputs\ab_v18_demo\compare\paper_ready --chain-repo-compare-dir data\outputs\chain_repo_compare_v126_demo\compare
 ```
+
+### v1.27 Chain Attribution Panel + Repo Time Overlap
+
+Run chain attribution across fixed A/B/C/D settings on the same UID set and budgets:
+
+```text
+python scripts\run_chain_attribution.py --pov-json-dir data\outputs\ego4d_ab_real_n6\json --uids-file data\outputs\uids_match_real_n6.txt --out_dir data\outputs\chain_attr_v127_demo --budgets "20/50/4,60/200/12" --seed 0
+```
+
+Key outputs:
+- `run_A/`, `run_B/`, `run_C/`, `run_D/`
+- `compare/tables/table_chain_attribution.(csv/md)`
+- `compare/tables/table_chain_failure_breakdown.(csv/md)`
+- `compare/figures/fig_chain_attribution_*.png/.pdf`
+- `compare/snapshot.json`, `compare/commands.sh`, `compare/README.md`
+
+Trace now reports repo chain-time filter mode and counts:
+
+```text
+python scripts\trace_one_query.py --json data\outputs\ego4d_ab_real_n6\json\<uid>_v03_decisions.json --out_dir data\outputs\trace_chain_repo_v127_demo --query "lost_object=door which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object chain_object_mode=hard" --use-repo --repo-policy query_aware
+```
+
+Include chain attribution panel in paper-ready export:
+
+```text
+python scripts\export_paper_ready.py --compare_dir data\outputs\ab_v18_demo\compare --out_dir data\outputs\paper_ready_v127_demo --chain-attribution-dir data\outputs\chain_attr_v127_demo\compare
+```

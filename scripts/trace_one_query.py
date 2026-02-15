@@ -211,6 +211,10 @@ def _render_markdown(trace: dict[str, Any]) -> str:
         lines.append(
             f"- repo_filtered_chunks_before/after: {int(st.get('hint_filter_before', 0))}->{int(st.get('hint_filter_after', 0))}"
         )
+        lines.append(f"- repo_time_filter_mode: `{st.get('repo_time_filter_mode', '')}`")
+        lines.append(
+            f"- repo_time_window_ms: `{json.dumps(st.get('repo_time_window_ms', {}), ensure_ascii=False, sort_keys=True)}`"
+        )
         lines.append(
             f"- repo_filtered_reason_counts: `{json.dumps(st.get('hint_filtered_reason_counts', {}), ensure_ascii=False, sort_keys=True)}`"
         )
@@ -375,6 +379,8 @@ def main() -> int:
                     "repo_filtered_chunks_before="
                     f"{int(st.get('hint_filter_before', 0))} repo_filtered_chunks_after={int(st.get('hint_filter_after', 0))}"
                 )
+                print(f"repo_time_filter_mode={st.get('repo_time_filter_mode', '')}")
+                print(f"repo_time_window_ms={st.get('repo_time_window_ms', {})}")
                 print(f"repo_filtered_reason_counts={st.get('hint_filtered_reason_counts', {})}")
     print(f"saved_report={report_md}")
     print(f"saved_trace={trace_json}")

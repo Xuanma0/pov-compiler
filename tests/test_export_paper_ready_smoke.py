@@ -333,6 +333,35 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"selection": {"uids_found": 1}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional chain attribution panel input.
+    (compare_dir / "chain_attr" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "chain_attr" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "chain_attr" / "tables" / "table_chain_attribution.csv").write_text(
+        "budget_key,budget_seconds,variant_code,chain_success_rate,delta_success\n20/50/4,20,A,0.3,0.0\n20/50/4,20,B,0.4,0.1\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_attr" / "tables" / "table_chain_attribution.md").write_text("# chain attribution\n", encoding="utf-8")
+    (compare_dir / "chain_attr" / "tables" / "table_chain_failure_breakdown.csv").write_text(
+        "budget_key,variant_code,chain_fail_constraints_over_filtered_rate\n20/50/4,A,0.2\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_attr" / "tables" / "table_chain_failure_breakdown.md").write_text("# chain failure\n", encoding="utf-8")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_success_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_success_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_delta_success_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_delta_success_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_failure_attribution_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_failure_attribution_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_tradeoff.png").write_bytes(b"PNG")
+    (compare_dir / "chain_attr" / "figures" / "fig_chain_attribution_tradeoff.pdf").write_bytes(b"PDF")
+    (compare_dir / "chain_attr" / "compare_summary.json").write_text(
+        json.dumps({"budgets_matched": 1}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "chain_attr" / "snapshot.json").write_text(
+        json.dumps({"selection": {"uids_found": 1}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     out_dir = tmp_path / "paper_ready"
     cmd = [
@@ -366,6 +395,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "chain_nlq"),
         "--chain-repo-compare-dir",
         str(compare_dir / "chain_repo_cmp"),
+        "--chain-attribution-dir",
+        str(compare_dir / "chain_attr"),
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -439,6 +470,12 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "chain_repo_compare" / "table_chain_repo_compare.md").exists()
     assert (out_dir / "figures" / "fig_chain_repo_compare_success_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_chain_repo_compare_delta.png").exists()
+    assert (out_dir / "chain_attribution" / "table_chain_attribution.csv").exists()
+    assert (out_dir / "chain_attribution" / "table_chain_attribution.md").exists()
+    assert (out_dir / "chain_attribution" / "table_chain_failure_breakdown.csv").exists()
+    assert (out_dir / "chain_attribution" / "table_chain_failure_breakdown.md").exists()
+    assert (out_dir / "figures" / "fig_chain_attribution_success_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_chain_attribution_delta_success_vs_budget_seconds.png").exists()
 
     header = panel_csv.read_text(encoding="utf-8").splitlines()[0]
     assert "task" in header

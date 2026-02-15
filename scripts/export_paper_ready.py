@@ -19,7 +19,7 @@ def _parse_bool_with_neg(parser: argparse.ArgumentParser, name: str, default: bo
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export unified paper-ready budget panel across BYE/NLQ/Streaming")
-    parser.add_argument("--compare_dir", required=True, help="AB compare directory")
+    parser.add_argument("--compare_dir", default=None, help="AB compare directory (optional when using direct panel dirs)")
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--label_a", default="stub")
     parser.add_argument("--label_b", default="real")
@@ -83,6 +83,11 @@ def parse_args() -> argparse.Namespace:
         "--chain-repo-compare-dir",
         default=None,
         help="Optional directory from run_chain_repo_compare.py compare/ output",
+    )
+    parser.add_argument(
+        "--chain-attribution-dir",
+        default=None,
+        help="Optional directory from run_chain_attribution.py compare/ output",
     )
     parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
     _parse_bool_with_neg(parser, "with-figs", default=True)
@@ -471,7 +476,7 @@ def _make_nlq_safety_figures(
 
 def main() -> int:
     args = parse_args()
-    compare_dir = Path(args.compare_dir)
+    compare_dir = Path(args.compare_dir) if args.compare_dir else Path(".")
     out_dir = Path(args.out_dir)
     tables_dir = out_dir / "tables"
     figures_dir = out_dir / "figures"
@@ -1179,6 +1184,49 @@ def main() -> int:
             if str(p).endswith(".png") or str(p).endswith(".pdf"):
                 figure_paths.append(str(p))
 
+    chain_attribution_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    if args.chain_attribution_dir:
+        ca_dir = Path(args.chain_attribution_dir)
+        chain_attribution_panel["enabled"] = True
+        chain_attribution_panel["source_dir"] = str(ca_dir)
+        dst_root = out_dir / "chain_attribution"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            ca_dir / "tables" / "table_chain_attribution.csv",
+            ca_dir / "tables" / "table_chain_attribution.md",
+            ca_dir / "tables" / "table_chain_failure_breakdown.csv",
+            ca_dir / "tables" / "table_chain_failure_breakdown.md",
+            ca_dir / "compare_summary.json",
+            ca_dir / "snapshot.json",
+            ca_dir / "figures" / "fig_chain_attribution_success_vs_budget_seconds.png",
+            ca_dir / "figures" / "fig_chain_attribution_success_vs_budget_seconds.pdf",
+            ca_dir / "figures" / "fig_chain_attribution_delta_success_vs_budget_seconds.png",
+            ca_dir / "figures" / "fig_chain_attribution_delta_success_vs_budget_seconds.pdf",
+            ca_dir / "figures" / "fig_chain_attribution_failure_attribution_vs_budget_seconds.png",
+            ca_dir / "figures" / "fig_chain_attribution_failure_attribution_vs_budget_seconds.pdf",
+            ca_dir / "figures" / "fig_chain_attribution_tradeoff.png",
+            ca_dir / "figures" / "fig_chain_attribution_tradeoff.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.suffix.lower() in {".png", ".pdf"}:
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        chain_attribution_panel["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -1325,6 +1373,16 @@ def main() -> int:
             )
         else:
             report_lines.append("- chain_repo_compare: source provided but artifacts missing.")
+    if args.chain_attribution_dir:
+        if chain_attribution_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- chain_attribution_dir: `{chain_attribution_panel.get('source_dir')}`",
+                    f"- chain_attribution_files: `{chain_attribution_panel.get('copied_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- chain_attribution: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -1370,6 +1428,7 @@ def main() -> int:
             "lost_object_panel_dir": str(args.lost_object_panel_dir) if args.lost_object_panel_dir else None,
             "chain_nlq_dir": str(args.chain_nlq_dir) if args.chain_nlq_dir else None,
             "chain_repo_compare_dir": str(args.chain_repo_compare_dir) if args.chain_repo_compare_dir else None,
+            "chain_attribution_dir": str(args.chain_attribution_dir) if args.chain_attribution_dir else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -1396,6 +1455,7 @@ def main() -> int:
             "lost_object_panel": lost_object_panel,
             "chain_nlq_panel": chain_nlq_panel,
             "chain_repo_compare_panel": chain_repo_compare_panel,
+            "chain_attribution_panel": chain_attribution_panel,
             "report_md": str(report_path),
         },
     }

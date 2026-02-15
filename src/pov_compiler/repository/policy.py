@@ -64,6 +64,16 @@ def _estimate_tokens(text: str) -> int:
     return max(1, int(round(len(str(text)) / 4.0)))
 
 
+def _to_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    if out != out:
+        return None
+    return float(out)
+
+
 def _time_overlap_ratio(chunk_t0: float, chunk_t1: float, hint_t0: float | None, hint_t1: float | None) -> float:
     t0 = float(chunk_t0)
     t1 = float(chunk_t1)
@@ -78,6 +88,33 @@ def _time_overlap_ratio(chunk_t0: float, chunk_t1: float, hint_t0: float | None,
     inter = max(0.0, min(t1, h1) - max(t0, h0))
     duration = max(1e-9, t1 - t0)
     return float(max(0.0, min(1.0, inter / duration)))
+
+
+def _to_ms(value_s: float | None, *, default: float) -> float:
+    if value_s is None:
+        return float(default)
+    return float(value_s) * 1000.0
+
+
+def _chunk_overlap_with_hint_ms(
+    chunk: RepoChunk,
+    hint_t0_s: float | None,
+    hint_t1_s: float | None,
+) -> tuple[bool, float, float]:
+    """Chain time filter (repo side) uses overlap semantics in milliseconds.
+
+    Keep chunk iff:
+    - chunk.t1_ms >= t_min_ms
+    - chunk.t0_ms <= t_max_ms (if finite)
+    """
+    chunk_t0_ms = float(int(chunk.t0_ms) if int(chunk.t0_ms) != 0 else int(round(float(chunk.t0) * 1000.0)))
+    chunk_t1_ms = float(int(chunk.t1_ms) if int(chunk.t1_ms) != 0 else int(round(float(chunk.t1) * 1000.0)))
+    if chunk_t1_ms < chunk_t0_ms:
+        chunk_t0_ms, chunk_t1_ms = chunk_t1_ms, chunk_t0_ms
+    t_min_ms = _to_ms(hint_t0_s, default=float("-inf"))
+    t_max_ms = _to_ms(hint_t1_s, default=float("inf"))
+    keep = bool((chunk_t1_ms >= t_min_ms) and ((chunk_t0_ms <= t_max_ms) if t_max_ms != float("inf") else True))
+    return keep, t_min_ms, t_max_ms
 
 
 def _chunk_place_values(chunk: RepoChunk) -> set[str]:
@@ -708,13 +745,18 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         object_hint = dict(derived.get("object", {})) if isinstance(derived.get("object", {}), dict) else {}
         hint_filter_before = int(len(ranked))
         hint_filtered_reason_counts: dict[str, int] = {}
+        repo_time_filter_mode = "overlap"
+        hint_time_window_ms: dict[str, float | None] = {"t_min_ms": None, "t_max_ms": None}
         ranked_after_hints: list[tuple[RepoChunk, dict[str, float]]] = []
         for chunk, fields in ranked:
             reason = ""
             if bool(time_hint.get("enabled", False)) and str(time_hint.get("mode", "soft")).strip().lower() == "hard":
                 t_min = time_hint.get("t_min_s")
                 t_max = time_hint.get("t_max_s")
-                if _time_overlap_ratio(float(chunk.t0), float(chunk.t1), t_min, t_max) <= 0.0:
+                keep_by_overlap, t_min_ms, t_max_ms = _chunk_overlap_with_hint_ms(chunk, _to_float(t_min), _to_float(t_max))
+                hint_time_window_ms["t_min_ms"] = float(t_min_ms)
+                hint_time_window_ms["t_max_ms"] = None if t_max_ms == float("inf") else float(t_max_ms)
+                if not keep_by_overlap:
                     reason = "filtered_by_chain_time"
             if not reason and bool(place_hint.get("enabled", False)) and str(place_hint.get("mode", "soft")).strip().lower() == "hard":
                 place_value = str(place_hint.get("value", "")).strip().lower()
@@ -815,6 +857,8 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
             "hint_filter_before": int(hint_filter_before),
             "hint_filter_after": int(len(ranked)),
             "hint_filtered_reason_counts": dict(sorted(hint_filtered_reason_counts.items())),
+            "repo_time_filter_mode": str(repo_time_filter_mode),
+            "repo_time_window_ms": dict(hint_time_window_ms),
         }
         return selected_sorted, trace
 
