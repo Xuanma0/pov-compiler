@@ -92,7 +92,7 @@ def test_gemini_client_payload(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_make_client_routes_openai_compat_family() -> None:
-    for provider in ("openai_compat", "qwen", "deepseek", "glm"):
+    for provider in ("openai", "openai_compat", "qwen", "deepseek", "glm"):
         cfg = ModelClientConfig(provider=provider, model="demo-model", model_cache_enabled=False)
         client = make_client(cfg)
         assert client.__class__.__name__ == "OpenAICompatClient"

@@ -17,12 +17,9 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "provider_env_assignment",
         re.compile(
-            r"(?i)(?:OPENAI|GEMINI|QWEN|DEEPSEEK|GLM|DASHSCOPE|ZHIPU)_API_KEY\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{12,}[\"']?"
+            r"(?i)(?:OPENAI|GEMINI|QWEN|DEEPSEEK|GLM|DASHSCOPE|ZHIPU|ZAI)_API_KEY\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{12,}[\"']?"
         ),
     ),
-    ("url_api_key_literal", re.compile(r"(?i)(?:key|api_key)=[A-Za-z0-9_\-]{12,}")),
-    ("dashscope_like", re.compile(r"(?i)dashscope[^\\n]{0,40}(key|token)[^\\n]{0,20}[A-Za-z0-9_\-]{12,}")),
-    ("zhipu_like", re.compile(r"(?i)zhipu[^\\n]{0,40}(key|token)[^\\n]{0,20}[A-Za-z0-9_\-]{12,}")),
 ]
 
 TEXT_EXTS = {
@@ -44,6 +41,12 @@ TEXT_EXTS = {
 
 def _mask(value: str) -> str:
     token = str(value or "")
+    query_match = re.search(r"(?i)(?:key|api_key|token|secret)=([A-Za-z0-9_\-]{6,})", token)
+    if query_match:
+        rhs = query_match.group(1)
+        if len(rhs) <= 3:
+            return "api***"
+        return f"api***{rhs[-3:]}"
     if len(token) <= 6:
         return "***"
     return f"{token[:3]}***{token[-3:]}"
@@ -93,11 +96,29 @@ def scan_file(path: Path) -> list[tuple[str, str]]:
 def scan_repository(repo_root: Path) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for path in list_tracked_files(repo_root):
+        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        if rel.startswith("tests/"):
+            continue
+        if rel == ".env.example":
+            continue
+        name = path.name.lower()
+        if name == ".env" or rel.startswith(".env.") or name.endswith(".env"):
+            findings.append(
+                {
+                    "file": rel,
+                    "matches": [
+                        {
+                            "pattern": "tracked_env_file",
+                            "masked": ".env tracked (use git rm --cached .env)",
+                        }
+                    ],
+                }
+            )
         file_findings = scan_file(path)
         if file_findings:
             findings.append(
                 {
-                    "file": str(path.relative_to(repo_root)),
+                    "file": rel,
                     "matches": [{"pattern": pat, "masked": masked} for pat, masked in file_findings[:5]],
                 }
             )

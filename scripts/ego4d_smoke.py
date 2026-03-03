@@ -499,7 +499,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decisions-backend", choices=["heuristic", "model"], default="heuristic")
     parser.add_argument(
         "--model-provider",
-        choices=["fake", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
+        choices=["fake", "openai", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
         default="fake",
     )
     parser.add_argument("--model-name", default=None)

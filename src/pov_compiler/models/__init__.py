@@ -6,22 +6,29 @@ from pov_compiler.models.client import (
     get_model_cache_stats,
     maybe_wrap_with_cache,
 )
+from pov_compiler.models.presets import get_preset, list_presets, normalize_provider
 
 
 def _apply_provider_defaults(cfg: ModelClientConfig) -> ModelClientConfig:
-    provider = str(cfg.provider).strip().lower()
-    if provider == "deepseek" and not cfg.base_url:
-        cfg.base_url = "https://api.deepseek.com/v1"
-    elif provider == "qwen" and not cfg.base_url:
-        cfg.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    elif provider == "glm" and not cfg.base_url:
-        cfg.base_url = "https://open.bigmodel.cn/api/paas/v4"
+    provider = normalize_provider(cfg.provider)
+    preset = get_preset(provider)
+    cfg.provider = provider
+    if not cfg.base_url:
+        cfg.base_url = preset.default_base_url
+    if not cfg.api_key_env:
+        cfg.api_key_env = preset.default_api_key_env
+    if not cfg.base_url_env:
+        cfg.base_url_env = preset.default_base_url_env
+    if preset.default_headers:
+        merged = dict(preset.default_headers)
+        merged.update({str(k): str(v) for k, v in cfg.extra_headers.items()})
+        cfg.extra_headers = merged
     return cfg
 
 
 def make_client(cfg: ModelClientConfig) -> ChatModelClient:
     cfg = _apply_provider_defaults(cfg)
-    provider = str(cfg.provider).strip().lower()
+    provider = normalize_provider(cfg.provider)
     if provider == "fake":
         from pov_compiler.models.fake import FakeModelClient
 
@@ -37,4 +44,11 @@ def make_client(cfg: ModelClientConfig) -> ChatModelClient:
     raise RuntimeError(f"unsupported model provider: {provider}")
 
 
-__all__ = ["ChatModelClient", "ModelClientConfig", "make_client", "get_model_cache_stats"]
+__all__ = [
+    "ChatModelClient",
+    "ModelClientConfig",
+    "make_client",
+    "get_model_cache_stats",
+    "get_preset",
+    "list_presets",
+]

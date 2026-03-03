@@ -49,38 +49,42 @@ class GeminiClient:
     ) -> dict[str, Any]:
         api_key = self.cfg.get_api_key_or_raise()
         endpoint = self._endpoint(api_key)
-        try:
-            payload = {
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [{"text": f"{system}\n\n{user}"}],
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": float(temperature),
-                    "maxOutputTokens": int(max_tokens),
-                },
-            }
-            headers = {"Content-Type": "application/json"}
-            for k, v in self.cfg.extra_headers.items():
-                headers[str(k)] = str(v)
-            req = Request(
-                endpoint,
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                headers=headers,
-                method="POST",
-            )
-            with urlopen(req, timeout=float(timeout_s)) as resp:
-                text = resp.read().decode("utf-8", errors="ignore")
-            result = json.loads(text)
-            if not isinstance(result, dict):
-                raise RuntimeError("response is not a JSON object")
-            content = _extract_text(result)
-            return parse_json_from_text(content)
-        except Exception as exc:
-            safe_endpoint = redact_url(endpoint)
-            raise RuntimeError(
-                f"gemini call failed: {exc} "
-                f"(provider={self.cfg.provider}, endpoint={safe_endpoint}, model={self.cfg.model})"
-            ) from exc
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": f"{system}\n\n{user}"}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": float(temperature),
+                "maxOutputTokens": int(max_tokens),
+            },
+        }
+        headers = {"Content-Type": "application/json"}
+        for k, v in self.cfg.extra_headers.items():
+            headers[str(k)] = str(v)
+        tries = max(1, int(getattr(self.cfg, "max_retries", 1)) + 1)
+        last_exc: Exception | None = None
+        for _ in range(tries):
+            try:
+                req = Request(
+                    endpoint,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers=headers,
+                    method="POST",
+                )
+                with urlopen(req, timeout=float(timeout_s)) as resp:
+                    text = resp.read().decode("utf-8", errors="ignore")
+                result = json.loads(text)
+                if not isinstance(result, dict):
+                    raise RuntimeError("response is not a JSON object")
+                content = _extract_text(result)
+                return parse_json_from_text(content)
+            except Exception as exc:  # pragma: no cover - retried path is still deterministic
+                last_exc = exc
+        safe_endpoint = redact_url(endpoint)
+        raise RuntimeError(
+            f"gemini call failed: {last_exc} "
+            f"(provider={self.cfg.provider}, endpoint={safe_endpoint}, model={self.cfg.model})"
+        ) from last_exc

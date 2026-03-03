@@ -734,9 +734,9 @@ Key outputs:
 ### v1.35 Multi-Provider Routing + Model Cache + Health Check
 
 Provider routing now supports:
-- `openai_compat` (OpenAI-compatible APIs; recommended for Qwen/DeepSeek/GLM)
+- `openai` / `openai_compat` (OpenAI-compatible APIs)
 - `gemini` (native `generateContent`)
-- `qwen` / `deepseek` / `glm` (routed through `openai_compat` with provider defaults)
+- `qwen` / `deepseek` / `glm` (OpenAI-compatible presets with provider-specific defaults)
 - `fake` (deterministic CI-safe path)
 
 Model call cache (on by default when `decisions.backend=model`) avoids repeated paid calls:
@@ -750,11 +750,14 @@ Run the same command again: `model_cache_stats` should show `hit>0`.
 Optional connectivity check (real network call; never used by tests):
 
 ```text
-python scripts/model_health_check.py --provider openai_compat --model gpt-4o-mini --api-key-env OPENAI_API_KEY
-python scripts/model_health_check.py --provider gemini --model gemini-1.5-flash --api-key-env GEMINI_API_KEY
+python scripts/model_health_check.py --provider deepseek --model deepseek-chat --dry-run
+python scripts/model_health_check.py --provider qwen --model qwen-plus --dry-run
+python scripts/model_health_check.py --provider glm --model glm-5 --dry-run
+python scripts/model_health_check.py --provider openai --model gpt-4o-mini --do-request --api-key-env OPENAI_API_KEY
 ```
 
 Security rules remain strict:
 - keys only via env vars (`*_API_KEY`); never put key values in tracked yaml/json.
 - snapshots/reports/commands are redacted.
+- keep local keys in `.env` (gitignored) and bootstrap from `.env.example`.
 - run `python scripts/security_scan_secrets.py` before commit.

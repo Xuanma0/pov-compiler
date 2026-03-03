@@ -32,3 +32,24 @@ def test_security_scan_detects_masked_secret(tmp_path: Path, monkeypatch: pytest
     assert "api***345" in out or "api***" in out
     assert "ABCDEFGHIJKLMNOP" not in out
     assert "THISSHOULDNEVERPRINT" not in out
+
+
+def test_security_scan_fails_when_env_file_tracked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    env_path = repo / ".env"
+    env_path.write_text("DEEPSEEK_API_KEY=SECRETVALUE123456\n", encoding="utf-8")
+
+    def _fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=".env\n", stderr="")
+
+    monkeypatch.setattr(scan_mod.subprocess, "run", _fake_run)
+    monkeypatch.chdir(repo)
+    rc = scan_mod.main([])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "tracked_env_file" in out

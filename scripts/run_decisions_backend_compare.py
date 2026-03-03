@@ -444,7 +444,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--probe-candidates", type=int, default=0)
     parser.add_argument("--nlq-mode", default="hard_pseudo_nlq")
 
-    parser.add_argument("--model-provider", choices=["fake", "openai_compat", "gemini", "qwen", "deepseek", "glm"], default="fake")
+    parser.add_argument(
+        "--model-provider",
+        choices=["fake", "openai", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
+        default="fake",
+    )
     parser.add_argument("--model-name", default=None)
     parser.add_argument("--model-base-url", default=None)
     parser.add_argument("--model-api-key-env", default=None)

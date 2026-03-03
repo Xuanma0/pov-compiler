@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decisions-backend", choices=["heuristic", "model"], default=None, help="Decisions backend")
     parser.add_argument(
         "--model-provider",
-        choices=["fake", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
+        choices=["fake", "openai", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
         default=None,
         help="Model provider (used when --decisions-backend=model)",
     )
@@ -87,8 +87,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-base-url", default=None, help="Model base URL")
     parser.add_argument("--model-api-key-env", default=None, help="API key environment variable name")
     parser.add_argument("--model-timeout-s", type=int, default=None)
+    parser.add_argument("--model-max-retries", type=int, default=None)
     parser.add_argument("--model-max-tokens", type=int, default=None)
     parser.add_argument("--model-temperature", type=float, default=None)
+    parser.add_argument("--dry-run", action="store_true", help="Do not call model backend when decisions backend is model")
     parser.add_argument("--model-fake-mode", choices=["minimal", "diverse"], default=None)
     parser.add_argument("--model-cache-dir", default=None, help="Model call cache directory")
     parser.set_defaults(model_cache=None)
@@ -141,6 +143,8 @@ def main() -> int:
         model_cfg["api_key_env"] = str(args.model_api_key_env)
     if args.model_timeout_s is not None:
         model_cfg["timeout_s"] = int(args.model_timeout_s)
+    if args.model_max_retries is not None:
+        model_cfg["max_retries"] = int(args.model_max_retries)
     if args.model_max_tokens is not None:
         model_cfg["max_tokens"] = int(args.model_max_tokens)
     if args.model_temperature is not None:
@@ -149,6 +153,10 @@ def main() -> int:
         model_cfg.setdefault("extra", {})
         if isinstance(model_cfg["extra"], dict):
             model_cfg["extra"]["fake_mode"] = str(args.model_fake_mode)
+    if bool(args.dry_run):
+        model_cfg.setdefault("extra", {})
+        if isinstance(model_cfg["extra"], dict):
+            model_cfg["extra"]["dry_run"] = True
     if args.model_cache_dir is not None:
         model_cfg["model_cache_dir"] = str(args.model_cache_dir)
     if args.model_cache is not None:

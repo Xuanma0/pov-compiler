@@ -36,7 +36,7 @@ decisions:
   min_gap_s: 0.0
   boundary_thresh: 0.65
   model_client:
-    # provider options: fake | openai_compat | gemini | qwen | deepseek | glm
+    # provider options: fake | openai | openai_compat | gemini | qwen | deepseek | glm
     # qwen/deepseek/glm are routed through OpenAI-compatible endpoints by default.
     provider: fake
     model: fake-decision-v1
@@ -45,7 +45,7 @@ decisions:
     # OPENAI_BASE_URL / QWEN_BASE_URL / DEEPSEEK_BASE_URL / GLM_BASE_URL
     base_url_env: OPENAI_BASE_URL
     # API key env name only (never put real key values in tracked files):
-    # OPENAI_API_KEY / GEMINI_API_KEY / QWEN_API_KEY / DEEPSEEK_API_KEY / GLM_API_KEY
+    # OPENAI_API_KEY / GEMINI_API_KEY / DASHSCOPE_API_KEY / DEEPSEEK_API_KEY / ZAI_API_KEY
     api_key_env: OPENAI_API_KEY
     timeout_s: 60
     max_tokens: 800

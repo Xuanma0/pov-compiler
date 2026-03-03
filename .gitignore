@@ -48,6 +48,8 @@ assets/mediapipe/*.task
 .env
 .env.*
 *.env
+!.env.example
+secrets.*
 *_secrets*
 *keys*.json
 credentials.*

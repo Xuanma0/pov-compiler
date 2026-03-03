@@ -8,23 +8,7 @@ from typing import Any, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pov_compiler.models.cache import ModelCallCache, SCHEMA_VERSION
-
-
-DEFAULT_API_KEY_ENV: dict[str, str] = {
-    "openai_compat": "OPENAI_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "qwen": "QWEN_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "glm": "GLM_API_KEY",
-    "fake": "FAKE_MODEL_API_KEY",
-}
-
-DEFAULT_BASE_URL_ENV: dict[str, str] = {
-    "openai_compat": "OPENAI_BASE_URL",
-    "qwen": "QWEN_BASE_URL",
-    "deepseek": "DEEPSEEK_BASE_URL",
-    "glm": "GLM_BASE_URL",
-}
+from pov_compiler.models.presets import get_preset, normalize_base_url, normalize_provider
 
 _SENSITIVE_KEYWORDS = ("key", "token", "secret", "authorization", "bearer", "password")
 _JSON_OBJ_RE = re.compile(r"\{[\s\S]*\}")
@@ -59,22 +43,29 @@ class ModelClientConfig:
     model_cache_dir: str = "data/outputs/model_cache"
     model_cache_max_entries: int = 0
     model_cache_max_mb: int = 0
+    max_retries: int = 1
 
     def __post_init__(self) -> None:
-        self.provider = str(self.provider or "").strip().lower()
+        self.provider = normalize_provider(self.provider)
         self.model = str(self.model or "").strip()
         if not self.provider:
             raise ValueError("provider is required")
         if not self.model:
             raise ValueError("model is required")
+        preset = get_preset(self.provider)
         if not self.api_key_env:
-            self.api_key_env = DEFAULT_API_KEY_ENV.get(self.provider, "OPENAI_API_KEY")
+            self.api_key_env = str(preset.default_api_key_env)
+        if not self.base_url_env:
+            self.base_url_env = str(preset.default_base_url_env)
         if not self.base_url:
-            env_name = str(self.base_url_env or DEFAULT_BASE_URL_ENV.get(self.provider, ""))
+            env_name = str(self.base_url_env)
             if env_name:
                 env_val = os.environ.get(env_name, "").strip()
                 if env_val:
                     self.base_url = env_val
+        if not self.base_url:
+            self.base_url = str(preset.default_base_url or "")
+        self.base_url = normalize_base_url(self.provider, self.base_url)
         blocked_headers = {"authorization", "x-api-key", "api-key"}
         for key in list(self.extra_headers.keys()):
             if str(key).strip().lower() in blocked_headers:

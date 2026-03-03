@@ -67,9 +67,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "provider": "fake",
             "model": "fake-decision-v1",
             "base_url": None,
-            "api_key_env": "",
+            "api_key_env": "OPENAI_API_KEY",
             "base_url_env": "OPENAI_BASE_URL",
             "timeout_s": 60,
+            "max_retries": 1,
             "max_tokens": 800,
             "temperature": 0.2,
             "model_cache_enabled": True,
@@ -387,6 +388,7 @@ class OfflinePipeline:
                     base_url_env=str(model_cfg_raw.get("base_url_env", "")),
                     api_key_env=str(model_cfg_raw.get("api_key_env", "")),
                     timeout_s=int(model_cfg_raw.get("timeout_s", 60)),
+                    max_retries=int(model_cfg_raw.get("max_retries", 1)),
                     max_tokens=int(model_cfg_raw.get("max_tokens", 800)),
                     temperature=float(model_cfg_raw.get("temperature", 0.2)),
                     model_cache_enabled=bool(model_cfg_raw.get("model_cache_enabled", True)),
@@ -398,8 +400,6 @@ class OfflinePipeline:
                     else {},
                     extra=dict(model_cfg_raw.get("extra", {})) if isinstance(model_cfg_raw.get("extra", {}), dict) else {},
                 )
-                model_client = make_client(model_cfg)
-                output.decisions_model_v1 = compile_decisions_with_model(output=output, client=model_client, cfg=model_cfg)
                 public_cfg = model_cfg.to_public_dict()
                 cfg_hash = hashlib.sha256(
                     json.dumps(public_cfg, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -408,7 +408,22 @@ class OfflinePipeline:
                 output.meta["decisions_model_name"] = str(model_cfg.model)
                 output.meta["decisions_model_base_url"] = str(public_cfg.get("base_url", ""))
                 output.meta["decisions_model_cfg_hash"] = cfg_hash
-                output.meta["decisions_model_cache"] = get_model_cache_stats(model_client)
+                if bool(model_cfg.extra.get("dry_run", False)):
+                    output.decisions_model_v1 = []
+                    output.meta["decisions_model_dry_run"] = True
+                    output.meta["decisions_model_cache"] = {
+                        "enabled": bool(model_cfg.model_cache_enabled),
+                        "dir": str(model_cfg.model_cache_dir),
+                        "schema_version": "v1",
+                        "hit": 0,
+                        "miss": 0,
+                        "write_fail": 0,
+                        "hash_prefix": "",
+                    }
+                else:
+                    model_client = make_client(model_cfg)
+                    output.decisions_model_v1 = compile_decisions_with_model(output=output, client=model_client, cfg=model_cfg)
+                    output.meta["decisions_model_cache"] = get_model_cache_stats(model_client)
             else:
                 output.decisions_model_v1 = []
 
