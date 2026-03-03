@@ -817,3 +817,50 @@ Key artifacts:
 - `compare/figures/fig_repo_summary_retrieval_quality_vs_budget_seconds.png`
 - `compare/figures/fig_repo_summary_retrieval_delta.png`
 - `paper_ready/repo_summary_retrieval/table_repo_summary_retrieval_compare.csv`
+
+### v1.39 Model Planner Backend + Planner Compare
+
+`query_planner` now supports backend routing:
+- `heuristic` (default, unchanged behavior)
+- `model` (structured planner output via model client)
+- `auto` (uses model when key is available, otherwise falls back to heuristic)
+
+Trace with heuristic planner:
+
+```text
+python scripts/trace_one_query.py --json data/outputs/ego4d_ab_real_n6/json/000a3525-6c98-4650-aaab-be7d2c7b9402_v03_decisions.json --out_dir data/outputs/trace_planner_v139_heur --query "anchor=turn_head top_k=6" --planner-backend heuristic
+```
+
+Trace with model planner (fake provider, deterministic):
+
+```text
+python scripts/trace_one_query.py --json data/outputs/ego4d_ab_real_n6/json/000a3525-6c98-4650-aaab-be7d2c7b9402_v03_decisions.json --out_dir data/outputs/trace_planner_v139_model --query "anchor=turn_head top_k=6" --planner-backend model --planner-provider fake --planner-model fake-planner-v1
+```
+
+Planner backend compare (same UIDs + same budgets):
+
+```text
+python scripts/run_planner_backend_compare.py --pov-json-dir data/outputs/ego4d_ab_real_n6/json --uids-file data/outputs/uids_match_real_n6.txt --out_dir data/outputs/planner_backend_compare_v139_demo --budgets 20/50/4,60/200/12 --queries-total 4 --seed 0 --planner-b-provider fake --planner-b-model fake-planner-v1
+```
+
+Include planner compare panel in paper-ready:
+
+```text
+python scripts/export_paper_ready.py --out_dir data/outputs/paper_ready_v139_demo --planner-backend-compare-dir data/outputs/planner_backend_compare_v139_demo/compare
+```
+
+Key artifacts:
+- `compare/tables/table_planner_backend_compare.csv`
+- `compare/figures/fig_planner_backend_delta.png`
+- `paper_ready/planner_backend/table_planner_backend_compare.csv`
+- `paper_ready/figures/fig_planner_backend_delta.png`
+
+### Local Fast Tests (xdist)
+
+Use the helper script for local parallel pytest:
+
+```text
+python scripts/test_fast.py
+```
+
+It first runs `python -m pytest -q -n auto` and automatically falls back to `python -m pytest -q` if `pytest-xdist` is unavailable. CI defaults remain unchanged.

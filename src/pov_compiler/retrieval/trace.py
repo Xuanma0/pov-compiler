@@ -8,7 +8,12 @@ from pov_compiler.context.context_builder import build_context
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.retrieval.constraints import HardConstraintConfig, apply_constraints_detailed
 from pov_compiler.retrieval.query_parser import QueryChain, parse_query_chain
-from pov_compiler.retrieval.query_planner import ChainPlan, QueryPlan, plan as plan_query, plan_chain
+from pov_compiler.retrieval.query_planner import (
+    ChainPlan,
+    QueryPlan,
+    plan_chain_with_backend,
+    plan_with_backend,
+)
 from pov_compiler.retrieval.reranker import Hit, rerank
 from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
 from pov_compiler.retrieval.rerank_debug import explain_scores
@@ -34,6 +39,22 @@ def _overlap(a0: float, a1: float, b0: float, b1: float) -> bool:
     return max(float(a0), float(b0)) <= min(float(a1), float(b1))
 
 
+def _signal_overview_from_output(output: Output) -> dict[str, Any]:
+    events_v1 = list(getattr(output, "events_v1", []) or [])
+    objects = list(getattr(output, "object_memory_v0", []) or [])
+    has_interaction = any(float(getattr(ev, "interaction_score", 0.0) or 0.0) > 0.0 for ev in events_v1)
+    has_place = any(bool(str(getattr(ev, "place_segment_id", "")).strip()) for ev in events_v1)
+    return {
+        "events_v1_count": int(len(events_v1)),
+        "has_place": bool(has_place),
+        "has_interaction": bool(has_interaction),
+        "has_lost_object": bool(len(objects) > 0),
+        "object_vocab_size": int(len({str(x.object_name).strip().lower() for x in objects if str(x.object_name).strip()})),
+        "has_summary_chunks": bool(getattr(output, "repository", None)),
+        "has_decision_pool": bool(len(getattr(output, "decision_points", []) or []) > 0 or len(getattr(output, "decisions_model_v1", []) or []) > 0),
+    }
+
+
 def trace_query(
     *,
     output_json: str | Path | dict[str, Any] | Output,
@@ -49,6 +70,8 @@ def trace_query(
     query_hints: dict[str, Any] | None = None,
     retrieval_plan: str = "baseline",
     summary_top_k: int = 3,
+    planner_backend: str = "heuristic",
+    planner_model_cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = ensure_events_v1(_as_output(output_json))
     retrieval_cfg = dict(retrieval_config or {})
@@ -57,7 +80,12 @@ def trace_query(
     retriever = Retriever(output_json=output, index=index_prefix, config=retrieval_cfg)
     chain_query: QueryChain | None = parse_query_chain(str(query))
     if chain_query is not None:
-        chain_plan: ChainPlan | None = plan_chain(str(query))
+        chain_plan, chain_planner_meta = plan_chain_with_backend(
+            str(query),
+            planner_backend=str(planner_backend),
+            planner_model_cfg=dict(planner_model_cfg or {}),
+            signal_overview=_signal_overview_from_output(output),
+        )
         step1_query = str(chain_query.steps[0].raw)
         step2_query = str(chain_query.steps[1].raw)
         step1_trace = trace_query(
@@ -72,6 +100,8 @@ def trace_query(
             use_repo=False,
             repo_policy=str(repo_policy),
             query_hints=None,
+            planner_backend=str(planner_backend),
+            planner_model_cfg=dict(planner_model_cfg or {}),
         )
         step1_hits = list(step1_trace.get("hits", []))
         step1_top = step1_hits[0] if step1_hits else None
@@ -126,6 +156,8 @@ def trace_query(
                     "step2_query_derived": step2_query_derived,
                 },
             },
+            planner_backend=str(planner_backend),
+            planner_model_cfg=dict(planner_model_cfg or {}),
         )
         combined = dict(step2_trace)
         combined["query"] = str(query)
@@ -133,6 +165,11 @@ def trace_query(
         combined["decision_pool_kind"] = str(step2_trace.get("decision_pool_kind", step1_trace.get("decision_pool_kind", "")))
         combined["decision_pool_count"] = int(step2_trace.get("decision_pool_count", step1_trace.get("decision_pool_count", 0)) or 0)
         combined["decision_model_meta"] = dict(step2_trace.get("decision_model_meta", step1_trace.get("decision_model_meta", {})))
+        combined["planner_backend_used"] = str(step2_trace.get("planner_backend_used", "heuristic"))
+        combined["planner_model_meta"] = dict(step2_trace.get("planner_model_meta", {}))
+        combined["planner_plan"] = dict(step2_trace.get("planner_plan", {}))
+        combined["planner_fallback_reason"] = str(step2_trace.get("planner_fallback_reason", ""))
+        combined["planner_cache_stats"] = dict(step2_trace.get("planner_cache_stats", {}))
         combined["chain"] = {
             "is_chain": True,
             "chain_rel": str(chain_query.rel),
@@ -143,6 +180,7 @@ def trace_query(
             "chain_object_mode": str(getattr(chain_query, "object_mode", "soft")),
             "chain_time_mode": str(getattr(chain_query, "time_mode", "hard")),
             "plan_debug": dict(chain_plan.debug) if chain_plan is not None else {},
+            "planner_meta": dict(chain_planner_meta or {}),
             "step1": {
                 "query": step1_query,
                 "parsed_constraints": dict(step1_trace.get("plan", {}).get("constraints", {})),
@@ -174,7 +212,12 @@ def trace_query(
         }
         return combined
 
-    plan: QueryPlan = plan_query(str(query))
+    plan, planner_meta = plan_with_backend(
+        str(query),
+        planner_backend=str(planner_backend),
+        planner_model_cfg=dict(planner_model_cfg or {}),
+        signal_overview=_signal_overview_from_output(output),
+    )
     probe_result = retriever.retrieve(str(query))
     probe_debug = probe_result.get("debug", {}) if isinstance(probe_result.get("debug", {}), dict) else {}
     summary_plan = (
@@ -397,6 +440,11 @@ def trace_query(
     return {
         "video_id": output.video_id,
         "query": str(query),
+        "planner_backend_used": str(planner_meta.get("planner_backend_used", "heuristic")),
+        "planner_model_meta": dict(planner_meta.get("planner_model_meta", {})),
+        "planner_plan": dict(planner_meta.get("planner_plan", {})),
+        "planner_fallback_reason": str(planner_meta.get("planner_fallback_reason", "")),
+        "planner_cache_stats": dict(planner_meta.get("planner_cache_stats", {})),
         "retrieval_plan": str(probe_debug.get("retrieval_plan", retrieval_plan)),
         "plan": {
             "intent": plan.intent,

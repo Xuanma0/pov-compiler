@@ -69,6 +69,20 @@ index:
 retrieval:
   default_top_k: 8
   prefer: highlight
+  planner_backend: heuristic
+  planner_model:
+    provider: fake
+    model: fake-planner-v1
+    base_url: null
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
+    timeout_s: 60
+    max_tokens: 500
+    temperature: 0.1
+    model_cache_enabled: true
+    model_cache_dir: data/outputs/model_cache
+    max_retries: 1
+    extra: {}
 reranker:
   name: default
   bonus_intent_token_on_token: 1.0

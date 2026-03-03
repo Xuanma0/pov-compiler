@@ -458,3 +458,162 @@ def plan_chain(query_text: str) -> ChainPlan | None:
             "derived_strategy": "step1_top1_to_step2_constraints_v2",
         },
     )
+
+
+def _normalize_planner_backend(value: str | None) -> str:
+    text = str(value or "heuristic").strip().lower()
+    if text not in {"heuristic", "model", "auto"}:
+        return "heuristic"
+    return text
+
+
+def _planner_api_key_present(planner_model_cfg: dict[str, Any] | None) -> bool:
+    from pov_compiler.models.presets import get_preset, normalize_provider
+    import os
+
+    cfg = dict(planner_model_cfg or {})
+    provider = normalize_provider(str(cfg.get("provider", "fake")))
+    if provider == "fake":
+        return True
+    try:
+        preset = get_preset(provider)
+        env_name = str(cfg.get("api_key_env") or preset.default_api_key_env)
+    except Exception:
+        env_name = str(cfg.get("api_key_env", ""))
+    if not env_name:
+        return False
+    return bool(os.environ.get(env_name, ""))
+
+
+def plan_with_backend(
+    query_text: str,
+    *,
+    planner_backend: str = "heuristic",
+    planner_model_cfg: dict[str, Any] | None = None,
+    budget: dict[str, Any] | None = None,
+    signal_overview: dict[str, Any] | None = None,
+    seed: int = 0,
+) -> tuple[QueryPlan, dict[str, Any]]:
+    backend_req = _normalize_planner_backend(planner_backend)
+    backend_used = backend_req
+    meta: dict[str, Any] = {
+        "planner_backend_requested": backend_req,
+        "planner_backend_used": "heuristic",
+        "planner_fallback_reason": "",
+        "planner_model_meta": {},
+        "planner_plan": {},
+        "planner_cache_stats": {},
+    }
+    if backend_req == "auto":
+        backend_used = "model" if _planner_api_key_present(planner_model_cfg) else "heuristic"
+    if backend_used != "model":
+        q = plan(query_text)
+        meta["planner_backend_used"] = "heuristic"
+        meta["planner_plan"] = {
+            "retrieval_plan": str(getattr(q, "retrieval_plan", "baseline")),
+            "normalized_query": str(query_text),
+            "constraints": dict(getattr(q, "constraints", {})),
+            "confidence": 1.0,
+            "notes": "heuristic",
+        }
+        return q, meta
+
+    from pov_compiler.retrieval.model_planner import plan_query_with_model
+
+    planner_plan, planner_meta = plan_query_with_model(
+        str(query_text),
+        planner_model_cfg=dict(planner_model_cfg or {}),
+        budget=dict(budget or {}),
+        signal_overview=dict(signal_overview or {}),
+        seed=int(seed),
+    )
+
+    fallback_reason = str(planner_meta.get("fallback_reason", "")) if isinstance(planner_meta, dict) else ""
+    parse_ok = bool(planner_meta.get("parse_ok", False)) if isinstance(planner_meta, dict) else False
+
+    if fallback_reason and not parse_ok:
+        q = plan(query_text)
+        meta["planner_backend_used"] = "heuristic"
+        meta["planner_fallback_reason"] = fallback_reason
+        meta["planner_model_meta"] = dict(planner_meta or {})
+        meta["planner_cache_stats"] = dict(planner_meta.get("cache", {})) if isinstance(planner_meta, dict) else {}
+        meta["planner_plan"] = {
+            "retrieval_plan": str(getattr(q, "retrieval_plan", "baseline")),
+            "normalized_query": str(query_text),
+            "constraints": dict(getattr(q, "constraints", {})),
+            "confidence": 1.0,
+            "notes": "heuristic_fallback",
+        }
+        return q, meta
+
+    qplan = planner_plan.to_query_plan(default_priority=0)
+    meta["planner_backend_used"] = "model"
+    meta["planner_model_meta"] = dict(planner_meta or {})
+    meta["planner_cache_stats"] = dict(planner_meta.get("cache", {})) if isinstance(planner_meta, dict) else {}
+    meta["planner_fallback_reason"] = str(planner_meta.get("fallback_reason", "")) if isinstance(planner_meta, dict) else ""
+    meta["planner_plan"] = planner_plan.to_dict()
+    return qplan, meta
+
+
+def plan_chain_with_backend(
+    query_text: str,
+    *,
+    planner_backend: str = "heuristic",
+    planner_model_cfg: dict[str, Any] | None = None,
+    budget: dict[str, Any] | None = None,
+    signal_overview: dict[str, Any] | None = None,
+    seed: int = 0,
+) -> tuple[ChainPlan | None, dict[str, Any]]:
+    chain = parse_query_chain(str(query_text))
+    if chain is None:
+        return None, {
+            "planner_backend_requested": _normalize_planner_backend(planner_backend),
+            "planner_backend_used": "heuristic",
+            "planner_fallback_reason": "not_chain",
+            "planner_model_meta": {},
+            "planner_plan": {},
+            "planner_cache_stats": {},
+        }
+
+    step1_plan, step1_meta = plan_with_backend(
+        chain.steps[0].raw,
+        planner_backend=planner_backend,
+        planner_model_cfg=planner_model_cfg,
+        budget=budget,
+        signal_overview=signal_overview,
+        seed=seed,
+    )
+    step2_plan, step2_meta = plan_with_backend(
+        chain.steps[1].raw,
+        planner_backend=planner_backend,
+        planner_model_cfg=planner_model_cfg,
+        budget=budget,
+        signal_overview=signal_overview,
+        seed=seed + 1,
+    )
+    cplan = ChainPlan(
+        chain_rel=str(chain.rel),
+        window_s=float(chain.window_s),
+        top1_only=bool(chain.top1_only),
+        derive=str(chain.derive),
+        place_mode=str(chain.place_mode),
+        object_mode=str(chain.object_mode),
+        time_mode=str(chain.time_mode),
+        steps=[step1_plan, step2_plan],
+        debug={
+            "chain_query": str(query_text),
+            "step_count": 2,
+            "derived_strategy": "step1_top1_to_step2_constraints_v2",
+            "planner_step1": dict(step1_meta),
+            "planner_step2": dict(step2_meta),
+        },
+    )
+    merged_meta = {
+        "planner_backend_requested": str(step2_meta.get("planner_backend_requested", planner_backend)),
+        "planner_backend_used": str(step2_meta.get("planner_backend_used", "heuristic")),
+        "planner_fallback_reason": str(step2_meta.get("planner_fallback_reason", "")),
+        "planner_model_meta": dict(step2_meta.get("planner_model_meta", {})),
+        "planner_plan": dict(step2_meta.get("planner_plan", {})),
+        "planner_cache_stats": dict(step2_meta.get("planner_cache_stats", {})),
+    }
+    return cplan, merged_meta

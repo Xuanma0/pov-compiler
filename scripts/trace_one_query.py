@@ -37,6 +37,10 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append(f"- video_id: {trace.get('video_id', '')}")
     lines.append(f"- query: `{trace.get('query', '')}`")
     lines.append(f"- retrieval_plan: {trace.get('retrieval_plan', 'baseline')}")
+    lines.append(f"- planner_backend_used: {trace.get('planner_backend_used', 'heuristic')}")
+    lines.append(f"- planner_fallback_reason: {trace.get('planner_fallback_reason', '')}")
+    lines.append(f"- planner_model_meta: `{json.dumps(trace.get('planner_model_meta', {}), ensure_ascii=False, sort_keys=True)}`")
+    lines.append(f"- planner_cache_stats: `{json.dumps(trace.get('planner_cache_stats', {}), ensure_ascii=False, sort_keys=True)}`")
     lines.append(f"- is_chain: {str(is_chain).lower()}")
     if is_chain:
         lines.append(f"- chain_steps: 2")
@@ -70,6 +74,14 @@ def _render_markdown(trace: dict[str, Any]) -> str:
             f"- candidate: priority={int(item.get('priority', 0))} "
             f"query=`{item.get('query', '')}` reason=`{item.get('reason', '')}`"
         )
+    lines.append("")
+    lines.append("## Planner")
+    lines.append("")
+    lines.append(f"- planner_backend_used: {trace.get('planner_backend_used', 'heuristic')}")
+    lines.append(f"- planner_fallback_reason: `{trace.get('planner_fallback_reason', '')}`")
+    lines.append(f"- planner_model_meta: `{json.dumps(trace.get('planner_model_meta', {}), ensure_ascii=False, sort_keys=True)}`")
+    lines.append(f"- planner_plan: `{json.dumps(trace.get('planner_plan', {}), ensure_ascii=False, sort_keys=True)}`")
+    lines.append(f"- planner_cache_stats: `{json.dumps(trace.get('planner_cache_stats', {}), ensure_ascii=False, sort_keys=True)}`")
     lines.append("")
     lines.append("## Constraints")
     lines.append("")
@@ -348,6 +360,16 @@ def parse_args() -> argparse.Namespace:
         help="Retrieval planning mode for coarse-to-fine summary retrieval",
     )
     parser.add_argument("--summary-topk", type=int, default=3, help="Top-k summary chunks for summary-first planning")
+    parser.add_argument(
+        "--planner-backend",
+        choices=["heuristic", "model", "auto"],
+        default=None,
+        help="Planner backend override (default from config retrieval.planner_backend)",
+    )
+    parser.add_argument("--planner-provider", default=None, help="Planner model provider override")
+    parser.add_argument("--planner-model", default=None, help="Planner model name override")
+    parser.add_argument("--planner-base-url", default=None, help="Planner model base URL override")
+    parser.add_argument("--planner-api-key-env", default=None, help="Planner API key env name override")
     return parser.parse_args()
 
 
@@ -357,6 +379,16 @@ def main() -> int:
     retrieval_cfg = dict(cfg.get("retrieval", {}))
     retrieval_cfg["plan_default"] = str(args.retrieval_plan)
     retrieval_cfg["summary_top_k"] = int(args.summary_topk)
+    planner_backend = str(args.planner_backend or retrieval_cfg.get("planner_backend", "heuristic"))
+    planner_model_cfg = dict(retrieval_cfg.get("planner_model", {}))
+    if args.planner_provider is not None:
+        planner_model_cfg["provider"] = str(args.planner_provider)
+    if args.planner_model is not None:
+        planner_model_cfg["model"] = str(args.planner_model)
+    if args.planner_base_url is not None:
+        planner_model_cfg["base_url"] = str(args.planner_base_url)
+    if args.planner_api_key_env is not None:
+        planner_model_cfg["api_key_env"] = str(args.planner_api_key_env)
     hard_cfg = dict(cfg.get("hard_constraints", {}))
     rerank_cfg = cfg.get("reranker", {})
 
@@ -373,6 +405,8 @@ def main() -> int:
         repo_policy=str(args.repo_policy),
         retrieval_plan=str(args.retrieval_plan),
         summary_top_k=int(args.summary_topk),
+        planner_backend=planner_backend,
+        planner_model_cfg=planner_model_cfg,
     )
 
     out_dir = Path(args.out_dir)
@@ -385,6 +419,11 @@ def main() -> int:
     print(f"video_id={trace.get('video_id', '')}")
     print(f"query={trace.get('query', '')}")
     print(f"retrieval_plan={trace.get('retrieval_plan', 'baseline')}")
+    print(f"planner_backend_used={trace.get('planner_backend_used', 'heuristic')}")
+    print(f"planner_fallback_reason={trace.get('planner_fallback_reason', '')}")
+    print(f"planner_plan={trace.get('planner_plan', {})}")
+    print(f"planner_model_meta={trace.get('planner_model_meta', {})}")
+    print(f"planner_cache_stats={trace.get('planner_cache_stats', {})}")
     print(f"chosen_plan_intent={trace.get('plan', {}).get('intent', '')}")
     print(f"decision_pool_kind={trace.get('decision_pool_kind', '')}")
     print(f"decision_pool_count={int(trace.get('decision_pool_count', 0))}")

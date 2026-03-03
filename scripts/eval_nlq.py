@@ -221,6 +221,8 @@ def _make_report(
     mean_hitk_strict = _group_mean(overall_rows, ("variant",), "hit_at_k_strict")
     mean_fp = _group_mean(overall_rows, ("variant",), "top1_in_distractor_rate")
     mean_mrr = _group_mean(overall_rows, ("variant",), "mrr")
+    mean_planner_used = _group_mean(overall_rows, ("variant",), "planner_backend_used_rate")
+    mean_planner_fallback = _group_mean(overall_rows, ("variant",), "planner_fallback_rate")
     q_hit = _group_mean(by_type_rows, ("query_type", "variant"), "hit_at_k")
     q_hitk_strict = _group_mean(by_type_rows, ("query_type", "variant"), "hit_at_k_strict")
     q_hit1_strict = _group_mean(by_type_rows, ("query_type", "variant"), "hit_at_1_strict")
@@ -267,6 +269,15 @@ def _make_report(
             f"| {variant} | {mean_hit.get((variant,), 0.0):.4f} | {mean_hit1.get((variant,), 0.0):.4f} | "
             f"{mean_hit1_strict.get((variant,), 0.0):.4f} | {mean_hitk_strict.get((variant,), 0.0):.4f} | "
             f"{mean_fp.get((variant,), 0.0):.4f} | {mean_mrr.get((variant,), 0.0):.4f} |"
+        )
+    lines.append("")
+    lines.append("## Planner Backend Stats")
+    lines.append("")
+    lines.append("| variant | planner_backend_used_rate | planner_fallback_rate |")
+    lines.append("|---|---:|---:|")
+    for variant in variants:
+        lines.append(
+            f"| {variant} | {mean_planner_used.get((variant,), 0.0):.4f} | {mean_planner_fallback.get((variant,), 0.0):.4f} |"
         )
     lines.append("")
 
@@ -771,6 +782,16 @@ def parse_args() -> argparse.Namespace:
         help="Retrieval planning mode",
     )
     parser.add_argument("--summary-topk", type=int, default=3, help="Top-k summary chunks for summary-first planning")
+    parser.add_argument(
+        "--planner-backend",
+        choices=["heuristic", "model", "auto"],
+        default=None,
+        help="Planner backend override (default from config retrieval.planner_backend)",
+    )
+    parser.add_argument("--planner-provider", default=None, help="Planner provider override")
+    parser.add_argument("--planner-model", default=None, help="Planner model override")
+    parser.add_argument("--planner-base-url", default=None, help="Planner model base URL override")
+    parser.add_argument("--planner-api-key-env", default=None, help="Planner model API key env override")
     parser.add_argument("--hard-constraints", choices=["on", "off"], default="on")
     parser.add_argument(
         "--hard-constraints-cfg",
@@ -804,6 +825,16 @@ def main() -> int:
     retrieval_cfg = dict(cfg.get("retrieval", {}))
     retrieval_cfg["plan_default"] = str(args.retrieval_plan)
     retrieval_cfg["summary_top_k"] = int(args.summary_topk)
+    planner_backend = str(args.planner_backend or retrieval_cfg.get("planner_backend", "heuristic"))
+    planner_model_cfg = dict(retrieval_cfg.get("planner_model", {}))
+    if args.planner_provider is not None:
+        planner_model_cfg["provider"] = str(args.planner_provider)
+    if args.planner_model is not None:
+        planner_model_cfg["model"] = str(args.planner_model)
+    if args.planner_base_url is not None:
+        planner_model_cfg["base_url"] = str(args.planner_base_url)
+    if args.planner_api_key_env is not None:
+        planner_model_cfg["api_key_env"] = str(args.planner_api_key_env)
     safety_cfg = dict(cfg.get("safety", {}))
     rerank_cfg_yaml = cfg.get("reranker", {})
     resolved_cfg: WeightConfig
@@ -884,6 +915,9 @@ def main() -> int:
             rerank_cfg=resolved_cfg,
             hard_constraints_cfg=resolved_hard_cfg,
             allow_gt_fallback=allow_gt_fallback,
+            planner_backend=planner_backend,
+            planner_model_cfg=planner_model_cfg,
+            planner_seed=int(args.seed),
         )
         overall_rows = result["overall_rows"]
         by_type_rows = result["by_query_type_rows"]
@@ -927,6 +961,10 @@ def main() -> int:
             row.setdefault("rerank_cfg_name", resolved_cfg.name)
             row.setdefault("rerank_cfg_hash", resolved_cfg.short_hash())
             row.setdefault("hard_constraints_enabled", str(args.hard_constraints).lower() == "on")
+            row.setdefault("planner_backend_used_rate", 0.0)
+            row.setdefault("planner_fallback_rate", 0.0)
+            row.setdefault("planner_backend_used", str(planner_backend))
+            row.setdefault("planner_fallback_reason", "")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -983,6 +1021,13 @@ def main() -> int:
     print(f"mode={args.mode}")
     print(f"retrieval_plan={args.retrieval_plan}")
     print(f"summary_topk={int(args.summary_topk)}")
+    print(f"planner_backend={planner_backend}")
+    planner_used_vals = [float(row.get("planner_backend_used_rate", 0.0) or 0.0) for row in overall_rows]
+    planner_fb_vals = [float(row.get("planner_fallback_rate", 0.0) or 0.0) for row in overall_rows]
+    planner_used_rate = float(sum(planner_used_vals) / len(planner_used_vals)) if planner_used_vals else 0.0
+    planner_fallback_rate = float(sum(planner_fb_vals) / len(planner_fb_vals)) if planner_fb_vals else 0.0
+    print(f"planner_backend_used_rate={planner_used_rate:.4f}")
+    print(f"planner_fallback_rate={planner_fallback_rate:.4f}")
     print(f"allow_gt_fallback={str(bool(allow_gt_fallback)).lower()}")
     print(f"rerank_cfg_name={resolved_cfg.name}")
     print(f"rerank_cfg_hash={resolved_cfg.short_hash()}")

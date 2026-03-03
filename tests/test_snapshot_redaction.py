@@ -69,3 +69,37 @@ def test_commands_render_redacted() -> None:
     for token in banned:
         assert token not in rendered
     assert "***" in rendered
+
+
+def test_trace_planner_meta_redacted(tmp_path: Path) -> None:
+    in_json = tmp_path / "trace_input_v03_decisions.json"
+    out_dir = tmp_path / "trace_out"
+    _write_min_output(in_json)
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "trace_one_query.py"),
+        "--json",
+        str(in_json),
+        "--out_dir",
+        str(out_dir),
+        "--query",
+        "anchor=turn_head top_k=4",
+        "--planner-backend",
+        "model",
+        "--planner-provider",
+        "fake",
+        "--planner-model",
+        "fake-planner-v1",
+        "--planner-base-url",
+        "https://example.invalid/v1/chat/completions?key=TRACE_SECRET_ABC",
+    ]
+    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    trace_text = (out_dir / "trace.json").read_text(encoding="utf-8").lower()
+    report_text = (out_dir / "trace_report.md").read_text(encoding="utf-8").lower()
+    stdout_text = (proc.stdout or "").lower()
+    banned = ["authorization", "bearer ", "sk-", "?key=", "key=trace_secret", "aiza"]
+    for token in banned:
+        assert token not in trace_text
+        assert token not in report_text
+        assert token not in stdout_text

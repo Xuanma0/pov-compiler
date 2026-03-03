@@ -13,7 +13,7 @@ from pov_compiler.eval.eval_cross_variant import build_budget_grid
 from pov_compiler.eval.metrics import compute_consistency, compute_coverage, compute_efficiency
 from pov_compiler.retrieval.constraints import HardConstraintConfig, apply_constraints_detailed
 from pov_compiler.retrieval.query_parser import parse_query_chain
-from pov_compiler.retrieval.query_planner import QueryCandidate, QueryPlan, plan as plan_query
+from pov_compiler.retrieval.query_planner import QueryCandidate, QueryPlan, plan_with_backend
 from pov_compiler.retrieval.reranker import Hit, rerank
 from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
 from pov_compiler.retrieval.retriever import Retriever
@@ -35,6 +35,22 @@ _CONSTRAINT_KEYS = (
     "chain_place_match",
     "chain_object_match",
 )
+
+
+def _planner_signal_overview(output: Output) -> dict[str, Any]:
+    events_v1 = list(getattr(output, "events_v1", []) or [])
+    objects = list(getattr(output, "object_memory_v0", []) or [])
+    return {
+        "events_v1_count": int(len(events_v1)),
+        "has_place": bool(any(bool(str(getattr(ev, "place_segment_id", "")).strip()) for ev in events_v1)),
+        "has_interaction": bool(any(float(getattr(ev, "interaction_score", 0.0) or 0.0) > 0.0 for ev in events_v1)),
+        "has_lost_object": bool(len(objects) > 0),
+        "object_vocab_size": int(len({str(x.object_name).strip().lower() for x in objects if str(x.object_name).strip()})),
+        "has_decision_pool": bool(
+            len(getattr(output, "decision_points", []) or []) > 0
+            or len(getattr(output, "decisions_model_v1", []) or []) > 0
+        ),
+    }
 
 
 def _span_iou(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -231,7 +247,16 @@ def _force_top_k(query: str, top_k: int) -> str:
     return f"{text} top_k={int(max(1, top_k))}"
 
 
-def _build_plan(sample: NLQSample, allow_gt_fallback: bool) -> QueryPlan:
+def _build_plan(
+    sample: NLQSample,
+    allow_gt_fallback: bool,
+    *,
+    planner_backend: str = "heuristic",
+    planner_model_cfg: dict[str, Any] | None = None,
+    budget: dict[str, Any] | None = None,
+    signal_overview: dict[str, Any] | None = None,
+    planner_seed: int = 0,
+) -> tuple[QueryPlan, dict[str, Any]]:
     if " then " in str(sample.query).lower():
         q = _force_top_k(str(sample.query), int(sample.top_k))
         chain = parse_query_chain(q)
@@ -252,14 +277,35 @@ def _build_plan(sample: NLQSample, allow_gt_fallback: bool) -> QueryPlan:
                 constraints["chain_object_mode"] = str(step2.chain_object_mode)
             if step2.chain_object_value:
                 constraints["chain_object_value"] = str(step2.chain_object_value)
-        return QueryPlan(
+        chain_plan = QueryPlan(
             intent="mixed",
             candidates=[QueryCandidate(query=q, reason="chain_query", priority=0)],
             constraints=constraints,
             debug={"chain_query": True, "candidate_count": 1},
         )
+        planner_meta = {
+            "planner_backend_used": "heuristic",
+            "planner_fallback_reason": "",
+            "planner_plan": {
+                "retrieval_plan": "baseline",
+                "normalized_query": q,
+                "constraints": dict(constraints),
+                "confidence": 1.0,
+                "notes": "chain_query_forced",
+            },
+            "planner_model_meta": {},
+            "planner_cache_stats": {},
+        }
+        return chain_plan, planner_meta
 
-    planned = plan_query(sample.query)
+    planned, planner_meta = plan_with_backend(
+        sample.query,
+        planner_backend=str(planner_backend),
+        planner_model_cfg=dict(planner_model_cfg or {}),
+        budget=dict(budget or {}),
+        signal_overview=dict(signal_overview or {}),
+        seed=int(planner_seed),
+    )
     candidates: list[QueryCandidate] = []
     seen: set[str] = set()
 
@@ -297,7 +343,7 @@ def _build_plan(sample: NLQSample, allow_gt_fallback: bool) -> QueryPlan:
         candidates=candidates,
         constraints=dict(planned.constraints),
         debug=dict(planned.debug),
-    )
+    ), dict(planner_meta or {})
 
 
 def evaluate_nlq_samples(
@@ -313,6 +359,9 @@ def evaluate_nlq_samples(
     allow_gt_fallback: bool = True,
     variants: list[str] | None = None,
     min_iou: float = 0.1,
+    planner_backend: str = "heuristic",
+    planner_model_cfg: dict[str, Any] | None = None,
+    planner_seed: int = 0,
 ) -> dict[str, list[dict[str, Any]]]:
     retriever_config = retriever_config or {}
     weights = resolve_weight_config(rerank_cfg)
@@ -344,7 +393,15 @@ def evaluate_nlq_samples(
 
             local_rows: list[dict[str, Any]] = []
             for sample in samples:
-                query_plan = _build_plan(sample, allow_gt_fallback=bool(allow_gt_fallback))
+                query_plan, planner_meta = _build_plan(
+                    sample,
+                    allow_gt_fallback=bool(allow_gt_fallback),
+                    planner_backend=str(planner_backend),
+                    planner_model_cfg=dict(planner_model_cfg or {}),
+                    budget=dict(budget or {}),
+                    signal_overview=_planner_signal_overview(budgeted),
+                    planner_seed=int(planner_seed),
+                )
                 candidates = list(query_plan.candidates)
                 candidate_queries = [str(cand["query"]) for cand in candidates]
                 merged_hits = retriever.retrieve_multi(candidate_queries)
@@ -420,6 +477,23 @@ def evaluate_nlq_samples(
                     "chosen_query": chosen_query,
                     "chosen_reason": chosen_reason,
                     "chosen_plan_intent": str(query_plan.intent),
+                    "planner_backend_used": str(planner_meta.get("planner_backend_used", "heuristic")),
+                    "planner_fallback_reason": str(planner_meta.get("planner_fallback_reason", "")),
+                    "planner_provider": str(
+                        dict(planner_meta.get("planner_model_meta", {})).get("provider", "")
+                        if isinstance(planner_meta.get("planner_model_meta", {}), dict)
+                        else ""
+                    ),
+                    "planner_model": str(
+                        dict(planner_meta.get("planner_model_meta", {})).get("model", "")
+                        if isinstance(planner_meta.get("planner_model_meta", {}), dict)
+                        else ""
+                    ),
+                    "planner_parse_ok": bool(
+                        dict(planner_meta.get("planner_model_meta", {})).get("parse_ok", False)
+                        if isinstance(planner_meta.get("planner_model_meta", {}), dict)
+                        else False
+                    ),
                     "applied_constraints": json.dumps(query_plan.constraints, ensure_ascii=False, sort_keys=True),
                     "constraints_applied": json.dumps(cresult.applied, ensure_ascii=False),
                     "constraints_relaxed": json.dumps(cresult.relaxed, ensure_ascii=False),
@@ -577,6 +651,8 @@ def evaluate_nlq_samples(
                 )
 
                 row.update(base)
+                row["planner_backend_used_model"] = float(1.0 if str(row.get("planner_backend_used", "")) == "model" else 0.0)
+                row["planner_fallback"] = float(1.0 if str(row.get("planner_fallback_reason", "")) else 0.0)
                 local_rows.append(row)
                 per_query_rows.append(dict(row))
 
@@ -603,6 +679,8 @@ def evaluate_nlq_samples(
                     "top1_kind_token_rate": _kind_rate(local_rows, "token"),
                     "top1_kind_decision_rate": _kind_rate(local_rows, "decision"),
                     "top1_kind_event_rate": _kind_rate(local_rows, "event"),
+                    "planner_backend_used_rate": _mean([float(r.get("planner_backend_used_model", 0.0)) for r in local_rows]),
+                    "planner_fallback_rate": _mean([float(r.get("planner_fallback", 0.0)) for r in local_rows]),
                     "top1_place_segment_mismatch_rate": _mean(
                         [float(r.get("top1_place_segment_mismatch", 0.0)) for r in local_rows]
                     ),
@@ -706,6 +784,8 @@ def evaluate_nlq_samples(
                         "top1_kind_token_rate": _kind_rate(rows, "token"),
                         "top1_kind_decision_rate": _kind_rate(rows, "decision"),
                         "top1_kind_event_rate": _kind_rate(rows, "event"),
+                        "planner_backend_used_rate": _mean([float(r.get("planner_backend_used_model", 0.0)) for r in rows]),
+                        "planner_fallback_rate": _mean([float(r.get("planner_fallback", 0.0)) for r in rows]),
                         "top1_place_segment_mismatch_rate": _mean(
                             [float(r.get("top1_place_segment_mismatch", 0.0)) for r in rows]
                         ),
