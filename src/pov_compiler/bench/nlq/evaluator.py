@@ -480,6 +480,24 @@ def evaluate_nlq_samples(
                     row[f"relaxed_{key}"] = bool(relaxed_flags.get(key, False))
 
                 top1_meta = dict(reranked_hits[0].get("meta", {})) if reranked_hits else {}
+                summary_plan_meta = (
+                    dict(top1_meta.get("summary_plan", {}))
+                    if isinstance(top1_meta.get("summary_plan", {}), dict)
+                    else {}
+                )
+                row["retrieval_plan"] = str(top1_meta.get("retrieval_plan", retriever.cfg.plan_default))
+                row["stage0_summary_hits_before"] = float(summary_plan_meta.get("stage0_summary_hits_before", 0.0) or 0.0)
+                row["stage0_summary_hits_after"] = float(summary_plan_meta.get("stage0_summary_hits_after", 0.0) or 0.0)
+                row["stage0_summary_hit"] = float(1.0 if float(row["stage0_summary_hits_after"]) > 0.0 else 0.0)
+                row["stage1_filtered_hits_before_summary"] = float(
+                    summary_plan_meta.get("stage1_filtered_hits_before", 0.0) or 0.0
+                )
+                row["stage1_filtered_hits_after_summary"] = float(
+                    summary_plan_meta.get("stage1_filtered_hits_after", 0.0) or 0.0
+                )
+                row["stage1_candidate_reduction_ratio"] = float(
+                    summary_plan_meta.get("stage1_candidate_reduction_ratio", 0.0) or 0.0
+                )
                 chain_payload: dict[str, Any] = {}
                 for hit_item in reranked_hits:
                     meta_item = hit_item.get("meta", {})
@@ -627,6 +645,17 @@ def evaluate_nlq_samples(
                     "chain_fail_backoff_exhausted_rate": _mean(
                         [1.0 if str(r.get("chain_fail_reason", "")) == "backoff_exhausted" else 0.0 for r in local_rows]
                     ),
+                    "retrieval_plan_mode": _mode([str(r.get("retrieval_plan", "baseline")) for r in local_rows], default="baseline"),
+                    "stage0_summary_hit_rate": _mean([float(r.get("stage0_summary_hit", 0.0)) for r in local_rows]),
+                    "stage0_summary_hits_before_mean": _mean(
+                        [float(r.get("stage0_summary_hits_before", 0.0)) for r in local_rows]
+                    ),
+                    "stage0_summary_hits_after_mean": _mean(
+                        [float(r.get("stage0_summary_hits_after", 0.0)) for r in local_rows]
+                    ),
+                    "stage1_candidate_reduction_ratio": _mean(
+                        [float(r.get("stage1_candidate_reduction_ratio", 0.0)) for r in local_rows]
+                    ),
                     "mrr": _mean([float(r["mrr"]) for r in local_rows]),
                     **base,
                     **local_constraint_stats,
@@ -718,6 +747,17 @@ def evaluate_nlq_samples(
                         ),
                         "chain_fail_backoff_exhausted_rate": _mean(
                             [1.0 if str(r.get("chain_fail_reason", "")) == "backoff_exhausted" else 0.0 for r in rows]
+                        ),
+                        "retrieval_plan_mode": _mode([str(r.get("retrieval_plan", "baseline")) for r in rows], default="baseline"),
+                        "stage0_summary_hit_rate": _mean([float(r.get("stage0_summary_hit", 0.0)) for r in rows]),
+                        "stage0_summary_hits_before_mean": _mean(
+                            [float(r.get("stage0_summary_hits_before", 0.0)) for r in rows]
+                        ),
+                        "stage0_summary_hits_after_mean": _mean(
+                            [float(r.get("stage0_summary_hits_after", 0.0)) for r in rows]
+                        ),
+                        "stage1_candidate_reduction_ratio": _mean(
+                            [float(r.get("stage1_candidate_reduction_ratio", 0.0)) for r in rows]
                         ),
                         "mrr": _mean([float(r["mrr"]) for r in rows]),
                         "hit_at_k_event": _mean([float(r["hit_at_k_event"]) for r in rows]),

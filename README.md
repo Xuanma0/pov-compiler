@@ -789,3 +789,31 @@ Key artifacts:
 - `aggregate/metrics_by_policy_budget.csv`
 - `figures/fig_repo_summary_quality_vs_budget_seconds.png`
 - `paper_ready/repo_summary/metrics_by_policy_budget.csv`
+
+### v1.38 Summary-first Coarse-to-Fine Retrieval (Repo Summary -> Detail)
+
+This opt-in retrieval plan runs Stage0 on repo `summary` chunks, derives a time window, then runs Stage1 on fine-grained pools (token/decision/event). It is budget-oriented: low budgets often benefit from summary-first narrowing.
+
+Trace one query with summary-first planning:
+
+```text
+python scripts/trace_one_query.py --json data/outputs/ego4d_ab_real_n6/json/000a3525-6c98-4650-aaab-be7d2c7b9402_v03_decisions.json --out_dir data/outputs/trace_summary_plan_v138_demo --query "lost_object=door top_k=6" --retrieval-plan summary_then_token --summary-topk 3
+```
+
+Compare baseline vs summary-first across the same UIDs and budgets:
+
+```text
+python scripts/run_repo_summary_retrieval_compare.py --pov-json-dir data/outputs/ego4d_ab_real_n6/json --uids-file data/outputs/uids_match_real_n6.txt --out_dir data/outputs/repo_summary_retrieval_compare_v138_demo --budgets 20/50/4,60/200/12 --jobs 1
+```
+
+Paper-ready panel copy:
+
+```text
+python scripts/export_paper_ready.py --out_dir data/outputs/paper_ready_v138_demo --repo-summary-retrieval-compare-dir data/outputs/repo_summary_retrieval_compare_v138_demo/compare
+```
+
+Key artifacts:
+- `compare/tables/table_repo_summary_retrieval_compare.csv`
+- `compare/figures/fig_repo_summary_retrieval_quality_vs_budget_seconds.png`
+- `compare/figures/fig_repo_summary_retrieval_delta.png`
+- `paper_ready/repo_summary_retrieval/table_repo_summary_retrieval_compare.csv`

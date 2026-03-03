@@ -764,6 +764,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-gt-fallback", dest="allow_gt_fallback", action="store_true")
     parser.add_argument("--no-allow-gt-fallback", dest="allow_gt_fallback", action="store_false")
     parser.add_argument("--rerank-cfg", default=None, help="Path to reranker WeightConfig YAML/JSON")
+    parser.add_argument(
+        "--retrieval-plan",
+        default="baseline",
+        choices=["baseline", "summary_then_token", "summary_then_decision", "summary_then_event"],
+        help="Retrieval planning mode",
+    )
+    parser.add_argument("--summary-topk", type=int, default=3, help="Top-k summary chunks for summary-first planning")
     parser.add_argument("--hard-constraints", choices=["on", "off"], default="on")
     parser.add_argument(
         "--hard-constraints-cfg",
@@ -795,6 +802,8 @@ def main() -> int:
     eval_cfg = dict(cfg.get("eval", {}))
     budgets_cfg = dict(eval_cfg.get("budgets", {}))
     retrieval_cfg = dict(cfg.get("retrieval", {}))
+    retrieval_cfg["plan_default"] = str(args.retrieval_plan)
+    retrieval_cfg["summary_top_k"] = int(args.summary_topk)
     safety_cfg = dict(cfg.get("safety", {}))
     rerank_cfg_yaml = cfg.get("reranker", {})
     resolved_cfg: WeightConfig
@@ -972,6 +981,8 @@ def main() -> int:
 
     print(f"video_id={output.video_id}")
     print(f"mode={args.mode}")
+    print(f"retrieval_plan={args.retrieval_plan}")
+    print(f"summary_topk={int(args.summary_topk)}")
     print(f"allow_gt_fallback={str(bool(allow_gt_fallback)).lower()}")
     print(f"rerank_cfg_name={resolved_cfg.name}")
     print(f"rerank_cfg_hash={resolved_cfg.short_hash()}")

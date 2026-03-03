@@ -13,12 +13,17 @@ class QueryCandidate(TypedDict):
     priority: int
 
 
+RetrievalPlanLiteral = Literal["baseline", "summary_then_token", "summary_then_decision", "summary_then_event"]
+
+
 @dataclass
 class QueryPlan:
     intent: Literal["anchor", "token", "decision", "time", "mixed"]
     candidates: list[QueryCandidate] = field(default_factory=list)
     constraints: dict[str, Any] = field(default_factory=dict)
     debug: dict[str, Any] = field(default_factory=dict)
+    retrieval_plan: RetrievalPlanLiteral = "baseline"
+    plan_steps: list[str] = field(default_factory=lambda: ["baseline"])
 
 
 @dataclass

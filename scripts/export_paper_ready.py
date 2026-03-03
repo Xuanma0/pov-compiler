@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from sweep_repo_summary_budgets.py output",
     )
     parser.add_argument(
+        "--repo-summary-retrieval-compare-dir",
+        default=None,
+        help="Optional directory from run_repo_summary_retrieval_compare.py compare/ output",
+    )
+    parser.add_argument(
         "--repo-query-selection-sweep-dir",
         default=None,
         help="Optional directory from sweep_repo_query_selection.py output",
@@ -1030,6 +1035,57 @@ def main() -> int:
             if str(p).endswith(".png") or str(p).endswith(".pdf"):
                 figure_paths.append(str(p))
 
+    repo_summary_retrieval_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "summary": {},
+    }
+    if args.repo_summary_retrieval_compare_dir:
+        rsr_dir = Path(args.repo_summary_retrieval_compare_dir)
+        repo_summary_retrieval_compare["enabled"] = True
+        repo_summary_retrieval_compare["source_dir"] = str(rsr_dir)
+        dst_root = out_dir / "repo_summary_retrieval"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            rsr_dir / "tables" / "table_repo_summary_retrieval_compare.csv",
+            rsr_dir / "tables" / "table_repo_summary_retrieval_compare.md",
+            rsr_dir / "compare_summary.json",
+            rsr_dir / "snapshot.json",
+            rsr_dir / "figures" / "fig_repo_summary_retrieval_quality_vs_budget_seconds.png",
+            rsr_dir / "figures" / "fig_repo_summary_retrieval_quality_vs_budget_seconds.pdf",
+            rsr_dir / "figures" / "fig_repo_summary_retrieval_delta.png",
+            rsr_dir / "figures" / "fig_repo_summary_retrieval_delta.pdf",
+            rsr_dir / "figures" / "fig_repo_summary_retrieval_candidate_scale.png",
+            rsr_dir / "figures" / "fig_repo_summary_retrieval_candidate_scale.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        repo_summary_retrieval_compare["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        summary_src = rsr_dir / "compare_summary.json"
+        if summary_src.exists():
+            try:
+                payload = json.loads(summary_src.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    repo_summary_retrieval_compare["summary"] = {
+                        "budgets_matched": payload.get("budgets_matched", 0),
+                        "uids_total": payload.get("uids_total", 0),
+                    }
+            except Exception:
+                pass
+
     repo_query_selection_sweep: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1503,6 +1559,19 @@ def main() -> int:
             )
         else:
             report_lines.append("- repo_summary_sweep: source provided but artifacts missing.")
+    if args.repo_summary_retrieval_compare_dir:
+        if repo_summary_retrieval_compare.get("copied_files"):
+            report_lines.extend(
+                [
+                    "",
+                    "## Repo Summary Retrieval Compare",
+                    f"- repo_summary_retrieval_compare_dir: `{repo_summary_retrieval_compare.get('source_dir')}`",
+                    f"- repo_summary_retrieval_compare_files: `{repo_summary_retrieval_compare.get('copied_files')}`",
+                    f"- repo_summary_retrieval_compare_summary: `{json.dumps(repo_summary_retrieval_compare.get('summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- repo_summary_retrieval_compare: source provided but artifacts missing.")
     if args.repo_query_selection_sweep_dir:
         if repo_query_selection_sweep.get("copied_files"):
             report_lines.extend(
@@ -1644,6 +1713,9 @@ def main() -> int:
             "reranker_sweep_dir": str(args.reranker_sweep_dir) if args.reranker_sweep_dir else None,
             "repo_policy_sweep_dir": str(args.repo_policy_sweep_dir) if args.repo_policy_sweep_dir else None,
             "repo_summary_sweep_dir": str(args.repo_summary_sweep_dir) if args.repo_summary_sweep_dir else None,
+            "repo_summary_retrieval_compare_dir": str(args.repo_summary_retrieval_compare_dir)
+            if args.repo_summary_retrieval_compare_dir
+            else None,
             "repo_query_selection_sweep_dir": str(args.repo_query_selection_sweep_dir)
             if args.repo_query_selection_sweep_dir
             else None,
@@ -1679,6 +1751,7 @@ def main() -> int:
             "reranker_sweep": reranker_sweep,
             "repo_policy_sweep": repo_policy_sweep,
             "repo_summary_sweep": repo_summary_sweep,
+            "repo_summary_retrieval_compare": repo_summary_retrieval_compare,
             "repo_query_selection_sweep": repo_query_selection_sweep,
             "component_attribution": component_attribution,
             "bye_report_compare": bye_report_compare,

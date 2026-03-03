@@ -47,9 +47,14 @@ def trace_query(
     use_repo: bool = False,
     repo_policy: str = "query_aware",
     query_hints: dict[str, Any] | None = None,
+    retrieval_plan: str = "baseline",
+    summary_top_k: int = 3,
 ) -> dict[str, Any]:
     output = ensure_events_v1(_as_output(output_json))
-    retriever = Retriever(output_json=output, index=index_prefix, config=dict(retrieval_config or {}))
+    retrieval_cfg = dict(retrieval_config or {})
+    retrieval_cfg["plan_default"] = str(retrieval_plan)
+    retrieval_cfg["summary_top_k"] = int(summary_top_k)
+    retriever = Retriever(output_json=output, index=index_prefix, config=retrieval_cfg)
     chain_query: QueryChain | None = parse_query_chain(str(query))
     if chain_query is not None:
         chain_plan: ChainPlan | None = plan_chain(str(query))
@@ -170,6 +175,27 @@ def trace_query(
         return combined
 
     plan: QueryPlan = plan_query(str(query))
+    probe_result = retriever.retrieve(str(query))
+    probe_debug = probe_result.get("debug", {}) if isinstance(probe_result.get("debug", {}), dict) else {}
+    summary_plan = (
+        dict(probe_debug.get("summary_plan", {}))
+        if isinstance(probe_debug.get("summary_plan", {}), dict)
+        else {}
+    )
+    derived_window = (
+        dict(summary_plan.get("derived_time_window_from_summary", {}))
+        if isinstance(summary_plan.get("derived_time_window_from_summary", {}), dict)
+        else {}
+    )
+    if str(retrieval_plan).strip().lower() != "baseline" and derived_window:
+        t_min_ms = derived_window.get("t_min_ms")
+        t_max_ms = derived_window.get("t_max_ms")
+        if isinstance(t_min_ms, (int, float)):
+            plan.constraints["chain_time_mode"] = "hard"
+            plan.constraints["chain_time_min_s"] = float(t_min_ms) / 1000.0
+        if isinstance(t_max_ms, (int, float)):
+            plan.constraints["chain_time_max_s"] = float(t_max_ms) / 1000.0
+        plan.constraints["repo_summary_time_range"] = True
     candidates = [dict(c) for c in plan.candidates]
     candidate_queries = [str(c["query"]) for c in candidates]
     raw_hits = retriever.retrieve_multi(candidate_queries)
@@ -371,6 +397,7 @@ def trace_query(
     return {
         "video_id": output.video_id,
         "query": str(query),
+        "retrieval_plan": str(probe_debug.get("retrieval_plan", retrieval_plan)),
         "plan": {
             "intent": plan.intent,
             "constraints": dict(plan.constraints),
@@ -412,5 +439,23 @@ def trace_query(
         "place_segment_distribution": place_distribution,
         "interaction_topk": interaction_rows,
         "repo_selection": repo_selection,
+        "summary_planning": {
+            "stage0_summary_hits_before": int(summary_plan.get("stage0_summary_hits_before", 0) or 0),
+            "stage0_summary_hits_after": int(summary_plan.get("stage0_summary_hits_after", 0) or 0),
+            "stage0_top_hits_sample": list(summary_plan.get("stage0_top_hits_sample", []))
+            if isinstance(summary_plan.get("stage0_top_hits_sample", []), list)
+            else [],
+            "derived_time_window_from_summary": dict(summary_plan.get("derived_time_window_from_summary", {}))
+            if isinstance(summary_plan.get("derived_time_window_from_summary", {}), dict)
+            else {},
+            "stage1_filtered_hits_before": int(summary_plan.get("stage1_filtered_hits_before", 0) or 0),
+            "stage1_filtered_hits_after": int(summary_plan.get("stage1_filtered_hits_after", 0) or 0),
+            "stage1_candidate_reduction_ratio": float(summary_plan.get("stage1_candidate_reduction_ratio", 0.0) or 0.0),
+            "constraint_name": str(summary_plan.get("constraint_name", "")),
+            "backoff_steps": list(summary_plan.get("backoff_steps", []))
+            if isinstance(summary_plan.get("backoff_steps", []), list)
+            else [],
+            "reason": str(summary_plan.get("reason", "")),
+        },
         "hits": hit_rows,
     }

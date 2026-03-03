@@ -10,6 +10,8 @@ import numpy as np
 
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.memory.vector_index import VectorIndex
+from pov_compiler.repository import build_repo_chunks, deduplicate_chunks, select_chunks_for_query
+from pov_compiler.repository.schema import RepoChunk
 from pov_compiler.retrieval.query_parser import ParsedQuery, QueryChain, parse_query, parse_query_chain
 from pov_compiler.retrieval.reranker import Hit
 from pov_compiler.models.client import redact_url
@@ -46,6 +48,8 @@ def _l2_normalize(vec: np.ndarray) -> np.ndarray:
 class RetrievalConfig:
     default_top_k: int = 8
     prefer: str = "highlight"
+    plan_default: str = "baseline"
+    summary_top_k: int = 3
 
 
 class _OpenCLIPTextEncoder:
@@ -78,10 +82,13 @@ class Retriever:
         index: VectorIndex | str | Path | None = None,
         config: dict[str, Any] | None = None,
     ):
-        cfg = config or {}
+        cfg = dict(config or {})
+        self._raw_config = dict(cfg)
         self.cfg = RetrievalConfig(
             default_top_k=int(cfg.get("default_top_k", 8)),
             prefer=str(cfg.get("prefer", "highlight")),
+            plan_default=str(cfg.get("plan_default", cfg.get("retrieval_plan", "baseline"))).strip().lower(),
+            summary_top_k=max(1, int(cfg.get("summary_top_k", cfg.get("top_k_summary", 3)))),
         )
         self.output = ensure_events_v1(_as_output(output_json))
         self.decision_pool_kind, self.decision_points = self._resolve_decision_pool()
@@ -626,10 +633,208 @@ class Retriever:
             parts.append(f"top_k={max(1, top_k)}")
         return " ".join([p for p in parts if str(p).strip()]).strip()
 
+    def _make_baseline_retriever(self) -> "Retriever":
+        cfg = dict(self._raw_config)
+        cfg["plan_default"] = "baseline"
+        return Retriever(output_json=self.output, index=self.index, config=cfg)
+
+    def _repo_chunks_all(self) -> list[RepoChunk]:
+        existing = getattr(self.output, "repository", None)
+        chunks_raw = []
+        if isinstance(existing, dict):
+            chunks_raw = list(existing.get("chunks", []) or [])
+        chunks: list[RepoChunk] = []
+        for row in chunks_raw:
+            if not isinstance(row, dict):
+                continue
+            try:
+                chunks.append(RepoChunk.model_validate(row))  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    chunks.append(RepoChunk.parse_obj(row))
+                except Exception:
+                    continue
+        if chunks:
+            return chunks
+        repo_cfg = {
+            "write_policy": {"name": "multiscale+summary_v0", "summary_enabled": True, "summary_window_s": 60.0},
+            "summary": {
+                "enabled": True,
+                "window_s": 60.0,
+                "model": {"enabled": False, "provider": "fake", "model": "fake-summary-v0"},
+            },
+            "scales": {"event": True, "decision": True, "place": True, "window": True, "segment": True},
+            "dedup": {"cross_scale": True, "sim_thresh": 0.9, "iou_thresh": 0.6, "keep_best_importance": True},
+        }
+        built = build_repo_chunks(self.output, cfg=repo_cfg)
+        return deduplicate_chunks(built, cfg=repo_cfg.get("dedup", {}))
+
+    def _summary_chunks(self) -> list[RepoChunk]:
+        chunks = self._repo_chunks_all()
+        out = [c for c in chunks if str(c.level or c.scale).strip().lower() == "summary"]
+        out.sort(key=lambda c: (float(c.t0), float(c.t1), -float(c.importance), str(c.id)))
+        return out
+
+    @staticmethod
+    def _inject_summary_time_query(query: str, *, t_min_s: float, t_max_s: float, top_k: int) -> str:
+        cleaned = Retriever._strip_query_keys(
+            query,
+            {
+                "time",
+                "chain_time_mode",
+                "chain_time_min_s",
+                "chain_time_max_s",
+                "chain_derive",
+                "top_k",
+            },
+        )
+        t_min = max(0.0, float(t_min_s))
+        t_max = max(t_min + 0.001, float(t_max_s))
+        parts = [cleaned] if cleaned else []
+        parts.append(f"time={t_min:.3f}-{t_max:.3f}")
+        parts.append("chain_derive=time_only")
+        parts.append("chain_time_mode=hard")
+        parts.append(f"chain_time_min_s={t_min:.3f}")
+        parts.append(f"chain_time_max_s={t_max:.3f}")
+        parts.append(f"top_k={max(1, int(top_k))}")
+        return " ".join([str(x).strip() for x in parts if str(x).strip()])
+
+    def _retrieve_with_summary_plan(self, query: str, *, plan_name: str) -> dict[str, Any]:
+        parsed = parse_query(str(query))
+        top_k = max(1, int(parsed.top_k if parsed.top_k is not None else self.cfg.default_top_k))
+        baseline_retriever = self._make_baseline_retriever()
+        baseline_result = baseline_retriever.retrieve(str(query))
+        stage1_before = int(self._count_selected(baseline_result))
+
+        summary_pool = self._summary_chunks()
+        stage0_before = int(len(summary_pool))
+        selected_summary: list[RepoChunk] = []
+        stage0_reason = ""
+        try:
+            selected_summary = select_chunks_for_query(
+                summary_pool,
+                query=str(query),
+                budget={
+                    "max_repo_chunks": int(self.cfg.summary_top_k),
+                    "max_chunks_per_level": {"summary": int(self.cfg.summary_top_k)},
+                    "max_repo_tokens": int(max(64, self.cfg.summary_top_k * 48)),
+                    "max_total_s": None,
+                },
+                cfg={"read_policy": {"name": "query_aware"}},
+                query_info={"query": str(query), "top_k": int(top_k), "plan_intent": "mixed"},
+            )
+        except Exception as exc:
+            stage0_reason = f"summary_select_failed:{exc}"
+            selected_summary = []
+        if not selected_summary:
+            final = dict(baseline_result)
+            dbg = dict(final.get("debug", {}))
+            dbg["retrieval_plan"] = str(plan_name)
+            dbg["summary_plan"] = {
+                "stage0_summary_hits_before": int(stage0_before),
+                "stage0_summary_hits_after": 0,
+                "stage0_top_hits_sample": [],
+                "derived_time_window_from_summary": {},
+                "stage1_filtered_hits_before": int(stage1_before),
+                "stage1_filtered_hits_after": int(stage1_before),
+                "stage1_candidate_reduction_ratio": 0.0,
+                "backoff_steps": ["summary_pool_empty_or_no_hit"],
+                "reason": stage0_reason or "summary_pool_empty_or_no_hit",
+                "constraint_name": "repo_summary_time_range",
+            }
+            final["debug"] = dbg
+            return final
+
+        selected_summary = sorted(
+            list(selected_summary),
+            key=lambda c: (-float(c.importance), float(c.t0), float(c.t1), str(c.id)),
+        )[: max(1, int(self.cfg.summary_top_k))]
+        stage0_after = int(len(selected_summary))
+
+        top1 = selected_summary[0]
+        q_top1 = self._inject_summary_time_query(
+            query,
+            t_min_s=float(top1.t0),
+            t_max_s=float(top1.t1),
+            top_k=int(top_k),
+        )
+        stage1_top1 = baseline_retriever.retrieve(q_top1)
+        stage1_after = int(self._count_selected(stage1_top1))
+        chosen_mode = "top1_window"
+        backoff_steps: list[str] = []
+        derived_window = {
+            "t_min_ms": int(round(float(top1.t0) * 1000.0)),
+            "t_max_ms": int(round(float(top1.t1) * 1000.0)),
+            "source_hit_id": str(top1.id),
+            "source_level": str(top1.level or top1.scale),
+            "source_mode": str(chosen_mode),
+        }
+        final = stage1_top1
+
+        if stage1_after <= 0 and stage0_after > 1:
+            union_t_min = min(float(c.t0) for c in selected_summary)
+            union_t_max = max(float(c.t1) for c in selected_summary)
+            q_union = self._inject_summary_time_query(
+                query,
+                t_min_s=float(union_t_min),
+                t_max_s=float(union_t_max),
+                top_k=int(top_k),
+            )
+            stage1_union = baseline_retriever.retrieve(q_union)
+            union_after = int(self._count_selected(stage1_union))
+            backoff_steps.append("top1_window_empty_then_union_window")
+            if union_after > 0:
+                final = stage1_union
+                stage1_after = union_after
+                chosen_mode = "topn_union_window"
+                derived_window = {
+                    "t_min_ms": int(round(float(union_t_min) * 1000.0)),
+                    "t_max_ms": int(round(float(union_t_max) * 1000.0)),
+                    "source_hit_id": ",".join(str(c.id) for c in selected_summary),
+                    "source_level": "summary",
+                    "source_mode": str(chosen_mode),
+                }
+
+        if stage1_after <= 0:
+            backoff_steps.append("window_failed_fallback_baseline")
+            final = dict(baseline_result)
+            stage1_after = int(stage1_before)
+
+        dbg = dict(final.get("debug", {}))
+        dbg["retrieval_plan"] = str(plan_name)
+        dbg["summary_plan"] = {
+            "stage0_summary_hits_before": int(stage0_before),
+            "stage0_summary_hits_after": int(stage0_after),
+            "stage0_top_hits_sample": [
+                {
+                    "chunk_id": str(c.id),
+                    "t0_ms": int(round(float(c.t0) * 1000.0)),
+                    "t1_ms": int(round(float(c.t1) * 1000.0)),
+                    "importance": float(c.importance),
+                }
+                for c in selected_summary[: max(1, int(self.cfg.summary_top_k))]
+            ],
+            "derived_time_window_from_summary": dict(derived_window),
+            "stage1_filtered_hits_before": int(stage1_before),
+            "stage1_filtered_hits_after": int(stage1_after),
+            "stage1_candidate_reduction_ratio": float((stage1_before - stage1_after) / stage1_before)
+            if stage1_before > 0
+            else 0.0,
+            "backoff_steps": list(backoff_steps),
+            "reason": "ok" if stage1_after > 0 else "fallback_baseline",
+            "constraint_name": "repo_summary_time_range",
+        }
+        final["debug"] = dbg
+        return final
+
     def retrieve(self, query: str) -> dict[str, Any]:
         chain: QueryChain | None = parse_query_chain(str(query))
         if chain is not None:
             return self.retrieve_chain(chain, raw_query=str(query))
+
+        plan_name = str(self.cfg.plan_default or "baseline").strip().lower()
+        if plan_name in {"summary_then_token", "summary_then_decision", "summary_then_event"}:
+            return self._retrieve_with_summary_plan(str(query), plan_name=plan_name)
 
         parsed: ParsedQuery = parse_query(query)
         top_k = max(1, int(parsed.top_k if parsed.top_k is not None else self.cfg.default_top_k))
@@ -1121,6 +1326,7 @@ class Retriever:
                 "decision_pool_kind": str(self.decision_pool_kind),
                 "decision_pool_count": int(self.decision_pool_count),
                 "decision_model_meta": dict(self.decision_model_meta),
+                "retrieval_plan": str(plan_name),
             },
         }
         return result
@@ -1283,11 +1489,17 @@ class Retriever:
     def _result_to_hits(self, query: str, result: dict[str, Any]) -> list[Hit]:
         query = str(query).strip()
         chain_debug = None
+        summary_plan_debug: dict[str, Any] = {}
+        retrieval_plan_name = "baseline"
         debug_payload = result.get("debug", {})
         if isinstance(debug_payload, dict):
             chain_candidate = debug_payload.get("chain", None)
             if isinstance(chain_candidate, dict):
                 chain_debug = dict(chain_candidate)
+            summary_candidate = debug_payload.get("summary_plan", None)
+            if isinstance(summary_candidate, dict):
+                summary_plan_debug = dict(summary_candidate)
+            retrieval_plan_name = str(debug_payload.get("retrieval_plan", "baseline") or "baseline")
         event_map = {event.id: event for event in (list(self.output.events) + list(self.output.events_v0))}
         if self.output.events_v1:
             event_map = {event.id: event for event in self.output.events_v1}
@@ -1346,6 +1558,8 @@ class Retriever:
                         "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
                         "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
                         "chain": chain_debug,
+                        "retrieval_plan": retrieval_plan_name,
+                        "summary_plan": summary_plan_debug,
                     },
                 )
             )
@@ -1375,6 +1589,8 @@ class Retriever:
                         "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
                         "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
                         "chain": chain_debug,
+                        "retrieval_plan": retrieval_plan_name,
+                        "summary_plan": summary_plan_debug,
                     },
                 )
             )
@@ -1433,6 +1649,8 @@ class Retriever:
                         "interaction_primary_object": self._event_interaction_primary_object(src_event) if src_event is not None else "",
                         "interaction_score": self._event_interaction_score(src_event) if src_event is not None else 0.0,
                         "chain": chain_debug,
+                        "retrieval_plan": retrieval_plan_name,
+                        "summary_plan": summary_plan_debug,
                     },
                 )
             )
@@ -1462,6 +1680,8 @@ class Retriever:
                         "interaction_primary_object": self._event_interaction_primary_object(event),
                         "interaction_score": self._event_interaction_score(event),
                         "chain": chain_debug,
+                        "retrieval_plan": retrieval_plan_name,
+                        "summary_plan": summary_plan_debug,
                     },
                 )
             )

@@ -401,6 +401,31 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"selection": {"uids_found": 1}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional repo summary retrieval compare input.
+    (compare_dir / "repo_summary_retrieval_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_summary_retrieval_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_summary_retrieval_cmp" / "tables" / "table_repo_summary_retrieval_compare.csv").write_text(
+        "uid,budget_key,budget_seconds,mrr_strict_a,mrr_strict_b,delta_mrr_strict\nu001,20/50/4,20,0.20,0.35,0.15\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_summary_retrieval_cmp" / "tables" / "table_repo_summary_retrieval_compare.md").write_text(
+        "# repo summary retrieval compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_summary_retrieval_cmp" / "figures" / "fig_repo_summary_retrieval_quality_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "repo_summary_retrieval_cmp" / "figures" / "fig_repo_summary_retrieval_quality_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_summary_retrieval_cmp" / "figures" / "fig_repo_summary_retrieval_delta.png").write_bytes(b"PNG")
+    (compare_dir / "repo_summary_retrieval_cmp" / "figures" / "fig_repo_summary_retrieval_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_summary_retrieval_cmp" / "figures" / "fig_repo_summary_retrieval_candidate_scale.png").write_bytes(b"PNG")
+    (compare_dir / "repo_summary_retrieval_cmp" / "figures" / "fig_repo_summary_retrieval_candidate_scale.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_summary_retrieval_cmp" / "compare_summary.json").write_text(
+        json.dumps({"uids_total": 1, "budgets_matched": 1}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_summary_retrieval_cmp" / "snapshot.json").write_text(
+        json.dumps({"selection": {"uids_found": 1}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     # Optional streaming chain backoff compare input.
     (compare_dir / "stream_chain_backoff_cmp" / "tables").mkdir(parents=True, exist_ok=True)
     (compare_dir / "stream_chain_backoff_cmp" / "figures").mkdir(parents=True, exist_ok=True)
@@ -458,6 +483,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "repo_policy_sweep"),
         "--repo-summary-sweep-dir",
         str(compare_dir / "repo_summary_sweep"),
+        "--repo-summary-retrieval-compare-dir",
+        str(compare_dir / "repo_summary_retrieval_cmp"),
         "--repo-query-selection-sweep-dir",
         str(compare_dir / "repo_query_selection_sweep"),
         "--component-attribution-dir",
@@ -537,6 +564,11 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_repo_summary_quality_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_repo_summary_size_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_repo_summary_delta_vs_budget_seconds.png").exists()
+    assert (out_dir / "repo_summary_retrieval" / "table_repo_summary_retrieval_compare.csv").exists()
+    assert (out_dir / "repo_summary_retrieval" / "table_repo_summary_retrieval_compare.md").exists()
+    assert (out_dir / "figures" / "fig_repo_summary_retrieval_quality_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_repo_summary_retrieval_delta.png").exists()
+    assert (out_dir / "figures" / "fig_repo_summary_retrieval_candidate_scale.png").exists()
     assert (out_dir / "repo_query_selection" / "metrics_by_policy_budget.csv").exists()
     assert (out_dir / "repo_query_selection" / "best_report.md").exists()
     assert (out_dir / "figures" / "fig_repo_query_selection_quality_vs_budget.png").exists()

@@ -36,6 +36,7 @@ def _render_markdown(trace: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"- video_id: {trace.get('video_id', '')}")
     lines.append(f"- query: `{trace.get('query', '')}`")
+    lines.append(f"- retrieval_plan: {trace.get('retrieval_plan', 'baseline')}")
     lines.append(f"- is_chain: {str(is_chain).lower()}")
     if is_chain:
         lines.append(f"- chain_steps: 2")
@@ -94,9 +95,29 @@ def _render_markdown(trace: dict[str, Any]) -> str:
             details = json.dumps(step.get("details", {}), ensure_ascii=False, sort_keys=True)
             lines.append(
                 f"| {step.get('name', '')} | {int(step.get('before', 0))} | {int(step.get('after', 0))} | "
-                f"{int(bool(step.get('satisfied', False)))} | `{details}` |"
+                    f"{int(bool(step.get('satisfied', False)))} | `{details}` |"
             )
     lines.append("")
+    summary_plan = trace.get("summary_planning", {})
+    if isinstance(summary_plan, dict) and (
+        int(summary_plan.get("stage0_summary_hits_before", 0) or 0) > 0
+        or str(trace.get("retrieval_plan", "baseline")) != "baseline"
+    ):
+        lines.append("## Summary-first Planning")
+        lines.append("")
+        lines.append(f"- stage0_summary_hits_before: {int(summary_plan.get('stage0_summary_hits_before', 0) or 0)}")
+        lines.append(f"- stage0_summary_hits_after: {int(summary_plan.get('stage0_summary_hits_after', 0) or 0)}")
+        lines.append(
+            f"- derived_time_window_from_summary: `{json.dumps(summary_plan.get('derived_time_window_from_summary', {}), ensure_ascii=False, sort_keys=True)}`"
+        )
+        lines.append(
+            f"- stage1_filtered_hits_before/after: {int(summary_plan.get('stage1_filtered_hits_before', 0) or 0)}->{int(summary_plan.get('stage1_filtered_hits_after', 0) or 0)}"
+        )
+        lines.append(
+            f"- stage1_candidate_reduction_ratio: {float(summary_plan.get('stage1_candidate_reduction_ratio', 0.0) or 0.0):.4f}"
+        )
+        lines.append(f"- backoff_steps: `{json.dumps(summary_plan.get('backoff_steps', []), ensure_ascii=False)}`")
+        lines.append("")
     if is_chain:
         lines.append("## Chain Step 1")
         lines.append("")
@@ -320,6 +341,13 @@ def parse_args() -> argparse.Namespace:
     parser.set_defaults(enable_constraints=True)
     parser.add_argument("--use-repo", action="store_true", help="Enable repo-only context trace with query-aware selection")
     parser.add_argument("--repo-policy", default="query_aware", help="Repo read policy when --use-repo is enabled")
+    parser.add_argument(
+        "--retrieval-plan",
+        default="baseline",
+        choices=["baseline", "summary_then_token", "summary_then_decision", "summary_then_event"],
+        help="Retrieval planning mode for coarse-to-fine summary retrieval",
+    )
+    parser.add_argument("--summary-topk", type=int, default=3, help="Top-k summary chunks for summary-first planning")
     return parser.parse_args()
 
 
@@ -327,6 +355,8 @@ def main() -> int:
     args = parse_args()
     cfg = _load_yaml(Path(args.config))
     retrieval_cfg = dict(cfg.get("retrieval", {}))
+    retrieval_cfg["plan_default"] = str(args.retrieval_plan)
+    retrieval_cfg["summary_top_k"] = int(args.summary_topk)
     hard_cfg = dict(cfg.get("hard_constraints", {}))
     rerank_cfg = cfg.get("reranker", {})
 
@@ -341,6 +371,8 @@ def main() -> int:
         enable_constraints=bool(args.enable_constraints),
         use_repo=bool(args.use_repo),
         repo_policy=str(args.repo_policy),
+        retrieval_plan=str(args.retrieval_plan),
+        summary_top_k=int(args.summary_topk),
     )
 
     out_dir = Path(args.out_dir)
@@ -352,6 +384,7 @@ def main() -> int:
 
     print(f"video_id={trace.get('video_id', '')}")
     print(f"query={trace.get('query', '')}")
+    print(f"retrieval_plan={trace.get('retrieval_plan', 'baseline')}")
     print(f"chosen_plan_intent={trace.get('plan', {}).get('intent', '')}")
     print(f"decision_pool_kind={trace.get('decision_pool_kind', '')}")
     print(f"decision_pool_count={int(trace.get('decision_pool_count', 0))}")
@@ -385,6 +418,22 @@ def main() -> int:
     print(f"applied_constraints={trace.get('constraint_trace', {}).get('applied_constraints', [])}")
     print(f"filtered_hits_before={trace.get('constraint_trace', {}).get('filtered_hits_before', 0)}")
     print(f"filtered_hits_after={trace.get('constraint_trace', {}).get('filtered_hits_after', 0)}")
+    summary_plan = trace.get("summary_planning", {})
+    if isinstance(summary_plan, dict):
+        print(
+            "stage0_summary_hits_before="
+            f"{int(summary_plan.get('stage0_summary_hits_before', 0) or 0)} "
+            f"stage0_summary_hits_after={int(summary_plan.get('stage0_summary_hits_after', 0) or 0)}"
+        )
+        print(f"derived_time_window_ms={summary_plan.get('derived_time_window_from_summary', {})}")
+        print(
+            "stage1_filtered_hits_before="
+            f"{int(summary_plan.get('stage1_filtered_hits_before', 0) or 0)} "
+            f"stage1_filtered_hits_after={int(summary_plan.get('stage1_filtered_hits_after', 0) or 0)}"
+        )
+        backoff_steps = summary_plan.get("backoff_steps", [])
+        if isinstance(backoff_steps, list) and backoff_steps:
+            print(f"backoff={backoff_steps}")
     print(f"relax_steps={trace.get('constraint_trace', {}).get('constraints_relaxed', [])}")
     print(f"chain_backoff_enabled={str(bool(trace.get('constraint_trace', {}).get('chain_backoff_enabled', False))).lower()}")
     print(f"chain_backoff_chosen_level={trace.get('constraint_trace', {}).get('chain_backoff_chosen_level', None)}")
