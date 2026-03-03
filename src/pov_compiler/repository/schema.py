@@ -20,6 +20,7 @@ class RepoChunk(BaseModel):
     source_ids: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     score_fields: dict[str, float] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -64,6 +65,10 @@ class RepoChunk(BaseModel):
             self.importance = 0.0
         if not self.text:
             self.text = f"{self.level} [{self.t0:.2f}-{self.t1:.2f}]"
+        if self.level not in {"event", "decision", "place", "segment", "window", "summary"}:
+            self.level = "event"
+        if not self.scale:
+            self.scale = self.level
         return self
 
 

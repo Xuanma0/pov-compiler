@@ -6,6 +6,24 @@ from pov_compiler.repository.policy import build_read_policy
 from pov_compiler.repository.schema import RepoChunk
 
 
+def _clone_chunk(chunk: RepoChunk) -> RepoChunk:
+    if hasattr(chunk, "model_copy"):
+        return chunk.model_copy(deep=True)  # type: ignore[attr-defined]
+    return RepoChunk.parse_obj(chunk.dict())
+
+
+def _small_budget_seconds(budget: dict[str, Any]) -> float | None:
+    for key in ("max_total_s", "max_seconds"):
+        value = budget.get(key)
+        if value in (None, "", "none"):
+            continue
+        try:
+            return float(value)
+        except Exception:
+            continue
+    return None
+
+
 def select_chunks_for_query(
     repo_chunks: list[RepoChunk],
     query: str,
@@ -17,6 +35,17 @@ def select_chunks_for_query(
 ) -> list[RepoChunk] | tuple[list[RepoChunk], dict[str, Any]]:
     budget = dict(budget or {})
     cfg = dict(cfg or {})
+    work_chunks = [_clone_chunk(c) for c in list(repo_chunks)]
+    prefer_summary = bool(cfg.get("prefer_summary_small_budget", True))
+    budget_s = _small_budget_seconds(budget)
+    if prefer_summary and budget_s is not None and budget_s <= 30.0:
+        for chunk in work_chunks:
+            level = str(chunk.level or chunk.scale).strip().lower()
+            if level != "summary":
+                continue
+            chunk.importance = float(min(1.0, float(chunk.importance) * 2.0))
+            chunk.score_fields = dict(chunk.score_fields or {})
+            chunk.score_fields["summary_budget_bonus"] = 1.0
     policy_cfg = dict(cfg.get("read_policy", {}))
 
     # Backward-compatible aliases.
@@ -27,7 +56,7 @@ def select_chunks_for_query(
             max_tokens = int(budget.get("max_tokens", budget.get("max_repo_tokens", 200)))
             max_seconds_raw = budget.get("max_seconds", None)
             max_seconds = None if max_seconds_raw in (None, "", "none") else float(max_seconds_raw)
-            ranked = sorted(list(repo_chunks), key=lambda c: (float(c.t1), float(c.importance), str(c.id)), reverse=True)
+            ranked = sorted(list(work_chunks), key=lambda c: (float(c.t1), float(c.importance), str(c.id)), reverse=True)
             selected = []
             used_tokens = 0
             for chunk in ranked:
@@ -61,7 +90,7 @@ def select_chunks_for_query(
     policy = build_read_policy(policy_cfg)
     if hasattr(policy, "select_with_trace"):
         selected, trace = policy.select_with_trace(
-            list(repo_chunks),
+            work_chunks,
             query=query,
             budget_cfg=budget,
             query_info=query_info,
@@ -69,7 +98,7 @@ def select_chunks_for_query(
         )
     else:
         selected = policy.select(
-            list(repo_chunks),
+            work_chunks,
             query=query,
             budget_cfg=budget,
             query_info=query_info,

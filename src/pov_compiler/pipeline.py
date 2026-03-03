@@ -126,6 +126,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "chunk_step_s": 8.0,
             "keep_levels": ["decision", "place"],
         },
+        "summary": {
+            "enabled": False,
+            "window_s": 60.0,
+            "model": {
+                "enabled": False,
+                "provider": "fake",
+                "model": "fake-summary-v0",
+                "api_key_env": "OPENAI_API_KEY",
+                "base_url_env": "OPENAI_BASE_URL",
+                "timeout_s": 60,
+                "max_retries": 1,
+                "max_tokens": 400,
+                "temperature": 0.2,
+                "model_cache_enabled": True,
+                "model_cache_dir": "data/outputs/model_cache",
+            },
+        },
         "read_policy": {
             "name": "budgeted_topk",
             "max_chunks": 16,

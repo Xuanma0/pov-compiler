@@ -359,6 +359,23 @@ class NoveltyWritePolicy(WritePolicy):
         return out
 
 
+class MultiScaleSummaryWritePolicy(FixedIntervalWritePolicy):
+    """Write-policy marker used by writer.py to append summary-level chunks."""
+
+    def __init__(
+        self,
+        chunk_step_s: float = 8.0,
+        keep_levels: list[str] | None = None,
+        summary_window_s: float = 60.0,
+        summary_enabled: bool = True,
+    ) -> None:
+        super().__init__(chunk_step_s=chunk_step_s, keep_levels=keep_levels)
+        self.name = "multiscale+summary_v0"
+        self.params["name"] = self.name
+        self.params["summary_window_s"] = float(summary_window_s)
+        self.params["summary_enabled"] = bool(summary_enabled)
+
+
 class BudgetedTopKReadPolicy(ReadPolicy):
     def __init__(self, max_chunks: int = 16, max_tokens: int = 200, max_seconds: float | None = None) -> None:
         super().__init__(
@@ -483,7 +500,7 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         self.name = "query_aware"
         self.level_priors = {str(k).lower(): float(v) for k, v in (level_priors or {}).items()}
         if not self.level_priors:
-            self.level_priors = {"event": 0.25, "decision": 0.45, "place": 0.35, "segment": 0.2, "window": 0.15}
+            self.level_priors = {"event": 0.25, "decision": 0.45, "place": 0.35, "segment": 0.2, "window": 0.15, "summary": 0.4}
         self.intent_level_boost = {
             str(intent).lower(): {str(k).lower(): float(v) for k, v in dict(levels).items()}
             for intent, levels in dict(intent_level_boost or {}).items()
@@ -491,10 +508,10 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
         if not self.intent_level_boost:
             self.intent_level_boost = {
                 "event": {"event": 0.3, "segment": 0.12},
-                "decision": {"decision": 0.45, "event": 0.15},
-                "token": {"segment": 0.2, "window": 0.2, "event": 0.1},
-                "anchor": {"place": 0.25, "event": 0.2, "decision": 0.15},
-                "mixed": {"event": 0.12, "decision": 0.12, "place": 0.12},
+                "decision": {"decision": 0.45, "event": 0.15, "summary": 0.2},
+                "token": {"segment": 0.2, "window": 0.2, "event": 0.1, "summary": 0.12},
+                "anchor": {"place": 0.25, "event": 0.2, "decision": 0.15, "summary": 0.2},
+                "mixed": {"event": 0.12, "decision": 0.12, "place": 0.12, "summary": 0.16},
             }
         self.constraint_level_boost = {
             str(key).lower(): {str(k).lower(): float(v) for k, v in dict(levels).items()}
@@ -504,11 +521,11 @@ class QueryAwareReadPolicyV0(BudgetedTopKReadPolicy):
             self.constraint_level_boost = {
                 "place": {"place": 0.35, "event": 0.2},
                 "place_segment_id": {"place": 0.4, "event": 0.15},
-                "interaction_min": {"place": 0.25, "decision": 0.2, "event": 0.15},
-                "interaction_object": {"place": 0.3, "decision": 0.2, "event": 0.1},
+                "interaction_min": {"place": 0.25, "decision": 0.2, "event": 0.15, "summary": 0.18},
+                "interaction_object": {"place": 0.3, "decision": 0.2, "event": 0.1, "summary": 0.22},
                 "anchor_type": {"decision": 0.2, "event": 0.2},
-                "decision_type": {"decision": 0.3},
-                "token_type": {"segment": 0.2, "window": 0.15, "event": 0.1},
+                "decision_type": {"decision": 0.3, "summary": 0.12},
+                "token_type": {"segment": 0.2, "window": 0.15, "event": 0.1, "summary": 0.12},
                 "time_range": {"window": 0.15, "segment": 0.15, "event": 0.1},
             }
         self.recency_weight = float(recency_weight)
@@ -901,6 +918,13 @@ def build_write_policy(cfg: dict[str, Any] | None = None) -> WritePolicy:
             novelty_threshold=float(payload.get("novelty_threshold", 0.35)),
             max_reference=int(payload.get("max_reference", 8)),
             force_levels=list(payload.get("force_levels", ["decision"])),
+        )
+    if name in {"multiscale+summary_v0", "summary_v0", "multiscale_summary"}:
+        return MultiScaleSummaryWritePolicy(
+            chunk_step_s=float(payload.get("chunk_step_s", payload.get("step_s", 8.0))),
+            keep_levels=list(payload.get("keep_levels", payload.get("force_levels", [])) or []),
+            summary_window_s=float(payload.get("summary_window_s", payload.get("window_s", 60.0))),
+            summary_enabled=bool(payload.get("summary_enabled", True)),
         )
     raise ValueError(f"unsupported write policy: {name}")
 

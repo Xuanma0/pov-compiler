@@ -223,6 +223,24 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_quality_vs_budget_seconds.pdf").write_bytes(b"PDF")
     (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_size_vs_budget_seconds.png").write_bytes(b"PNG")
     (compare_dir / "repo_policy_sweep" / "figures" / "fig_repo_size_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    # Optional repo summary sweep input.
+    (compare_dir / "repo_summary_sweep" / "aggregate").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_summary_sweep" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "repo_summary_sweep" / "aggregate" / "metrics_by_policy_budget.csv").write_text(
+        "policy,budget_key,repo_quality_proxy\nbaseline,20/50/4,0.3\nsummary_v0,20/50/4,0.5\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_summary_sweep" / "aggregate" / "metrics_by_policy_budget.md").write_text("# repo summary\n", encoding="utf-8")
+    (compare_dir / "repo_summary_sweep" / "snapshot.json").write_text(
+        json.dumps({"outputs": {"rows": 2}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (compare_dir / "repo_summary_sweep" / "figures" / "fig_repo_summary_quality_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "repo_summary_sweep" / "figures" / "fig_repo_summary_quality_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_summary_sweep" / "figures" / "fig_repo_summary_size_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "repo_summary_sweep" / "figures" / "fig_repo_summary_size_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (compare_dir / "repo_summary_sweep" / "figures" / "fig_repo_summary_delta_vs_budget_seconds.png").write_bytes(b"PNG")
+    (compare_dir / "repo_summary_sweep" / "figures" / "fig_repo_summary_delta_vs_budget_seconds.pdf").write_bytes(b"PDF")
     # Optional repo query selection sweep input.
     (compare_dir / "repo_query_selection_sweep" / "aggregate").mkdir(parents=True, exist_ok=True)
     (compare_dir / "repo_query_selection_sweep" / "figures").mkdir(parents=True, exist_ok=True)
@@ -438,6 +456,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "reranker_sweep"),
         "--repo-policy-sweep-dir",
         str(compare_dir / "repo_policy_sweep"),
+        "--repo-summary-sweep-dir",
+        str(compare_dir / "repo_summary_sweep"),
         "--repo-query-selection-sweep-dir",
         str(compare_dir / "repo_query_selection_sweep"),
         "--component-attribution-dir",
@@ -512,6 +532,11 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "repo_policy" / "best_report.md").exists()
     assert (out_dir / "figures" / "fig_repo_quality_vs_budget_seconds.png").exists()
     assert (out_dir / "figures" / "fig_repo_size_vs_budget_seconds.png").exists()
+    assert (out_dir / "repo_summary" / "metrics_by_policy_budget.csv").exists()
+    assert (out_dir / "repo_summary" / "metrics_by_policy_budget.md").exists()
+    assert (out_dir / "figures" / "fig_repo_summary_quality_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_repo_summary_size_vs_budget_seconds.png").exists()
+    assert (out_dir / "figures" / "fig_repo_summary_delta_vs_budget_seconds.png").exists()
     assert (out_dir / "repo_query_selection" / "metrics_by_policy_budget.csv").exists()
     assert (out_dir / "repo_query_selection" / "best_report.md").exists()
     assert (out_dir / "figures" / "fig_repo_query_selection_quality_vs_budget.png").exists()

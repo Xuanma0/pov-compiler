@@ -15,6 +15,18 @@ _JSON_OBJ_RE = re.compile(r"\{[\s\S]*\}")
 
 
 class ChatModelClient(Protocol):
+    def generate_text(
+        self,
+        system: str,
+        user: str,
+        *,
+        timeout_s: int,
+        max_tokens: int,
+        temperature: float,
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        ...
+
     def complete_json(
         self,
         system: str,
@@ -115,6 +127,34 @@ class CachedModelClient:
     inner: ChatModelClient
     cfg: ModelClientConfig
     cache: ModelCallCache
+
+    def generate_text(
+        self,
+        system: str,
+        user: str,
+        *,
+        timeout_s: int,
+        max_tokens: int,
+        temperature: float,
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        if hasattr(self.inner, "generate_text"):
+            return self.inner.generate_text(  # type: ignore[attr-defined]
+                system=system,
+                user=user,
+                timeout_s=int(timeout_s),
+                max_tokens=int(max_tokens),
+                temperature=float(temperature),
+                **kwargs,
+            )
+        payload = self.complete_json(
+            system=system,
+            user=user,
+            timeout_s=int(timeout_s),
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+        )
+        return json.dumps(payload, ensure_ascii=False), {"mode": "cached_complete_json"}
 
     def complete_json(
         self,

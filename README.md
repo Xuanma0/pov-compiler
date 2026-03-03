@@ -761,3 +761,31 @@ Security rules remain strict:
 - snapshots/reports/commands are redacted.
 - keep local keys in `.env` (gitignored) and bootstrap from `.env.example`.
 - run `python scripts/security_scan_secrets.py` before commit.
+
+### v1.37 Repo Summary Compression (summary_v0)
+
+`RepoV1` now supports a model-assisted summary layer that writes `level=summary` chunks and lets small-budget context prefer summaries first.
+
+Smoke (fake provider, deterministic):
+
+```text
+python scripts/repo_summary_smoke.py --json data/outputs/ego4d_ab_real_n6/json/000a3525-6c98-4650-aaab-be7d2c7b9402_v03_decisions.json --out_dir data/outputs/repo_summary_smoke_v137_demo --provider fake --model fake-summary-v0 --repo-write-policy multiscale+summary_v0 --budget 20/50/4
+```
+
+Sweep baseline vs summary policy:
+
+```text
+python scripts/sweep_repo_summary_budgets.py --pov-json-dir data/outputs/ego4d_ab_real_n6/json --uids-file data/outputs/uids_match_repo_v116.txt --out_dir data/outputs/repo_summary_sweep_v137_demo --budgets 20/50/4,60/200/12 --provider fake --model fake-summary-v0
+```
+
+Paper-ready panel copy:
+
+```text
+python scripts/export_paper_ready.py --out_dir data/outputs/paper_ready_v137_demo --repo-summary-sweep-dir data/outputs/repo_summary_sweep_v137_demo
+```
+
+Key artifacts:
+- `repo_summaries.jsonl` (summary chunks)
+- `aggregate/metrics_by_policy_budget.csv`
+- `figures/fig_repo_summary_quality_vs_budget_seconds.png`
+- `paper_ready/repo_summary/metrics_by_policy_budget.csv`

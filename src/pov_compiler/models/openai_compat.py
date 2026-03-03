@@ -43,7 +43,7 @@ class OpenAICompatClient:
             return base
         return f"{base}/chat/completions"
 
-    def complete_json(
+    def generate_text(
         self,
         system: str,
         user: str,
@@ -51,7 +51,8 @@ class OpenAICompatClient:
         timeout_s: int,
         max_tokens: int,
         temperature: float,
-    ) -> dict[str, Any]:
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, Any]]:
         endpoint = self._endpoint()
         api_key = self.cfg.get_api_key_or_raise()
         payload = {
@@ -63,6 +64,9 @@ class OpenAICompatClient:
             "temperature": float(temperature),
             "max_tokens": int(max_tokens),
         }
+        response_format = kwargs.get("response_format")
+        if isinstance(response_format, dict):
+            payload["response_format"] = response_format
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
@@ -85,7 +89,7 @@ class OpenAICompatClient:
                 if not isinstance(result, dict):
                     raise RuntimeError("response is not a JSON object")
                 content = _extract_message_content(result)
-                return parse_json_from_text(content)
+                return content, {"mode": "openai_compat", "endpoint": redact_url(endpoint)}
             except Exception as exc:  # pragma: no cover - retried path is still deterministic
                 last_exc = exc
         safe_endpoint = redact_url(endpoint)
@@ -93,3 +97,21 @@ class OpenAICompatClient:
             f"openai_compat call failed: {last_exc} "
             f"(provider={self.cfg.provider}, base_url={safe_endpoint}, model={self.cfg.model})"
         ) from last_exc
+
+    def complete_json(
+        self,
+        system: str,
+        user: str,
+        *,
+        timeout_s: int,
+        max_tokens: int,
+        temperature: float,
+    ) -> dict[str, Any]:
+        text, _meta = self.generate_text(
+            system=system,
+            user=user,
+            timeout_s=int(timeout_s),
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+        )
+        return parse_json_from_text(text)

@@ -38,7 +38,7 @@ class GeminiClient:
         model = quote(self.cfg.model, safe="-_.")
         return f"{base}/v1beta/models/{model}:generateContent?key={api_key}"
 
-    def complete_json(
+    def generate_text(
         self,
         system: str,
         user: str,
@@ -46,9 +46,16 @@ class GeminiClient:
         timeout_s: int,
         max_tokens: int,
         temperature: float,
-    ) -> dict[str, Any]:
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, Any]]:
         api_key = self.cfg.get_api_key_or_raise()
         endpoint = self._endpoint(api_key)
+        generation_cfg: dict[str, Any] = {
+            "temperature": float(temperature),
+            "maxOutputTokens": int(max_tokens),
+        }
+        if bool(kwargs.get("json_mime", False)):
+            generation_cfg["responseMimeType"] = "application/json"
         payload = {
             "contents": [
                 {
@@ -56,10 +63,7 @@ class GeminiClient:
                     "parts": [{"text": f"{system}\n\n{user}"}],
                 }
             ],
-            "generationConfig": {
-                "temperature": float(temperature),
-                "maxOutputTokens": int(max_tokens),
-            },
+            "generationConfig": generation_cfg,
         }
         headers = {"Content-Type": "application/json"}
         for k, v in self.cfg.extra_headers.items():
@@ -80,7 +84,7 @@ class GeminiClient:
                 if not isinstance(result, dict):
                     raise RuntimeError("response is not a JSON object")
                 content = _extract_text(result)
-                return parse_json_from_text(content)
+                return content, {"mode": "gemini", "endpoint": redact_url(endpoint)}
             except Exception as exc:  # pragma: no cover - retried path is still deterministic
                 last_exc = exc
         safe_endpoint = redact_url(endpoint)
@@ -88,3 +92,21 @@ class GeminiClient:
             f"gemini call failed: {last_exc} "
             f"(provider={self.cfg.provider}, endpoint={safe_endpoint}, model={self.cfg.model})"
         ) from last_exc
+
+    def complete_json(
+        self,
+        system: str,
+        user: str,
+        *,
+        timeout_s: int,
+        max_tokens: int,
+        temperature: float,
+    ) -> dict[str, Any]:
+        text, _meta = self.generate_text(
+            system=system,
+            user=user,
+            timeout_s=int(timeout_s),
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+        )
+        return parse_json_from_text(text)

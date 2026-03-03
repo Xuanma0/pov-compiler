@@ -553,6 +553,35 @@ def build_context(
             return_trace=True,
         )
         repo_selected = [_model_dump(chunk) for chunk in repo_selected_models]
+        summary_rows = [row for row in repo_selected if str(row.get("level", row.get("scale", ""))).strip().lower() == "summary"]
+        detail_rows = [row for row in repo_selected if row not in summary_rows]
+        summary_rows.sort(key=lambda r: (float(r.get("t0", 0.0)), float(r.get("t1", 0.0)), str(r.get("id", ""))))
+        detail_rows.sort(key=lambda r: (float(r.get("t0", 0.0)), float(r.get("t1", 0.0)), str(r.get("id", ""))))
+        ordered_rows = summary_rows + detail_rows
+        max_repo_chars = int(merged_budget.get("max_repo_chars", 6000) or 6000)
+        if max_repo_chars > 0:
+            clipped: list[dict[str, Any]] = []
+            used_chars = 0
+            for row in ordered_rows:
+                text_len = len(str(row.get("text", "")))
+                if used_chars + text_len > max_repo_chars:
+                    continue
+                clipped.append(row)
+                used_chars += text_len
+            repo_selected = clipped
+        else:
+            repo_selected = ordered_rows
+    summary_count = sum(
+        1
+        for row in repo_selected
+        if str(row.get("level", row.get("scale", ""))).strip().lower() == "summary"
+    )
+    detail_count = max(0, len(repo_selected) - summary_count)
+    repo_chars_after = int(sum(len(str(c.get("text", ""))) for c in repo_selected))
+    repo_selection_trace = dict(repo_selection_trace or {})
+    repo_selection_trace["selected_summary_chunks_count"] = int(summary_count)
+    repo_selection_trace["selected_non_summary_chunks_count"] = int(detail_count)
+    repo_selection_trace["repo_context_char_budget_used"] = int(repo_chars_after)
     repo_trace = {
         "mode": mode,
         "use_repo": use_repo,
@@ -566,7 +595,10 @@ def build_context(
         },
         "repo_before": len(repo_chunks),
         "repo_after": len(repo_selected),
-        "repo_chars_after": int(sum(len(str(c.get("text", ""))) for c in repo_selected)),
+        "repo_chars_after": int(repo_chars_after),
+        "repo_selected_summary_chunks_count": int(summary_count),
+        "repo_selected_non_summary_chunks_count": int(detail_count),
+        "repo_context_char_budget_used": int(repo_chars_after),
         "selection_trace": repo_selection_trace,
     }
 

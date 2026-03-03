@@ -7,6 +7,7 @@ from typing import Any
 from pov_compiler.ir.events_v1 import ensure_events_v1
 from pov_compiler.repository.policy import build_write_policy
 from pov_compiler.repository.schema import RepoChunk
+from pov_compiler.repository.summarizer import summarize_chunks_to_repo_summary
 from pov_compiler.schemas import Event, EventV1, Output
 
 
@@ -173,6 +174,25 @@ def _finalize_chunks(chunks: list[RepoChunk]) -> list[RepoChunk]:
         chunk.meta = dict(chunk.meta or {})
         chunk.meta.setdefault("token_est", max(1, int(round(len(str(chunk.text)) / 4.0))))
     return out
+
+
+def _summary_windows(chunks: list[RepoChunk], window_s: float) -> list[tuple[float, float]]:
+    if not chunks:
+        return []
+    t0 = min(float(c.t0) for c in chunks)
+    t1 = max(float(c.t1) for c in chunks)
+    win = max(1.0, float(window_s))
+    windows: list[tuple[float, float]] = []
+    cur = float(t0)
+    while cur <= t1 + 1e-6:
+        nxt = min(float(t1), cur + win)
+        if nxt <= cur:
+            break
+        windows.append((float(cur), float(nxt)))
+        if nxt >= t1:
+            break
+        cur = nxt
+    return windows
 
 
 def build_repo_chunks(output: Output, cfg: dict[str, Any] | None = None) -> list[RepoChunk]:
@@ -383,5 +403,37 @@ def build_repo_chunks(output: Output, cfg: dict[str, Any] | None = None) -> list
     write_cfg = {"name": "fixed_interval", "chunk_step_s": 0.0, **write_cfg}
     write_policy = build_write_policy(write_cfg)
     written = write_policy.write(chunks, signals={"output_meta": dict(output.meta or {})}, budget_cfg=dict(cfg.get("budget", {})))
-    return _finalize_chunks(written)
+    written = _finalize_chunks(written)
 
+    summary_cfg = dict(cfg.get("summary", {})) if isinstance(cfg.get("summary", {}), dict) else {}
+    write_name = str(write_cfg.get("name", "")).strip().lower()
+    summary_enabled = bool(summary_cfg.get("enabled", False)) or write_name in {"multiscale+summary_v0", "summary_v0", "multiscale_summary"}
+    if summary_enabled and written:
+        window_s = float(summary_cfg.get("window_s", write_cfg.get("summary_window_s", 60.0) or 60.0))
+        model_cfg = dict(summary_cfg.get("model", {})) if isinstance(summary_cfg.get("model", {}), dict) else {}
+        if "enabled" not in model_cfg:
+            model_cfg["enabled"] = bool(summary_cfg.get("model_enabled", False))
+        summary_chunks: list[RepoChunk] = []
+        for w0, w1 in _summary_windows(written, window_s=window_s):
+            bucket = [c for c in written if str(c.level) != "summary" and max(float(c.t0), w0) <= min(float(c.t1), w1)]
+            if not bucket:
+                continue
+            try:
+                summary = summarize_chunks_to_repo_summary(
+                    bucket,
+                    video_id=str(output.video_id),
+                    policy_name=str(write_name or "multiscale+summary_v0"),
+                    provider_cfg=model_cfg,
+                    budget_hint={"window_s": window_s},
+                )
+            except Exception:
+                continue
+            summary.t0 = float(w0)
+            summary.t1 = float(w1)
+            summary.t0_ms = _ms(w0)
+            summary.t1_ms = _ms(w1)
+            summary_chunks.append(summary)
+        if summary_chunks:
+            written.extend(summary_chunks)
+            written = _finalize_chunks(written)
+    return written

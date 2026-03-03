@@ -43,6 +43,8 @@ def _iou(a0: float, a1: float, b0: float, b1: float) -> float:
 
 def _level_weight(level: str) -> float:
     lv = str(level).lower()
+    if lv == "summary":
+        return 0.4
     if lv == "decision":
         return 0.35
     if lv == "place":
@@ -141,4 +143,3 @@ def deduplicate_chunks(chunks: list[RepoChunk], cfg: dict[str, Any] | None = Non
 
     kept.sort(key=lambda c: (float(c.t0), float(c.t1), str(c.level or c.scale), str(c.id)))
     return kept
-

@@ -55,6 +55,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from sweep_repo_policies.py output",
     )
     parser.add_argument(
+        "--repo-summary-sweep-dir",
+        default=None,
+        help="Optional directory from sweep_repo_summary_budgets.py output",
+    )
+    parser.add_argument(
         "--repo-query-selection-sweep-dir",
         default=None,
         help="Optional directory from sweep_repo_query_selection.py output",
@@ -987,6 +992,44 @@ def main() -> int:
             if str(p).endswith(".png") or str(p).endswith(".pdf"):
                 figure_paths.append(str(p))
 
+    repo_summary_sweep: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    if args.repo_summary_sweep_dir:
+        rss_dir = Path(args.repo_summary_sweep_dir)
+        repo_summary_sweep["enabled"] = True
+        repo_summary_sweep["source_dir"] = str(rss_dir)
+        dst_root = out_dir / "repo_summary"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            rss_dir / "aggregate" / "metrics_by_policy_budget.csv",
+            rss_dir / "aggregate" / "metrics_by_policy_budget.md",
+            rss_dir / "snapshot.json",
+            rss_dir / "figures" / "fig_repo_summary_quality_vs_budget_seconds.png",
+            rss_dir / "figures" / "fig_repo_summary_quality_vs_budget_seconds.pdf",
+            rss_dir / "figures" / "fig_repo_summary_size_vs_budget_seconds.png",
+            rss_dir / "figures" / "fig_repo_summary_size_vs_budget_seconds.pdf",
+            rss_dir / "figures" / "fig_repo_summary_delta_vs_budget_seconds.png",
+            rss_dir / "figures" / "fig_repo_summary_delta_vs_budget_seconds.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        repo_summary_sweep["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+
     repo_query_selection_sweep: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1450,6 +1493,16 @@ def main() -> int:
             )
         else:
             report_lines.append("- repo_policy_sweep: source provided but artifacts missing.")
+    if args.repo_summary_sweep_dir:
+        if repo_summary_sweep.get("copied_files"):
+            report_lines.extend(
+                [
+                    f"- repo_summary_sweep_dir: `{repo_summary_sweep.get('source_dir')}`",
+                    f"- repo_summary_sweep_files: `{repo_summary_sweep.get('copied_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- repo_summary_sweep: source provided but artifacts missing.")
     if args.repo_query_selection_sweep_dir:
         if repo_query_selection_sweep.get("copied_files"):
             report_lines.extend(
@@ -1590,6 +1643,7 @@ def main() -> int:
             else None,
             "reranker_sweep_dir": str(args.reranker_sweep_dir) if args.reranker_sweep_dir else None,
             "repo_policy_sweep_dir": str(args.repo_policy_sweep_dir) if args.repo_policy_sweep_dir else None,
+            "repo_summary_sweep_dir": str(args.repo_summary_sweep_dir) if args.repo_summary_sweep_dir else None,
             "repo_query_selection_sweep_dir": str(args.repo_query_selection_sweep_dir)
             if args.repo_query_selection_sweep_dir
             else None,
@@ -1624,6 +1678,7 @@ def main() -> int:
             "streaming_codec_sweep": streaming_codec_sweep,
             "reranker_sweep": reranker_sweep,
             "repo_policy_sweep": repo_policy_sweep,
+            "repo_summary_sweep": repo_summary_sweep,
             "repo_query_selection_sweep": repo_query_selection_sweep,
             "component_attribution": component_attribution,
             "bye_report_compare": bye_report_compare,

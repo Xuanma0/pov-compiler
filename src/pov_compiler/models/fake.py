@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from pov_compiler.models.client import ModelClientConfig
@@ -9,6 +10,25 @@ from pov_compiler.models.client import ModelClientConfig
 class FakeModelClient:
     def __init__(self, cfg: ModelClientConfig):
         self.cfg = cfg
+
+    def generate_text(
+        self,
+        system: str,
+        user: str,
+        *,
+        timeout_s: int,
+        max_tokens: int,
+        temperature: float,
+        **kwargs: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        payload = self.complete_json(
+            system=system,
+            user=user,
+            timeout_s=int(timeout_s),
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+        )
+        return json.dumps(payload, ensure_ascii=False), {"mode": "fake_json"}
 
     def complete_json(
         self,

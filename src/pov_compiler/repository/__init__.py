@@ -4,6 +4,7 @@ from pov_compiler.repository.policy import (
     DiverseReadPolicy,
     EventTriggeredWritePolicy,
     FixedIntervalWritePolicy,
+    MultiScaleSummaryWritePolicy,
     NoveltyWritePolicy,
     QueryAwareReadPolicyV0,
     ReadPolicy,
@@ -14,6 +15,8 @@ from pov_compiler.repository.policy import (
 )
 from pov_compiler.repository.reader import select_chunks_for_query
 from pov_compiler.repository.schema import RepoChunk, RepoReadOp, RepoSnapshot, RepoWriteOp
+from pov_compiler.repository.summary_schema import RepoSummaryV0
+from pov_compiler.repository.summarizer import summarize_chunks_to_repo_summary
 from pov_compiler.repository.writer import build_repo_chunks
 
 __all__ = [
@@ -21,11 +24,13 @@ __all__ = [
     "RepoReadOp",
     "RepoSnapshot",
     "RepoWriteOp",
+    "RepoSummaryV0",
     "ReadPolicy",
     "WritePolicy",
     "FixedIntervalWritePolicy",
     "EventTriggeredWritePolicy",
     "NoveltyWritePolicy",
+    "MultiScaleSummaryWritePolicy",
     "BudgetedTopKReadPolicy",
     "DiverseReadPolicy",
     "QueryAwareReadPolicyV0",
@@ -35,4 +40,5 @@ __all__ = [
     "build_read_policy",
     "policy_cfg_hash",
     "select_chunks_for_query",
+    "summarize_chunks_to_repo_summary",
 ]

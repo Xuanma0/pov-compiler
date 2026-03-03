@@ -7,6 +7,7 @@ from pov_compiler.models.client import (
     maybe_wrap_with_cache,
 )
 from pov_compiler.models.presets import get_preset, list_presets, normalize_provider
+from pov_compiler.models.structured_output import generate_structured
 
 
 def _apply_provider_defaults(cfg: ModelClientConfig) -> ModelClientConfig:
@@ -51,4 +52,5 @@ __all__ = [
     "get_model_cache_stats",
     "get_preset",
     "list_presets",
+    "generate_structured",
 ]
