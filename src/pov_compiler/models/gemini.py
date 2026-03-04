@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from pov_compiler.models.client import ModelClientConfig, parse_json_from_text, redact_url
+from pov_compiler.models.cost import estimate_cost_usd
 
 
 def _extract_text(payload: dict[str, Any]) -> str:
@@ -32,6 +34,7 @@ def _extract_text(payload: dict[str, Any]) -> str:
 class GeminiClient:
     def __init__(self, cfg: ModelClientConfig):
         self.cfg = cfg
+        self._last_call_meta: dict[str, Any] = {}
 
     def _endpoint(self, api_key: str) -> str:
         base = str(self.cfg.base_url or "https://generativelanguage.googleapis.com").rstrip("/")
@@ -56,6 +59,9 @@ class GeminiClient:
         }
         if bool(kwargs.get("json_mime", False)):
             generation_cfg["responseMimeType"] = "application/json"
+        response_schema = kwargs.get("response_schema")
+        if isinstance(response_schema, dict):
+            generation_cfg["responseSchema"] = dict(response_schema)
         payload = {
             "contents": [
                 {
@@ -72,6 +78,7 @@ class GeminiClient:
         last_exc: Exception | None = None
         for _ in range(tries):
             try:
+                t0 = time.perf_counter()
                 req = Request(
                     endpoint,
                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -84,7 +91,32 @@ class GeminiClient:
                 if not isinstance(result, dict):
                     raise RuntimeError("response is not a JSON object")
                 content = _extract_text(result)
-                return content, {"mode": "gemini", "endpoint": redact_url(endpoint)}
+                usage = result.get("usageMetadata", {}) if isinstance(result, dict) else {}
+                if not isinstance(usage, dict):
+                    usage = {}
+                p = int(float(usage.get("promptTokenCount", usage.get("prompt_tokens", 0)) or 0))
+                c = int(float(usage.get("candidatesTokenCount", usage.get("completion_tokens", 0)) or 0))
+                t = int(float(usage.get("totalTokenCount", p + c) or (p + c)))
+                latency_ms = int((time.perf_counter() - t0) * 1000)
+                estimated = estimate_cost_usd(
+                    model=str(self.cfg.model),
+                    prompt_tokens=p,
+                    completion_tokens=c,
+                    completion_text=str(content),
+                )
+                meta = {
+                    "mode": "gemini",
+                    "endpoint": redact_url(endpoint),
+                    "status_code": 200,
+                    "latency_ms": latency_ms,
+                    "prompt_tokens": max(0, p),
+                    "completion_tokens": max(0, c),
+                    "total_tokens": max(0, t),
+                    "estimated_cost_usd": estimated,
+                    "strategy_used": str(kwargs.get("structured_strategy", "")),
+                }
+                self._last_call_meta = dict(meta)
+                return content, meta
             except Exception as exc:  # pragma: no cover - retried path is still deterministic
                 last_exc = exc
         safe_endpoint = redact_url(endpoint)
@@ -92,6 +124,10 @@ class GeminiClient:
             f"gemini call failed: {last_exc} "
             f"(provider={self.cfg.provider}, endpoint={safe_endpoint}, model={self.cfg.model})"
         ) from last_exc
+
+    @property
+    def last_call_meta(self) -> dict[str, Any]:
+        return dict(self._last_call_meta or {})
 
     def complete_json(
         self,

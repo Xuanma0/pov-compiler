@@ -95,6 +95,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from run_model_stack_compare.py compare output",
     )
     parser.add_argument(
+        "--model-cost-compare-dir",
+        default=None,
+        help="Optional directory containing model cost tables/figures (defaults to --model-stack-compare-dir when omitted)",
+    )
+    parser.add_argument(
         "--lost-object-panel-dir",
         default=None,
         help="Optional directory containing table_lost_object_budget.(csv/md) and optional figures",
@@ -1375,6 +1380,45 @@ def main() -> int:
             except Exception:
                 pass
 
+    model_cost_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    resolved_model_cost_dir: Path | None = None
+    if args.model_cost_compare_dir:
+        resolved_model_cost_dir = Path(args.model_cost_compare_dir)
+    elif args.model_stack_compare_dir:
+        resolved_model_cost_dir = Path(args.model_stack_compare_dir)
+    if resolved_model_cost_dir:
+        model_cost_compare["enabled"] = True
+        model_cost_compare["source_dir"] = str(resolved_model_cost_dir)
+        dst_root = out_dir / "model_stack"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            resolved_model_cost_dir / "tables" / "table_model_cost_compare.csv",
+            resolved_model_cost_dir / "tables" / "table_model_cost_compare.md",
+            resolved_model_cost_dir / "figures" / "fig_model_cost_vs_quality.png",
+            resolved_model_cost_dir / "figures" / "fig_model_cost_vs_quality.pdf",
+            resolved_model_cost_dir / "figures" / "fig_model_parse_fail_rate.png",
+            resolved_model_cost_dir / "figures" / "fig_model_parse_fail_rate.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        model_cost_compare["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+
     lost_object_panel: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1744,6 +1788,19 @@ def main() -> int:
             )
         else:
             report_lines.append("- model_stack_compare: source provided but artifacts missing.")
+    if resolved_model_cost_dir:
+        if model_cost_compare.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Model Cost and Structured Reliability",
+                    "",
+                    f"- model_cost_compare_dir: `{model_cost_compare.get('source_dir')}`",
+                    f"- model_cost_compare_files: `{model_cost_compare.get('copied_files')}`",
+                    "- includes cost_usd/latency/parse-fail telemetry panel for model-backed runs.",
+                ]
+            )
+        else:
+            report_lines.append("- model_cost_compare: source provided but artifacts missing.")
     if args.lost_object_panel_dir:
         if lost_object_panel.get("copied_files"):
             report_lines.extend(
@@ -1856,6 +1913,7 @@ def main() -> int:
             "model_stack_compare_dir": str(args.model_stack_compare_dir)
             if args.model_stack_compare_dir
             else None,
+            "model_cost_compare_dir": str(resolved_model_cost_dir) if resolved_model_cost_dir else None,
             "lost_object_panel_dir": str(args.lost_object_panel_dir) if args.lost_object_panel_dir else None,
             "chain_nlq_dir": str(args.chain_nlq_dir) if args.chain_nlq_dir else None,
             "chain_repo_compare_dir": str(args.chain_repo_compare_dir) if args.chain_repo_compare_dir else None,
@@ -1890,6 +1948,7 @@ def main() -> int:
             "decisions_backend_compare": decisions_backend_compare,
             "planner_backend_compare": planner_backend_compare,
             "model_stack_compare": model_stack_compare,
+            "model_cost_compare": model_cost_compare,
             "lost_object_panel": lost_object_panel,
             "chain_nlq_panel": chain_nlq_panel,
             "chain_repo_compare_panel": chain_repo_compare_panel,

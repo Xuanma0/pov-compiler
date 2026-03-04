@@ -881,10 +881,39 @@ Key artifacts:
 - `compare/tables/table_model_stack_compare.csv`
 - `compare/figures/fig_model_stack_delta.png`
 - `compare/figures/fig_model_stack_tradeoff.png`
+- `compare/tables/table_model_cost_compare.csv`
+- `compare/figures/fig_model_cost_vs_quality.png`
+- `compare/figures/fig_model_parse_fail_rate.png`
 - `compare/selection/coverage.csv`
 - `paper_ready/model_stack/table_model_stack_compare.csv`
 
 Security note: API keys are read from environment variables only (`*_API_KEY`), never from tracked yaml/json, and are redacted in snapshots/logs.
+
+### v1.41 Structured Output Capability + Cost/Latency Gates
+
+`model_health_check.py` now supports capability probing (optional), with cache and fully redacted output:
+
+```text
+python scripts/model_health_check.py --provider deepseek --model deepseek-chat --dry-run --probe-capabilities --probe-cache-dir data/outputs/model_capabilities
+```
+
+`run_model_stack_compare.py` now exports model telemetry (cost/token/latency/structured-parse) and supports hard gates:
+
+```text
+python scripts/run_model_stack_compare.py --root data/outputs/ab_v12_root --out_dir data/outputs/model_stack_cost_v141_demo --auto-select-uids --signal-audit-json-dir data/outputs/ab_v12_demo/run_stub/json --signal-min-score 0 --jobs 1 --provider fake --model fake-stack-v1 --api-mode auto --max-cost-usd 1.0 --max-parse-fail-rate 0.5
+```
+
+Paper-ready can copy both stack compare and cost panels:
+
+```text
+python scripts/export_paper_ready.py --out_dir data/outputs/paper_ready_v141_demo --model-stack-compare-dir data/outputs/model_stack_cost_v141_demo/compare --model-cost-compare-dir data/outputs/model_stack_cost_v141_demo/compare
+```
+
+Key additions:
+- `compare/tables/table_model_cost_compare.csv`
+- `compare/figures/fig_model_cost_vs_quality.png`
+- `compare/figures/fig_model_parse_fail_rate.png`
+- `compare/compare_summary.json` includes `model_cost_stats` and gate config
 
 ### Local Fast Tests (xdist)
 

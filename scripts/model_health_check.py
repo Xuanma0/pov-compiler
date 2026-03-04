@@ -12,7 +12,14 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from pov_compiler.models import ModelClientConfig, get_preset, make_client
+from pov_compiler.models import (
+    ModelClientConfig,
+    capability_states,
+    get_last_model_call_meta,
+    get_preset,
+    make_client,
+    resolve_model_capabilities,
+)
 from pov_compiler.models.client import redact_url
 
 
@@ -29,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-mode", choices=["auto", "responses", "chat"], default="auto")
     parser.add_argument("--timeout-s", type=int, default=20)
     parser.add_argument("--max-retries", type=int, default=1)
+    parser.add_argument("--probe-capabilities", action="store_true", help="Optionally probe structured-output capability (requires key)")
+    parser.add_argument("--probe-timeout-s", type=int, default=8)
+    parser.add_argument("--probe-cache-dir", default="data/outputs/model_capabilities")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--dry-run", dest="dry_run", action="store_true", help="Only print resolved route, do not request")
     mode_group.add_argument("--real", dest="real", action="store_true", help="Execute one minimal request (requires key)")
@@ -82,6 +92,26 @@ def main() -> int:
     api_key_present = bool(os.environ.get(cfg.api_key_env, ""))
     dry_run = bool(args.dry_run) and not bool(args.real)
     _print_preview(cfg, dry_run=dry_run, api_key_present=api_key_present)
+    caps, caps_meta = resolve_model_capabilities(
+        cfg,
+        probe=bool(args.probe_capabilities),
+        probe_timeout_s=int(args.probe_timeout_s),
+        probe_cache_dir=str(args.probe_cache_dir),
+    )
+    states = capability_states(caps)
+    if dry_run and not bool(args.probe_capabilities) and not api_key_present and cfg.provider != "fake":
+        states = {
+            "json_schema": "unknown",
+            "json_object": "unknown",
+            "tools": "unknown",
+            "responses_api": states.get("responses_api", "unknown"),
+            "chat_api": states.get("chat_api", "unknown"),
+        }
+    print(f"capabilities_json_schema={states.get('json_schema', 'unknown')}")
+    print(f"capabilities_json_object={states.get('json_object', 'unknown')}")
+    print(f"capabilities_tools={states.get('tools', 'unknown')}")
+    print(f"probe_used={str(bool(caps_meta.get('probe_used', False))).lower()}")
+    print(f"probe_cached={str(bool(caps_meta.get('probe_cached', False))).lower()}")
 
     if dry_run:
         print("status=dry_run_ok")
@@ -109,6 +139,21 @@ def main() -> int:
         print("status_code=200")
         print(f"latency_ms={latency_ms}")
         print(f"first_40_chars={preview}")
+        last_meta = get_last_model_call_meta(client)
+        if last_meta:
+            print(
+                "telemetry="
+                + json.dumps(
+                    {
+                        "api_mode_used": str(last_meta.get("api_mode_used", "")),
+                        "prompt_tokens": int(last_meta.get("prompt_tokens", 0) or 0),
+                        "completion_tokens": int(last_meta.get("completion_tokens", 0) or 0),
+                        "estimated_cost_usd": last_meta.get("estimated_cost_usd"),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
         return 0
     except Exception as exc:
         latency_ms = int((time.perf_counter() - t0) * 1000)

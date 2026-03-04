@@ -450,12 +450,18 @@ class OfflinePipeline:
                     output.meta["decisions_model_cache"] = get_model_cache_stats(model_client)
                     output.meta["decisions_model_parse_ok"] = bool(model_parse_meta.get("parse_ok", False))
                     output.meta["decisions_model_api_mode_used"] = str(model_parse_meta.get("api_mode_used", ""))
+                    output.meta["decisions_model_strategy_used"] = str(model_parse_meta.get("strategy_used", ""))
                     output.meta["decisions_model_parse_report"] = (
                         dict(model_parse_meta.get("parse_report", {}))
                         if isinstance(model_parse_meta.get("parse_report", {}), dict)
                         else {}
                     )
                     output.meta["decisions_model_parse_error"] = str(model_parse_meta.get("error", ""))
+                    output.meta["decisions_model_latency_ms"] = model_parse_meta.get("latency_ms")
+                    output.meta["decisions_model_prompt_tokens"] = model_parse_meta.get("prompt_tokens")
+                    output.meta["decisions_model_completion_tokens"] = model_parse_meta.get("completion_tokens")
+                    output.meta["decisions_model_total_tokens"] = model_parse_meta.get("total_tokens")
+                    output.meta["decisions_model_estimated_cost_usd"] = model_parse_meta.get("estimated_cost_usd")
             else:
                 output.decisions_model_v1 = []
 

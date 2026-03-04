@@ -462,6 +462,11 @@ def evaluate_nlq_samples(
                 )
                 hit_at_1_strict = 1.0 if hit_at_1 > 0.0 and top1_in_distractor < 0.5 else 0.0
                 hit_at_k_strict = 1.0 if hit > 0.0 and top1_in_distractor < 0.5 else 0.0
+                planner_model_meta = (
+                    dict(planner_meta.get("planner_model_meta", {}))
+                    if isinstance(planner_meta.get("planner_model_meta", {}), dict)
+                    else {}
+                )
 
                 row = {
                     "video_id": output.video_id,
@@ -479,21 +484,16 @@ def evaluate_nlq_samples(
                     "chosen_plan_intent": str(query_plan.intent),
                     "planner_backend_used": str(planner_meta.get("planner_backend_used", "heuristic")),
                     "planner_fallback_reason": str(planner_meta.get("planner_fallback_reason", "")),
-                    "planner_provider": str(
-                        dict(planner_meta.get("planner_model_meta", {})).get("provider", "")
-                        if isinstance(planner_meta.get("planner_model_meta", {}), dict)
-                        else ""
-                    ),
-                    "planner_model": str(
-                        dict(planner_meta.get("planner_model_meta", {})).get("model", "")
-                        if isinstance(planner_meta.get("planner_model_meta", {}), dict)
-                        else ""
-                    ),
-                    "planner_parse_ok": bool(
-                        dict(planner_meta.get("planner_model_meta", {})).get("parse_ok", False)
-                        if isinstance(planner_meta.get("planner_model_meta", {}), dict)
-                        else False
-                    ),
+                    "planner_provider": str(planner_model_meta.get("provider", "")),
+                    "planner_model": str(planner_model_meta.get("model", "")),
+                    "planner_parse_ok": bool(planner_model_meta.get("parse_ok", False)),
+                    "planner_api_mode_used": str(planner_model_meta.get("api_mode_used", "")),
+                    "planner_strategy_used": str(planner_model_meta.get("strategy_used", "")),
+                    "planner_latency_ms": float(planner_model_meta.get("latency_ms", 0.0) or 0.0),
+                    "planner_prompt_tokens": float(planner_model_meta.get("prompt_tokens", 0.0) or 0.0),
+                    "planner_completion_tokens": float(planner_model_meta.get("completion_tokens", 0.0) or 0.0),
+                    "planner_total_tokens": float(planner_model_meta.get("total_tokens", 0.0) or 0.0),
+                    "planner_estimated_cost_usd": float(planner_model_meta.get("estimated_cost_usd", 0.0) or 0.0),
                     "applied_constraints": json.dumps(query_plan.constraints, ensure_ascii=False, sort_keys=True),
                     "constraints_applied": json.dumps(cresult.applied, ensure_ascii=False),
                     "constraints_relaxed": json.dumps(cresult.relaxed, ensure_ascii=False),

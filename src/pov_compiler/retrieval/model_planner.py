@@ -239,10 +239,14 @@ def plan_query_with_model(
         )
         if isinstance(out_meta, dict):
             meta["used_mode"] = str(out_meta.get("used_mode", ""))
+            meta["strategy_used"] = str(out_meta.get("strategy_used", ""))
             meta["api_mode_used"] = str(out_meta.get("api_mode_used", ""))
             meta["parse_ok"] = bool(out_meta.get("parse_ok", False))
             if isinstance(out_meta.get("parse_report", {}), dict):
                 meta["parse_report"] = dict(out_meta.get("parse_report", {}))
+            for key in ("latency_ms", "prompt_tokens", "completion_tokens", "total_tokens", "estimated_cost_usd"):
+                if key in out_meta:
+                    meta[key] = out_meta.get(key)
             if out_meta.get("error"):
                 meta["fallback_reason"] = str(out_meta.get("error"))
         plan_obj = PlannerPlan.from_obj(obj if isinstance(obj, dict) else {})

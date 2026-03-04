@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib.request import Request, urlopen
 
 from pov_compiler.models.client import ModelClientConfig, parse_json_from_text, redact_url
+from pov_compiler.models.cost import estimate_cost_usd
 from pov_compiler.models.presets import get_preset, normalize_base_url, normalize_provider
 
 
@@ -58,9 +60,30 @@ def _extract_responses_text(payload: dict[str, Any]) -> str:
     raise RuntimeError("responses output text missing")
 
 
+def _usage_from_chat(payload: dict[str, Any]) -> dict[str, int]:
+    usage = payload.get("usage", {})
+    if not isinstance(usage, dict):
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    p = int(float(usage.get("prompt_tokens", 0) or 0))
+    c = int(float(usage.get("completion_tokens", 0) or 0))
+    t = int(float(usage.get("total_tokens", p + c) or (p + c)))
+    return {"prompt_tokens": max(0, p), "completion_tokens": max(0, c), "total_tokens": max(0, t)}
+
+
+def _usage_from_responses(payload: dict[str, Any]) -> dict[str, int]:
+    usage = payload.get("usage", {})
+    if not isinstance(usage, dict):
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    p = int(float(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0))
+    c = int(float(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0))
+    t = int(float(usage.get("total_tokens", p + c) or (p + c)))
+    return {"prompt_tokens": max(0, p), "completion_tokens": max(0, c), "total_tokens": max(0, t)}
+
+
 class OpenAICompatClient:
     def __init__(self, cfg: ModelClientConfig):
         self.cfg = cfg
+        self._last_call_meta: dict[str, Any] = {}
 
     def _base(self) -> str:
         provider = normalize_provider(self.cfg.provider)
@@ -88,7 +111,9 @@ class OpenAICompatClient:
             headers[str(k)] = str(v)
         return headers
 
-    def _post_json(self, endpoint: str, payload: dict[str, Any], timeout_s: int, headers: dict[str, str]) -> dict[str, Any]:
+    def _post_json(
+        self, endpoint: str, payload: dict[str, Any], timeout_s: int, headers: dict[str, str]
+    ) -> tuple[dict[str, Any], int | None]:
         req = Request(
             endpoint,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -97,10 +122,11 @@ class OpenAICompatClient:
         )
         with urlopen(req, timeout=float(timeout_s)) as resp:
             text = resp.read().decode("utf-8", errors="ignore")
+            status = int(getattr(resp, "status", 0) or 0)
         result = json.loads(text)
         if not isinstance(result, dict):
             raise RuntimeError("response is not a JSON object")
-        return result
+        return result, status
 
     def _resolve_mode_order(self, requested_mode: str) -> list[str]:
         mode = str(requested_mode or "auto").strip().lower()
@@ -128,6 +154,7 @@ class OpenAICompatClient:
         max_tokens: int,
         temperature: float,
         response_format: dict[str, Any] | None = None,
+        structured_strategy: str = "",
     ) -> tuple[str, dict[str, Any]]:
         payload: dict[str, Any] = {
             "model": self.cfg.model,
@@ -140,9 +167,28 @@ class OpenAICompatClient:
         }
         if isinstance(response_format, dict):
             payload["response_format"] = response_format
-        result = self._post_json(endpoint, payload, int(timeout_s), headers)
+        t0 = time.perf_counter()
+        result, status = self._post_json(endpoint, payload, int(timeout_s), headers)
         content = _extract_message_content(result)
-        return content, {"api_mode_used": "chat", "endpoint": redact_url(endpoint)}
+        usage = _usage_from_chat(result)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        estimated = estimate_cost_usd(
+            model=str(self.cfg.model),
+            prompt_tokens=int(usage["prompt_tokens"]),
+            completion_tokens=int(usage["completion_tokens"]),
+            completion_text=str(content),
+        )
+        meta = {
+            "api_mode_used": "chat",
+            "endpoint": redact_url(endpoint),
+            "status_code": int(status or 0),
+            "latency_ms": latency_ms,
+            **usage,
+            "estimated_cost_usd": estimated,
+            "strategy_used": str(structured_strategy or ""),
+        }
+        self._last_call_meta = dict(meta)
+        return content, meta
 
     def _call_responses(
         self,
@@ -155,6 +201,7 @@ class OpenAICompatClient:
         max_tokens: int,
         temperature: float,
         response_format: dict[str, Any] | None = None,
+        structured_strategy: str = "",
     ) -> tuple[str, dict[str, Any]]:
         payload: dict[str, Any] = {
             "model": self.cfg.model,
@@ -177,9 +224,28 @@ class OpenAICompatClient:
                             "schema": dict(js.get("schema", {})) if isinstance(js.get("schema", {}), dict) else {},
                         }
                     }
-        result = self._post_json(endpoint, payload, int(timeout_s), headers)
+        t0 = time.perf_counter()
+        result, status = self._post_json(endpoint, payload, int(timeout_s), headers)
         content = _extract_responses_text(result)
-        return content, {"api_mode_used": "responses", "endpoint": redact_url(endpoint)}
+        usage = _usage_from_responses(result)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        estimated = estimate_cost_usd(
+            model=str(self.cfg.model),
+            prompt_tokens=int(usage["prompt_tokens"]),
+            completion_tokens=int(usage["completion_tokens"]),
+            completion_text=str(content),
+        )
+        meta = {
+            "api_mode_used": "responses",
+            "endpoint": redact_url(endpoint),
+            "status_code": int(status or 0),
+            "latency_ms": latency_ms,
+            **usage,
+            "estimated_cost_usd": estimated,
+            "strategy_used": str(structured_strategy or ""),
+        }
+        self._last_call_meta = dict(meta)
+        return content, meta
 
     def generate_text(
         self,
@@ -194,6 +260,7 @@ class OpenAICompatClient:
         api_key = self.cfg.get_api_key_or_raise()
         headers = self._headers(api_key)
         response_format = kwargs.get("response_format")
+        structured_strategy = str(kwargs.get("structured_strategy", ""))
         requested_mode = str(kwargs.get("api_mode", self.cfg.api_mode))
         mode_order = self._resolve_mode_order(requested_mode)
         tries = max(1, int(getattr(self.cfg, "max_retries", 1)) + 1)
@@ -215,6 +282,7 @@ class OpenAICompatClient:
                             max_tokens=int(max_tokens),
                             temperature=float(temperature),
                             response_format=response_format if isinstance(response_format, dict) else None,
+                            structured_strategy=structured_strategy,
                         )
                     else:
                         text, meta = self._call_chat(
@@ -226,10 +294,12 @@ class OpenAICompatClient:
                             max_tokens=int(max_tokens),
                             temperature=float(temperature),
                             response_format=response_format if isinstance(response_format, dict) else None,
+                            structured_strategy=structured_strategy,
                         )
                     meta["provider"] = normalize_provider(self.cfg.provider)
                     if fallback_reason:
                         meta["fallback_reason"] = fallback_reason
+                    self._last_call_meta = dict(meta)
                     return text, meta
                 except Exception as exc:  # pragma: no cover - retry/fallback path
                     last_exc = exc
@@ -247,6 +317,10 @@ class OpenAICompatClient:
             f"openai_compat call failed: {error_label} "
             f"(provider={self.cfg.provider}, base_url={safe_base}, model={self.cfg.model}, api_mode={self.cfg.api_mode})"
         ) from last_exc
+
+    @property
+    def last_call_meta(self) -> dict[str, Any]:
+        return dict(self._last_call_meta or {})
 
     def complete_json(
         self,

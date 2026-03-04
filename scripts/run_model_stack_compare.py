@@ -73,6 +73,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-mode", default="auto", choices=["auto", "responses", "chat"])
     parser.add_argument("--fake-mode", default="diverse", choices=["minimal", "diverse"])
     parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
+    parser.add_argument("--max-cost-usd", type=float, default=None)
+    parser.add_argument("--max-requests", type=int, default=None)
+    parser.add_argument("--max-p95-latency-ms", type=float, default=None)
+    parser.add_argument("--max-parse-fail-rate", type=float, default=None)
     parser.set_defaults(model_cache=True, with_figs=True, with_summary_model=False)
     g1 = parser.add_mutually_exclusive_group()
     g1.add_argument("--model-cache", dest="model_cache", action="store_true")
@@ -326,9 +330,16 @@ def _select_jsons(
 def _prepare_variant_json(*, src_json: Path, dst_json: Path, variant: Variant, args: argparse.Namespace) -> dict[str, Any]:
     payload = json.loads(src_json.read_text(encoding="utf-8"))
     meta: dict[str, Any] = {
+        "decisions_backend": str(variant.decisions_backend),
         "decisions_model_parse_ok": None,
         "decisions_model_parse_error": "",
         "decisions_model_api_mode_used": "",
+        "decisions_model_strategy_used": "",
+        "decisions_model_estimated_cost_usd": None,
+        "decisions_model_latency_ms": None,
+        "decisions_model_prompt_tokens": None,
+        "decisions_model_completion_tokens": None,
+        "decisions_model_total_tokens": None,
         "decisions_model_count": 0,
         "summary_backend_used": variant.summary_backend,
         "summary_backend_reason": "",
@@ -359,6 +370,12 @@ def _prepare_variant_json(*, src_json: Path, dst_json: Path, variant: Variant, a
         meta["decisions_model_parse_ok"] = bool(parse_meta.get("parse_ok", False))
         meta["decisions_model_parse_error"] = str(parse_meta.get("error", ""))
         meta["decisions_model_api_mode_used"] = str(parse_meta.get("api_mode_used", ""))
+        meta["decisions_model_strategy_used"] = str(parse_meta.get("strategy_used", ""))
+        meta["decisions_model_estimated_cost_usd"] = _to_float(parse_meta.get("estimated_cost_usd"))
+        meta["decisions_model_latency_ms"] = _to_float(parse_meta.get("latency_ms"))
+        meta["decisions_model_prompt_tokens"] = _to_float(parse_meta.get("prompt_tokens"))
+        meta["decisions_model_completion_tokens"] = _to_float(parse_meta.get("completion_tokens"))
+        meta["decisions_model_total_tokens"] = _to_float(parse_meta.get("total_tokens"))
         meta["decisions_model_count"] = int(len(decisions))
         payload = dict(payload) if isinstance(payload, dict) else {}
         payload["decisions_model_v1"] = decisions
@@ -404,6 +421,30 @@ def _calc_p95(values: list[float]) -> float:
     return float(nums[idx])
 
 
+def _merge_strategy_breakdown(values: list[Any]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for val in values:
+        text = str(val or "").strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for key, raw in payload.items():
+            name = str(key or "").strip() or "unknown"
+            try:
+                cnt = int(round(float(raw)))
+            except Exception:
+                cnt = 0
+            if cnt <= 0:
+                continue
+            out[name] = out.get(name, 0) + cnt
+    return out
+
+
 def _collect_uid_budget_metrics(uid_dir: Path, variant_meta: dict[str, Any]) -> dict[str, Any]:
     summary_rows = _summary_rows(uid_dir / "nlq_summary.csv")
     query_rows = _read_csv(uid_dir / "nlq_results.csv")
@@ -422,13 +463,37 @@ def _collect_uid_budget_metrics(uid_dir: Path, variant_meta: dict[str, Any]) -> 
     planner_fallback_vals = [1.0 if str(r.get("planner_fallback_reason", "")).strip() else 0.0 for r in query_rows]
     planner_fallback_rate = _safe_mean(planner_fallback_vals) if planner_fallback_vals else float("nan")
     planner_parse_vals: list[float] = []
+    planner_cost_vals: list[float] = []
+    planner_latency_vals: list[float] = []
+    planner_model_request_count = 0
+    strategy_counts: dict[str, int] = {}
     for row in query_rows:
         parse_ok = str(row.get("planner_model_parse_ok", "")).strip().lower()
         if parse_ok in {"true", "false"}:
             planner_parse_vals.append(0.0 if parse_ok == "true" else 1.0)
+        if str(row.get("planner_backend_used", "")).strip().lower() == "model":
+            planner_model_request_count += 1
+        pcost = _to_float(row.get("planner_estimated_cost_usd"))
+        if pcost is not None:
+            planner_cost_vals.append(float(pcost))
+        plat = _to_float(row.get("planner_latency_ms"))
+        if plat is not None:
+            planner_latency_vals.append(float(plat))
+        strat = str(row.get("planner_strategy_used", "")).strip() or "unknown"
+        strategy_counts[strat] = strategy_counts.get(strat, 0) + 1
     planner_parse_fail = _safe_mean(planner_parse_vals) if planner_parse_vals else float("nan")
     decision_parse_fail = 0.0 if variant_meta.get("decisions_model_parse_ok") is True else 1.0 if variant_meta.get("decisions_model_parse_ok") is False else float("nan")
     parse_fail_rate = _safe_mean([x for x in [planner_parse_fail, decision_parse_fail] if not math.isnan(float(x))])
+    decision_cost = _to_float(variant_meta.get("decisions_model_estimated_cost_usd"))
+    decision_latency = _to_float(variant_meta.get("decisions_model_latency_ms"))
+    model_cost_total = float(sum(planner_cost_vals) + (decision_cost or 0.0))
+    req_total = int(planner_model_request_count + (1 if variant_meta.get("decisions_backend") == "model" else 0))
+    all_model_lat = [float(x) for x in planner_latency_vals]
+    if decision_latency is not None:
+        all_model_lat.append(float(decision_latency))
+    model_latency_p50 = float(statistics.median(all_model_lat)) if all_model_lat else float("nan")
+    model_latency_p95 = _calc_p95(all_model_lat)
+    model_cost_mean = float(model_cost_total / req_total) if req_total > 0 else float("nan")
 
     lat_cols = ("latency_e2e_ms", "e2e_ms", "retrieval_ms", "latency_ms")
     lat_vals: list[float] = []
@@ -447,7 +512,14 @@ def _collect_uid_budget_metrics(uid_dir: Path, variant_meta: dict[str, Any]) -> 
         "critical_fn_rate": critical_fn,
         "latency_p95_ms": latency_p95,
         "parse_fail_rate": parse_fail_rate,
+        "structured_parse_fail_rate": parse_fail_rate,
         "planner_fallback_rate": planner_fallback_rate,
+        "model_requests_total": float(req_total),
+        "model_cost_usd_total": float(model_cost_total),
+        "model_cost_usd_mean_per_query": float(model_cost_mean),
+        "model_latency_p50_ms": model_latency_p50,
+        "model_latency_p95_ms": model_latency_p95,
+        "structured_strategy_breakdown": json.dumps(strategy_counts, ensure_ascii=False, sort_keys=True),
     }
 
 
@@ -504,10 +576,10 @@ def _write_proxy_eval_outputs(
     (uid_out / "nlq_results.csv").write_text(
         "\n".join(
             [
-                "query_id,planner_backend_used,planner_fallback_reason,planner_model_parse_ok,latency_e2e_ms,top1_in_distractor",
+                "query_id,planner_backend_used,planner_fallback_reason,planner_model_parse_ok,planner_strategy_used,planner_latency_ms,planner_estimated_cost_usd,latency_e2e_ms,top1_in_distractor",
                 (
                     f"proxy_{seed},{variant.planner_backend},"
-                    f"{'' if planner_fb == 0.0 else 'proxy_fallback'},true,{lat:.3f},{dist:.6f}"
+                    f"{'' if planner_fb == 0.0 else 'proxy_fallback'},true,prompted_json,{max(1.0, lat/2.0):.3f},0.000000,{lat:.3f},{dist:.6f}"
                 ),
             ]
         )
@@ -534,7 +606,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], cols: list[str]) -> None:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         for row in rows:
-            w.writerow(row)
+            w.writerow({c: row.get(c, "") for c in cols})
 
 
 def _write_md(path: Path, rows: list[dict[str, Any]], cols: list[str], summary: list[str]) -> None:
@@ -591,6 +663,61 @@ def _make_figures(rows: list[dict[str, Any]], out_dir: Path, formats: list[str])
     plt.xlabel("latency_p95_ms (fallback distractor)")
     plt.ylabel("mrr_strict")
     plt.title("Model Stack Tradeoff")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = fig2.with_suffix(f".{ext}")
+        plt.savefig(p)
+        out.append(str(p))
+    plt.close()
+    return out
+
+
+def _make_cost_figures(rows: list[dict[str, Any]], out_dir: Path, formats: list[str]) -> list[str]:
+    import matplotlib.pyplot as plt
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out: list[str] = []
+
+    fig1 = out_dir / "fig_model_cost_vs_quality"
+    plt.figure(figsize=(8.2, 4.4))
+    for code, marker in (("A", "o"), ("B", "x"), ("C", "s"), ("D", "^")):
+        sub = [r for r in rows if str(r.get("variant_code", "")) == code]
+        xs: list[float] = []
+        ys: list[float] = []
+        for row in sub:
+            x = _to_float(row.get("model_cost_usd_total"))
+            y = _to_float(row.get("mrr_strict"))
+            if x is None or y is None:
+                continue
+            xs.append(float(x))
+            ys.append(float(y))
+        if xs:
+            plt.scatter(xs, ys, marker=marker, label=code)
+    plt.xlabel("model_cost_usd_total")
+    plt.ylabel("mrr_strict")
+    plt.title("Model Cost vs Quality")
+    plt.grid(True, alpha=0.35)
+    plt.legend()
+    plt.tight_layout()
+    for ext in formats:
+        p = fig1.with_suffix(f".{ext}")
+        plt.savefig(p)
+        out.append(str(p))
+    plt.close()
+
+    fig2 = out_dir / "fig_model_parse_fail_rate"
+    plt.figure(figsize=(8.2, 4.4))
+    for code, marker in (("A", "o"), ("B", "x"), ("C", "s"), ("D", "^")):
+        sub = [r for r in rows if str(r.get("variant_code", "")) == code]
+        xs = [float(_to_float(r.get("budget_seconds")) or 0.0) for r in sub]
+        ys = [float(_to_float(r.get("structured_parse_fail_rate")) or 0.0) for r in sub]
+        if xs:
+            plt.plot(xs, ys, marker=marker, label=code)
+    plt.xlabel("budget_seconds")
+    plt.ylabel("structured_parse_fail_rate")
+    plt.title("Structured Parse Fail Rate")
     plt.grid(True, alpha=0.35)
     plt.legend()
     plt.tight_layout()
@@ -733,7 +860,20 @@ def main() -> int:
                     "critical_fn_rate": crit,
                     "latency_p95_ms": lat,
                     "parse_fail_rate": parse_fail,
+                    "structured_parse_fail_rate": parse_fail,
                     "planner_fallback_rate": planner_fb,
+                    "model_requests_total": _safe_mean([float(x.get("model_requests_total", float("nan"))) for x in uid_metrics]),
+                    "model_cost_usd_total": _safe_mean([float(x.get("model_cost_usd_total", float("nan"))) for x in uid_metrics]),
+                    "model_cost_usd_mean_per_query": _safe_mean(
+                        [float(x.get("model_cost_usd_mean_per_query", float("nan"))) for x in uid_metrics]
+                    ),
+                    "model_latency_p50_ms": _safe_mean([float(x.get("model_latency_p50_ms", float("nan"))) for x in uid_metrics]),
+                    "model_latency_p95_ms": _safe_mean([float(x.get("model_latency_p95_ms", float("nan"))) for x in uid_metrics]),
+                    "structured_strategy_breakdown": json.dumps(
+                        _merge_strategy_breakdown([m.get("structured_strategy_breakdown", "{}") for m in uid_metrics]),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
                     "status": "ok" if uid_metrics else "missing",
                     "no_data_reason": reason,
                 }
@@ -758,7 +898,9 @@ def main() -> int:
         "decisions_backend", "planner_backend", "summary_backend",
         "uids_total", "uids_with_metrics", "coverage_score",
         "mrr_strict", "top1_in_distractor_rate", "critical_fn_rate", "latency_p95_ms",
-        "parse_fail_rate", "planner_fallback_rate",
+        "parse_fail_rate", "structured_parse_fail_rate", "planner_fallback_rate",
+        "model_requests_total", "model_cost_usd_total", "model_cost_usd_mean_per_query",
+        "model_latency_p50_ms", "model_latency_p95_ms", "structured_strategy_breakdown",
         "delta_mrr_vs_A", "delta_distractor_vs_A", "delta_critical_fn_vs_A", "delta_latency_vs_A", "delta_parse_fail_vs_A",
         "status", "no_data_reason",
     ]
@@ -776,7 +918,41 @@ def main() -> int:
             "- variants: A/B/C/D with decisions+planner(+summary) toggles",
         ],
     )
-    fig_paths: list[str] = _make_figures(rows, compare_dir / "figures", ["png", "pdf"]) if bool(args.with_figs) else []
+    fig_paths: list[str] = []
+    if bool(args.with_figs):
+        fig_paths.extend(_make_figures(rows, compare_dir / "figures", ["png", "pdf"]))
+        fig_paths.extend(_make_cost_figures(rows, compare_dir / "figures", ["png", "pdf"]))
+
+    cost_cols = [
+        "budget_key",
+        "budget_seconds",
+        "variant_code",
+        "variant_label",
+        "model_requests_total",
+        "model_cost_usd_total",
+        "model_cost_usd_mean_per_query",
+        "model_latency_p50_ms",
+        "model_latency_p95_ms",
+        "structured_parse_fail_rate",
+        "structured_strategy_breakdown",
+        "status",
+        "no_data_reason",
+    ]
+    cost_csv = compare_dir / "tables" / "table_model_cost_compare.csv"
+    cost_md = compare_dir / "tables" / "table_model_cost_compare.md"
+    _write_csv(cost_csv, rows, cost_cols)
+    _write_md(
+        cost_md,
+        rows,
+        cost_cols,
+        [
+            "- model cost/latency/parse telemetry summary per variant+budget",
+            f"- max_cost_usd_gate: {args.max_cost_usd}",
+            f"- max_requests_gate: {args.max_requests}",
+            f"- max_p95_latency_ms_gate: {args.max_p95_latency_ms}",
+            f"- max_parse_fail_rate_gate: {args.max_parse_fail_rate}",
+        ],
+    )
 
     compare_summary = {
         "selection": selection,
@@ -785,6 +961,19 @@ def main() -> int:
         "budgets": [b.key for b in budgets],
         "variants": [v.__dict__ for v in variants],
         "rows": len(rows),
+        "model_cost_stats": {
+            "model_cost_usd_total_mean": _safe_mean([float(_to_float(r.get("model_cost_usd_total")) or float("nan")) for r in rows]),
+            "model_latency_p95_ms_mean": _safe_mean([float(_to_float(r.get("model_latency_p95_ms")) or float("nan")) for r in rows]),
+            "structured_parse_fail_rate_mean": _safe_mean(
+                [float(_to_float(r.get("structured_parse_fail_rate")) or float("nan")) for r in rows]
+            ),
+        },
+        "gates": {
+            "max_cost_usd": args.max_cost_usd,
+            "max_requests": args.max_requests,
+            "max_p95_latency_ms": args.max_p95_latency_ms,
+            "max_parse_fail_rate": args.max_parse_fail_rate,
+        },
     }
     compare_summary_path = compare_dir / "compare_summary.json"
     compare_summary_path.write_text(json.dumps(compare_summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -812,6 +1001,8 @@ def main() -> int:
             "compare_dir": str(compare_dir),
             "table_csv": str(table_csv),
             "table_md": str(table_md),
+            "cost_table_csv": str(cost_csv),
+            "cost_table_md": str(cost_md),
             "figures": fig_paths,
             "summary": str(compare_summary_path),
             "commands": str(commands_file),
@@ -837,6 +1028,10 @@ def main() -> int:
                 "- tables/table_model_stack_compare.md",
                 "- figures/fig_model_stack_delta.(png/pdf)",
                 "- figures/fig_model_stack_tradeoff.(png/pdf)",
+                "- tables/table_model_cost_compare.csv",
+                "- tables/table_model_cost_compare.md",
+                "- figures/fig_model_cost_vs_quality.(png/pdf)",
+                "- figures/fig_model_parse_fail_rate.(png/pdf)",
                 "- compare_summary.json",
                 "- snapshot.json",
                 "- commands.sh",
@@ -846,6 +1041,30 @@ def main() -> int:
         encoding="utf-8",
     )
 
+    gate_fail_reasons: list[str] = []
+    if args.max_cost_usd is not None:
+        max_cost = max([float(_to_float(r.get("model_cost_usd_total")) or 0.0) for r in rows], default=0.0)
+        if max_cost > float(args.max_cost_usd):
+            gate_fail_reasons.append(f"max_cost_usd_exceeded:{max_cost:.6f}>{float(args.max_cost_usd):.6f}")
+    if args.max_requests is not None:
+        max_req = max([int(round(float(_to_float(r.get("model_requests_total")) or 0.0))) for r in rows], default=0)
+        if max_req > int(args.max_requests):
+            gate_fail_reasons.append(f"max_requests_exceeded:{max_req}>{int(args.max_requests)}")
+    if args.max_p95_latency_ms is not None:
+        max_lat = max([float(_to_float(r.get("model_latency_p95_ms")) or 0.0) for r in rows], default=0.0)
+        if max_lat > float(args.max_p95_latency_ms):
+            gate_fail_reasons.append(f"max_p95_latency_ms_exceeded:{max_lat:.3f}>{float(args.max_p95_latency_ms):.3f}")
+    if args.max_parse_fail_rate is not None:
+        max_pf = max([float(_to_float(r.get("structured_parse_fail_rate")) or 0.0) for r in rows], default=0.0)
+        if max_pf > float(args.max_parse_fail_rate):
+            gate_fail_reasons.append(f"max_parse_fail_rate_exceeded:{max_pf:.6f}>{float(args.max_parse_fail_rate):.6f}")
+
+    if gate_fail_reasons:
+        with readme.open("a", encoding="utf-8") as f:
+            f.write("\n## Gate Failure\n\n")
+            for item in gate_fail_reasons:
+                f.write(f"- {item}\n")
+
     for code in ("A", "B", "C", "D"):
         print(f"saved_run_{code}={run_dirs[code]}")
     print(f"saved_compare={compare_dir}")
@@ -853,8 +1072,17 @@ def main() -> int:
     print(f"selected_uids_count={len(selected_jsons)}")
     print("coverage_score_stats=" + json.dumps(selection.get("coverage_score_stats", {}), ensure_ascii=False, sort_keys=True))
     print(f"saved_table={[str(table_csv), str(table_md)]}")
+    print(f"saved_cost_table={[str(cost_csv), str(cost_md)]}")
     print(f"saved_figures={fig_paths}")
     print(f"saved_snapshot={snapshot_path}")
+    print(
+        "model_cost_stats="
+        + json.dumps(compare_summary.get("model_cost_stats", {}), ensure_ascii=False, sort_keys=True)
+    )
+    if gate_fail_reasons:
+        print(f"gate_status=failed reasons={gate_fail_reasons}")
+        return 2
+    print("gate_status=ok")
     return 0
 
 

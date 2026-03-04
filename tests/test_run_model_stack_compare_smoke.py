@@ -101,12 +101,17 @@ def test_run_model_stack_compare_smoke(tmp_path: Path) -> None:
     assert "saved_run_D=" in proc.stdout
     assert "saved_compare=" in proc.stdout
     assert "saved_table=" in proc.stdout
+    assert "saved_cost_table=" in proc.stdout
 
     compare_dir = out_dir / "compare"
     table_csv = compare_dir / "tables" / "table_model_stack_compare.csv"
     table_md = compare_dir / "tables" / "table_model_stack_compare.md"
+    cost_csv = compare_dir / "tables" / "table_model_cost_compare.csv"
+    cost_md = compare_dir / "tables" / "table_model_cost_compare.md"
     fig_delta = compare_dir / "figures" / "fig_model_stack_delta.png"
     fig_tradeoff = compare_dir / "figures" / "fig_model_stack_tradeoff.png"
+    fig_cost = compare_dir / "figures" / "fig_model_cost_vs_quality.png"
+    fig_parse = compare_dir / "figures" / "fig_model_parse_fail_rate.png"
     summary_json = compare_dir / "compare_summary.json"
     snapshot_json = compare_dir / "snapshot.json"
     commands = compare_dir / "commands.sh"
@@ -115,8 +120,12 @@ def test_run_model_stack_compare_smoke(tmp_path: Path) -> None:
     selection_uids = compare_dir / "selection" / "selected_uids.txt"
     assert table_csv.exists()
     assert table_md.exists()
+    assert cost_csv.exists()
+    assert cost_md.exists()
     assert fig_delta.exists()
     assert fig_tradeoff.exists()
+    assert fig_cost.exists()
+    assert fig_parse.exists()
     assert summary_json.exists()
     assert snapshot_json.exists()
     assert commands.exists()
@@ -130,4 +139,3 @@ def test_run_model_stack_compare_smoke(tmp_path: Path) -> None:
     cols = list(rows[0].keys())
     assert cols[:4] == ["budget_key", "budget_seconds", "variant_code", "variant_label"]
     assert "delta_mrr_vs_A" in cols
-

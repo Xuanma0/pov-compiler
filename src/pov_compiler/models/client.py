@@ -38,6 +38,10 @@ class ChatModelClient(Protocol):
     ) -> dict[str, Any]:
         ...
 
+    @property
+    def last_call_meta(self) -> dict[str, Any]:
+        ...
+
 
 @dataclass(slots=True)
 class ModelClientConfig:
@@ -134,6 +138,7 @@ class CachedModelClient:
     inner: ChatModelClient
     cfg: ModelClientConfig
     cache: ModelCallCache
+    _last_call_meta: dict[str, Any] = field(default_factory=dict)
 
     def generate_text(
         self,
@@ -168,8 +173,12 @@ class CachedModelClient:
             if isinstance(text_cached, str):
                 meta_cached = cached.get("meta", {})
                 if isinstance(meta_cached, dict):
-                    return text_cached, dict(meta_cached)
-                return text_cached, {}
+                    out_meta = dict(meta_cached)
+                else:
+                    out_meta = {}
+                out_meta.setdefault("cache_hit", True)
+                self._last_call_meta = ModelClientConfig.redact_dict(out_meta)
+                return text_cached, out_meta
 
         if hasattr(self.inner, "generate_text"):
             text, meta = self.inner.generate_text(  # type: ignore[attr-defined]
@@ -187,7 +196,10 @@ class CachedModelClient:
                     "meta": ModelClientConfig.redact_dict(meta if isinstance(meta, dict) else {}),
                 },
             )
-            return text, meta if isinstance(meta, dict) else {}
+            out_meta = meta if isinstance(meta, dict) else {}
+            out_meta.setdefault("cache_hit", False)
+            self._last_call_meta = ModelClientConfig.redact_dict(out_meta)
+            return text, out_meta
         payload = self.complete_json(
             system=system,
             user=user,
@@ -195,7 +207,9 @@ class CachedModelClient:
             max_tokens=int(max_tokens),
             temperature=float(temperature),
         )
-        return json.dumps(payload, ensure_ascii=False), {"mode": "cached_complete_json"}
+        meta = {"mode": "cached_complete_json", "cache_hit": False}
+        self._last_call_meta = dict(meta)
+        return json.dumps(payload, ensure_ascii=False), meta
 
     def complete_json(
         self,
@@ -224,6 +238,7 @@ class CachedModelClient:
         )
         cached = self.cache.get(key)
         if isinstance(cached, dict):
+            self._last_call_meta = {"cache_hit": True}
             return cached
         response = self.inner.complete_json(
             system=system,
@@ -232,9 +247,16 @@ class CachedModelClient:
             max_tokens=int(max_tokens),
             temperature=float(temperature),
         )
+        inner_meta = get_last_model_call_meta(self.inner)
+        out_meta = {"cache_hit": False, **dict(inner_meta)}
+        self._last_call_meta = ModelClientConfig.redact_dict(out_meta)
         if isinstance(response, dict):
             self.cache.set(key, response)
         return response
+
+    @property
+    def last_call_meta(self) -> dict[str, Any]:
+        return dict(self._last_call_meta or {})
 
 
 class ModelClientWithStats(Protocol):
@@ -260,6 +282,13 @@ def get_model_cache_stats(client: Any) -> dict[str, Any]:
         "write_fail": 0,
         "hash_prefix": "",
     }
+
+
+def get_last_model_call_meta(client: Any) -> dict[str, Any]:
+    meta = getattr(client, "last_call_meta", {})
+    if isinstance(meta, dict):
+        return ModelClientConfig.redact_dict(meta)
+    return {}
 
 
 def maybe_wrap_with_cache(client: ChatModelClient, cfg: ModelClientConfig) -> ChatModelClient:

@@ -160,9 +160,15 @@ def compile_decisions_with_model_and_meta(
     meta = {
         "api_mode_used": str(parse_meta.get("api_mode_used", "")),
         "used_mode": str(parse_meta.get("used_mode", "")),
+        "strategy_used": str(parse_meta.get("strategy_used", "")),
         "parse_ok": bool(parse_meta.get("parse_ok", False)),
         "parse_report": dict(parse_meta.get("parse_report", {})) if isinstance(parse_meta.get("parse_report", {}), dict) else {},
         "error": str(parse_meta.get("error", "")),
+        "latency_ms": parse_meta.get("latency_ms"),
+        "prompt_tokens": parse_meta.get("prompt_tokens"),
+        "completion_tokens": parse_meta.get("completion_tokens"),
+        "total_tokens": parse_meta.get("total_tokens"),
+        "estimated_cost_usd": parse_meta.get("estimated_cost_usd"),
     }
     return decisions, meta
 

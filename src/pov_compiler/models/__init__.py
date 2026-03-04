@@ -3,9 +3,17 @@
 from pov_compiler.models.client import (
     ChatModelClient,
     ModelClientConfig,
+    get_last_model_call_meta,
     get_model_cache_stats,
     maybe_wrap_with_cache,
 )
+from pov_compiler.models.capabilities import (
+    ModelCapabilities,
+    capability_states,
+    infer_capabilities_static,
+    resolve_model_capabilities,
+)
+from pov_compiler.models.cost import estimate_cost_usd
 from pov_compiler.models.presets import get_preset, list_presets, normalize_provider
 from pov_compiler.models.structured_output import generate_structured
 
@@ -50,7 +58,13 @@ __all__ = [
     "ModelClientConfig",
     "make_client",
     "get_model_cache_stats",
+    "get_last_model_call_meta",
     "get_preset",
     "list_presets",
+    "ModelCapabilities",
+    "capability_states",
+    "infer_capabilities_static",
+    "resolve_model_capabilities",
+    "estimate_cost_usd",
     "generate_structured",
 ]

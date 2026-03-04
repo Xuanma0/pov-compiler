@@ -363,6 +363,18 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "model_stack_cmp" / "figures" / "fig_model_stack_delta.pdf").write_bytes(b"PDF")
     (compare_dir / "model_stack_cmp" / "figures" / "fig_model_stack_tradeoff.png").write_bytes(b"PNG")
     (compare_dir / "model_stack_cmp" / "figures" / "fig_model_stack_tradeoff.pdf").write_bytes(b"PDF")
+    (compare_dir / "model_stack_cmp" / "tables" / "table_model_cost_compare.csv").write_text(
+        "budget_key,budget_seconds,variant_code,model_cost_usd_total,structured_parse_fail_rate\n20/50/4,20,B,0.001,0.0\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "model_stack_cmp" / "tables" / "table_model_cost_compare.md").write_text(
+        "# model cost compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_cost_vs_quality.png").write_bytes(b"PNG")
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_cost_vs_quality.pdf").write_bytes(b"PDF")
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_parse_fail_rate.png").write_bytes(b"PNG")
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_parse_fail_rate.pdf").write_bytes(b"PDF")
     (compare_dir / "model_stack_cmp" / "compare_summary.json").write_text(
         json.dumps({"uids_total": 1, "variants": ["A", "B", "C", "D"]}, ensure_ascii=False),
         encoding="utf-8",
@@ -535,6 +547,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "planner_backend_cmp"),
         "--model-stack-compare-dir",
         str(compare_dir / "model_stack_cmp"),
+        "--model-cost-compare-dir",
+        str(compare_dir / "model_stack_cmp"),
         "--chain-nlq-dir",
         str(compare_dir / "chain_nlq"),
         "--chain-repo-compare-dir",
@@ -634,8 +648,12 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_planner_backend_tradeoff.png").exists()
     assert (out_dir / "model_stack" / "table_model_stack_compare.csv").exists()
     assert (out_dir / "model_stack" / "table_model_stack_compare.md").exists()
+    assert (out_dir / "model_stack" / "table_model_cost_compare.csv").exists()
+    assert (out_dir / "model_stack" / "table_model_cost_compare.md").exists()
     assert (out_dir / "figures" / "fig_model_stack_delta.png").exists()
     assert (out_dir / "figures" / "fig_model_stack_tradeoff.png").exists()
+    assert (out_dir / "figures" / "fig_model_cost_vs_quality.png").exists()
+    assert (out_dir / "figures" / "fig_model_parse_fail_rate.png").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_summary.csv").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_summary.md").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_failure_attribution.csv").exists()

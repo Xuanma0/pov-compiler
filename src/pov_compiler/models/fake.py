@@ -10,6 +10,7 @@ from pov_compiler.models.client import ModelClientConfig
 class FakeModelClient:
     def __init__(self, cfg: ModelClientConfig):
         self.cfg = cfg
+        self._last_call_meta: dict[str, Any] = {}
 
     def generate_text(
         self,
@@ -21,6 +22,26 @@ class FakeModelClient:
         temperature: float,
         **kwargs: Any,
     ) -> tuple[str, dict[str, Any]]:
+        strategy = str(kwargs.get("structured_strategy", ""))
+        response_format = kwargs.get("response_format")
+        if str(strategy) == "json_schema" and isinstance(response_format, dict):
+            js = response_format.get("json_schema", {})
+            if isinstance(js, dict):
+                schema = js.get("schema", {})
+                if isinstance(schema, dict) and "ok" in dict(schema.get("properties", {})):
+                    text = '{"ok": true}'
+                    meta = {
+                        "mode": "fake_json_schema",
+                        "api_mode_used": "chat",
+                        "latency_ms": 1,
+                        "prompt_tokens": 8,
+                        "completion_tokens": 4,
+                        "total_tokens": 12,
+                        "estimated_cost_usd": 0.0,
+                        "strategy_used": "json_schema",
+                    }
+                    self._last_call_meta = dict(meta)
+                    return text, meta
         payload = self.complete_json(
             system=system,
             user=user,
@@ -28,7 +49,19 @@ class FakeModelClient:
             max_tokens=int(max_tokens),
             temperature=float(temperature),
         )
-        return json.dumps(payload, ensure_ascii=False), {"mode": "fake_json"}
+        text = json.dumps(payload, ensure_ascii=False)
+        meta = {
+            "mode": "fake_json",
+            "api_mode_used": "chat",
+            "latency_ms": 1,
+            "prompt_tokens": max(1, len(str(system).split()) + len(str(user).split())),
+            "completion_tokens": max(1, len(text.split())),
+            "total_tokens": max(1, len(str(system).split()) + len(str(user).split()) + len(text.split())),
+            "estimated_cost_usd": 0.0,
+            "strategy_used": strategy or "prompted_json",
+        }
+        self._last_call_meta = dict(meta)
+        return text, meta
 
     def complete_json(
         self,
@@ -53,7 +86,7 @@ class FakeModelClient:
             span_ms = 1000 + int(int(h[6:8], 16) % 1000)
             t1_ms = t0_ms + span_ms
             conf = round(0.4 + (int(h[8:10], 16) % 60) / 100.0, 3)
-            return {
+            payload = {
                 "decisions": [
                     {
                         "decision_type": kind_pool[idx],
@@ -64,6 +97,19 @@ class FakeModelClient:
                     }
                 ]
             }
+            self._last_call_meta = {
+                "mode": "fake_json",
+                "api_mode_used": "chat",
+                "latency_ms": 1,
+                "prompt_tokens": max(1, len(str(system).split()) + len(str(user).split())),
+                "completion_tokens": max(1, len(json.dumps(payload, ensure_ascii=False).split())),
+                "total_tokens": max(
+                    1,
+                    len(str(system).split()) + len(str(user).split()) + len(json.dumps(payload, ensure_ascii=False).split()),
+                ),
+                "estimated_cost_usd": 0.0,
+            }
+            return payload
         decisions: list[dict[str, object]] = []
         count = 3 + (int(h[0:2], 16) % 4)
         for i in range(count):
@@ -85,4 +131,21 @@ class FakeModelClient:
                     },
                 }
             )
-        return {"decisions": decisions}
+        payload = {"decisions": decisions}
+        self._last_call_meta = {
+            "mode": "fake_json",
+            "api_mode_used": "chat",
+            "latency_ms": 1,
+            "prompt_tokens": max(1, len(str(system).split()) + len(str(user).split())),
+            "completion_tokens": max(1, len(json.dumps(payload, ensure_ascii=False).split())),
+            "total_tokens": max(
+                1,
+                len(str(system).split()) + len(str(user).split()) + len(json.dumps(payload, ensure_ascii=False).split()),
+            ),
+            "estimated_cost_usd": 0.0,
+        }
+        return payload
+
+    @property
+    def last_call_meta(self) -> dict[str, Any]:
+        return dict(self._last_call_meta or {})
