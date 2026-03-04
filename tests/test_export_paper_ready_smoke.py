@@ -348,6 +348,25 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"uids_total": 1, "planner_a": "heuristic", "planner_b": "model"}, ensure_ascii=False),
         encoding="utf-8",
     )
+    # Optional model stack compare input.
+    (compare_dir / "model_stack_cmp" / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "model_stack_cmp" / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "model_stack_cmp" / "tables" / "table_model_stack_compare.csv").write_text(
+        "budget_key,budget_seconds,variant_code,mrr_strict,delta_mrr_vs_A\n20/50/4,20,A,0.2,0.0\n20/50/4,20,B,0.3,0.1\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "model_stack_cmp" / "tables" / "table_model_stack_compare.md").write_text(
+        "# model stack compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_stack_delta.png").write_bytes(b"PNG")
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_stack_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_stack_tradeoff.png").write_bytes(b"PNG")
+    (compare_dir / "model_stack_cmp" / "figures" / "fig_model_stack_tradeoff.pdf").write_bytes(b"PDF")
+    (compare_dir / "model_stack_cmp" / "compare_summary.json").write_text(
+        json.dumps({"uids_total": 1, "variants": ["A", "B", "C", "D"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     # Optional chain NLQ panel input.
     (compare_dir / "chain_nlq").mkdir(parents=True, exist_ok=True)
     (compare_dir / "chain_nlq" / "table_chain_summary.csv").write_text(
@@ -514,6 +533,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "decisions_backend_cmp"),
         "--planner-backend-compare-dir",
         str(compare_dir / "planner_backend_cmp"),
+        "--model-stack-compare-dir",
+        str(compare_dir / "model_stack_cmp"),
         "--chain-nlq-dir",
         str(compare_dir / "chain_nlq"),
         "--chain-repo-compare-dir",
@@ -611,6 +632,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "planner_backend" / "table_planner_backend_compare.md").exists()
     assert (out_dir / "figures" / "fig_planner_backend_delta.png").exists()
     assert (out_dir / "figures" / "fig_planner_backend_tradeoff.png").exists()
+    assert (out_dir / "model_stack" / "table_model_stack_compare.csv").exists()
+    assert (out_dir / "model_stack" / "table_model_stack_compare.md").exists()
+    assert (out_dir / "figures" / "fig_model_stack_delta.png").exists()
+    assert (out_dir / "figures" / "fig_model_stack_tradeoff.png").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_summary.csv").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_summary.md").exists()
     assert (out_dir / "chain_nlq_panel" / "table_chain_failure_attribution.csv").exists()

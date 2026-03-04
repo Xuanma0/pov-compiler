@@ -17,7 +17,13 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "provider_env_assignment",
         re.compile(
-            r"(?i)(?:OPENAI|GEMINI|QWEN|DEEPSEEK|GLM|DASHSCOPE|ZHIPU|ZAI)_API_KEY\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{12,}[\"']?"
+            r"(?i)(?:OPENAI|OPENROUTER|GEMINI|QWEN|DEEPSEEK|GLM|DASHSCOPE|ZHIPU|ZAI)_API_KEY\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{10,}[\"']?"
+        ),
+    ),
+    (
+        "provider_token_assignment",
+        re.compile(
+            r"(?i)(?:OPENAI|GEMINI|QWEN|DEEPSEEK|GLM|DASHSCOPE|ZHIPU|ZAI)_(?:TOKEN|SECRET)\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{10,}[\"']?"
         ),
     ),
 ]

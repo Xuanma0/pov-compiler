@@ -25,7 +25,8 @@ def test_model_health_check_dry_run_providers() -> None:
         assert "status=dry_run_ok" in text
         assert "provider=" in text
         assert "api_key_present=" in text
+        assert "api_mode=" in text
+        assert "api_mode_order=" in text
         banned = ["sk-", "bearer ", "authorization:", "api_key="]
         for token in banned:
             assert token not in text
-

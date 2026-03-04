@@ -392,7 +392,7 @@ class OfflinePipeline:
             backend = str(decision_cfg.get("backend", "heuristic")).strip().lower()
             output.meta["decisions_backend"] = backend
             if backend == "model":
-                from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model
+                from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model_and_meta
                 from pov_compiler.models import ModelClientConfig, get_model_cache_stats, make_client
 
                 model_cfg_raw = decision_cfg.get("model_client", {}) if isinstance(decision_cfg, dict) else {}
@@ -401,6 +401,7 @@ class OfflinePipeline:
                 model_cfg = ModelClientConfig(
                     provider=str(model_cfg_raw.get("provider", "fake")),
                     model=str(model_cfg_raw.get("model", "fake-decision-v1")),
+                    api_mode=str(model_cfg_raw.get("api_mode", "auto")),
                     base_url=str(model_cfg_raw.get("base_url")) if model_cfg_raw.get("base_url") not in (None, "") else None,
                     base_url_env=str(model_cfg_raw.get("base_url_env", "")),
                     api_key_env=str(model_cfg_raw.get("api_key_env", "")),
@@ -423,6 +424,7 @@ class OfflinePipeline:
                 ).hexdigest()[:12]
                 output.meta["decisions_model_provider"] = str(model_cfg.provider)
                 output.meta["decisions_model_name"] = str(model_cfg.model)
+                output.meta["decisions_model_api_mode"] = str(model_cfg.api_mode)
                 output.meta["decisions_model_base_url"] = str(public_cfg.get("base_url", ""))
                 output.meta["decisions_model_cfg_hash"] = cfg_hash
                 if bool(model_cfg.extra.get("dry_run", False)):
@@ -439,8 +441,21 @@ class OfflinePipeline:
                     }
                 else:
                     model_client = make_client(model_cfg)
-                    output.decisions_model_v1 = compile_decisions_with_model(output=output, client=model_client, cfg=model_cfg)
+                    model_decisions, model_parse_meta = compile_decisions_with_model_and_meta(
+                        output=output,
+                        client=model_client,
+                        cfg=model_cfg,
+                    )
+                    output.decisions_model_v1 = model_decisions
                     output.meta["decisions_model_cache"] = get_model_cache_stats(model_client)
+                    output.meta["decisions_model_parse_ok"] = bool(model_parse_meta.get("parse_ok", False))
+                    output.meta["decisions_model_api_mode_used"] = str(model_parse_meta.get("api_mode_used", ""))
+                    output.meta["decisions_model_parse_report"] = (
+                        dict(model_parse_meta.get("parse_report", {}))
+                        if isinstance(model_parse_meta.get("parse_report", {}), dict)
+                        else {}
+                    )
+                    output.meta["decisions_model_parse_error"] = str(model_parse_meta.get("error", ""))
             else:
                 output.decisions_model_v1 = []
 

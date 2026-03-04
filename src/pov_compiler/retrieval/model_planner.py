@@ -167,6 +167,7 @@ def plan_query_with_model(
     cfg = ModelClientConfig(
         provider=provider,
         model=model_name,
+        api_mode=str(cfg_raw.get("api_mode", "auto")),
         base_url=cfg_raw.get("base_url"),
         base_url_env=str(cfg_raw.get("base_url_env", "")),
         api_key_env=str(cfg_raw.get("api_key_env", "")),
@@ -190,8 +191,10 @@ def plan_query_with_model(
         "api_key_present": bool(api_key_present),
         "fallback_reason": "",
         "used_mode": "",
+        "api_mode_used": "",
         "parse_ok": False,
         "cache": {},
+        "parse_report": {},
         "planner_namespace": "planner_v1",
     }
 
@@ -236,7 +239,10 @@ def plan_query_with_model(
         )
         if isinstance(out_meta, dict):
             meta["used_mode"] = str(out_meta.get("used_mode", ""))
+            meta["api_mode_used"] = str(out_meta.get("api_mode_used", ""))
             meta["parse_ok"] = bool(out_meta.get("parse_ok", False))
+            if isinstance(out_meta.get("parse_report", {}), dict):
+                meta["parse_report"] = dict(out_meta.get("parse_report", {}))
             if out_meta.get("error"):
                 meta["fallback_reason"] = str(out_meta.get("error"))
         plan_obj = PlannerPlan.from_obj(obj if isinstance(obj, dict) else {})

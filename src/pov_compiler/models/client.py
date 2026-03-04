@@ -43,6 +43,7 @@ class ChatModelClient(Protocol):
 class ModelClientConfig:
     provider: str
     model: str
+    api_mode: str = "auto"
     base_url: str | None = None
     base_url_env: str = ""
     api_key_env: str = ""
@@ -65,6 +66,12 @@ class ModelClientConfig:
         if not self.model:
             raise ValueError("model is required")
         preset = get_preset(self.provider)
+        mode = str(self.api_mode or "").strip().lower()
+        if not mode:
+            mode = str(getattr(preset, "default_api_mode", "auto") or "auto")
+        if mode not in {"auto", "responses", "chat"}:
+            mode = "auto"
+        self.api_mode = mode
         if not self.api_key_env:
             self.api_key_env = str(preset.default_api_key_env)
         if not self.base_url_env:
@@ -138,8 +145,34 @@ class CachedModelClient:
         temperature: float,
         **kwargs: Any,
     ) -> tuple[str, dict[str, Any]]:
+        request_payload = {
+            "call": "generate_text",
+            "system": str(system),
+            "user": str(user),
+            "timeout_s": int(timeout_s),
+            "max_tokens": int(max_tokens),
+            "temperature": float(temperature),
+            "kwargs": ModelClientConfig.redact_dict(dict(kwargs or {})),
+            "api_mode": str(getattr(self.cfg, "api_mode", "auto")),
+        }
+        key = ModelCallCache.build_key(
+            provider=self.cfg.provider,
+            model=self.cfg.model,
+            base_url=redact_url(str(self.cfg.base_url or "")),
+            request_payload=request_payload,
+            schema_version=SCHEMA_VERSION,
+        )
+        cached = self.cache.get(key)
+        if isinstance(cached, dict):
+            text_cached = cached.get("text")
+            if isinstance(text_cached, str):
+                meta_cached = cached.get("meta", {})
+                if isinstance(meta_cached, dict):
+                    return text_cached, dict(meta_cached)
+                return text_cached, {}
+
         if hasattr(self.inner, "generate_text"):
-            return self.inner.generate_text(  # type: ignore[attr-defined]
+            text, meta = self.inner.generate_text(  # type: ignore[attr-defined]
                 system=system,
                 user=user,
                 timeout_s=int(timeout_s),
@@ -147,6 +180,14 @@ class CachedModelClient:
                 temperature=float(temperature),
                 **kwargs,
             )
+            self.cache.set(
+                key,
+                {
+                    "text": str(text),
+                    "meta": ModelClientConfig.redact_dict(meta if isinstance(meta, dict) else {}),
+                },
+            )
+            return text, meta if isinstance(meta, dict) else {}
         payload = self.complete_json(
             system=system,
             user=user,
@@ -166,11 +207,13 @@ class CachedModelClient:
         temperature: float,
     ) -> dict[str, Any]:
         request_payload = {
+            "call": "complete_json",
             "system": str(system),
             "user": str(user),
             "timeout_s": int(timeout_s),
             "max_tokens": int(max_tokens),
             "temperature": float(temperature),
+            "api_mode": str(getattr(self.cfg, "api_mode", "auto")),
         }
         key = ModelCallCache.build_key(
             provider=self.cfg.provider,

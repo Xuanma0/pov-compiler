@@ -86,6 +86,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-name", default=None, help="Model name for decisions backend=model")
     parser.add_argument("--model-base-url", default=None, help="Model base URL")
     parser.add_argument("--model-api-key-env", default=None, help="API key environment variable name")
+    parser.add_argument(
+        "--model-api-mode",
+        choices=["auto", "responses", "chat"],
+        default=None,
+        help="Model API mode (auto/responses/chat) for OpenAI-compatible providers",
+    )
     parser.add_argument("--model-timeout-s", type=int, default=None)
     parser.add_argument("--model-max-retries", type=int, default=None)
     parser.add_argument("--model-max-tokens", type=int, default=None)
@@ -141,6 +147,8 @@ def main() -> int:
         model_cfg["base_url"] = str(args.model_base_url)
     if args.model_api_key_env is not None:
         model_cfg["api_key_env"] = str(args.model_api_key_env)
+    if args.model_api_mode is not None:
+        model_cfg["api_mode"] = str(args.model_api_mode)
     if args.model_timeout_s is not None:
         model_cfg["timeout_s"] = int(args.model_timeout_s)
     if args.model_max_retries is not None:
@@ -212,6 +220,15 @@ def main() -> int:
         print(f"decisions_model_provider={output.meta.get('decisions_model_provider', '')}")
         print(f"decisions_model_name={output.meta.get('decisions_model_name', '')}")
         print(f"decisions_model_cfg_hash={output.meta.get('decisions_model_cfg_hash', '')}")
+        if output.meta.get("decisions_model_api_mode"):
+            print(f"decisions_model_api_mode={output.meta.get('decisions_model_api_mode', '')}")
+        if output.meta.get("decisions_model_api_mode_used"):
+            print(f"decisions_model_api_mode_used={output.meta.get('decisions_model_api_mode_used', '')}")
+        if output.meta.get("decisions_model_parse_ok") is not None:
+            print(
+                "decisions_model_parse_ok="
+                + str(bool(output.meta.get("decisions_model_parse_ok", False))).lower()
+            )
         cache_stats = output.meta.get("decisions_model_cache", {})
         if isinstance(cache_stats, dict):
             print(f"model_cache_enabled={str(bool(cache_stats.get('enabled', False))).lower()}")

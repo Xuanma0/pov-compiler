@@ -13,7 +13,7 @@ from pov_compiler.models.presets import get_preset, normalize_provider
 
 
 def test_provider_presets_exist_and_nonempty() -> None:
-    providers = ["openai", "openai_compat", "gemini", "deepseek", "qwen", "glm", "fake"]
+    providers = ["openai", "openai_compat", "gemini", "deepseek", "qwen", "qwen_intl", "glm", "fake"]
     for p in providers:
         preset = get_preset(p)
         assert str(preset.name).strip() != ""
@@ -32,4 +32,3 @@ def test_configs_have_no_api_key_literal_field() -> None:
     for p in cfg_dir.glob("*.y*ml"):
         text = p.read_text(encoding="utf-8")
         assert re.search(r"(?mi)^\\s*api_key\\s*:", text) is None
-

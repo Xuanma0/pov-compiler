@@ -92,7 +92,33 @@ def test_gemini_client_payload(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_make_client_routes_openai_compat_family() -> None:
-    for provider in ("openai", "openai_compat", "qwen", "deepseek", "glm"):
+    for provider in ("openai", "openai_compat", "qwen", "qwen_intl", "deepseek", "glm"):
         cfg = ModelClientConfig(provider=provider, model="demo-model", model_cache_enabled=False)
         client = make_client(cfg)
         assert client.__class__.__name__ == "OpenAICompatClient"
+
+
+def test_openai_compat_auto_fallback_to_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy-test-key")
+    calls: list[str] = []
+
+    def _fake_urlopen(req, timeout=None):  # type: ignore[no-untyped-def]
+        calls.append(str(req.full_url))
+        if str(req.full_url).endswith("/responses"):
+            raise RuntimeError("responses unsupported")
+        return _DummyResp({"choices": [{"message": {"content": "{\"ok\": true}"}}]})
+
+    monkeypatch.setattr("pov_compiler.models.openai_compat.urlopen", _fake_urlopen)
+    cfg = ModelClientConfig(
+        provider="openai_compat",
+        model="gpt-4o-mini",
+        base_url="https://example.test/v1",
+        api_mode="auto",
+    )
+    client = OpenAICompatClient(cfg)
+    text, meta = client.generate_text("sys", "usr", timeout_s=10, max_tokens=32, temperature=0.0)
+    assert json.loads(text) == {"ok": True}
+    assert any(x.endswith("/responses") for x in calls)
+    assert any(x.endswith("/chat/completions") for x in calls)
+    assert str(meta.get("api_mode_used", "")) == "chat"
+    assert "responses_failed" in str(meta.get("fallback_reason", ""))

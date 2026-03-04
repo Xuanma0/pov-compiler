@@ -21,17 +21,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--provider",
         required=True,
-        choices=["openai", "openai_compat", "gemini", "deepseek", "qwen", "glm", "fake"],
+        choices=["openai", "openai_compat", "gemini", "deepseek", "qwen", "qwen_intl", "glm", "fake"],
     )
     parser.add_argument("--model", required=True)
     parser.add_argument("--base-url", default=None)
     parser.add_argument("--api-key-env", default=None)
+    parser.add_argument("--api-mode", choices=["auto", "responses", "chat"], default="auto")
     parser.add_argument("--timeout-s", type=int, default=20)
     parser.add_argument("--max-retries", type=int, default=1)
-    parser.set_defaults(dry_run=False, do_request=False)
-    parser.add_argument("--dry-run", dest="dry_run", action="store_true")
-    parser.add_argument("--do-request", dest="do_request", action="store_true")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--dry-run", dest="dry_run", action="store_true", help="Only print resolved route, do not request")
+    mode_group.add_argument("--real", dest="real", action="store_true", help="Execute one minimal request (requires key)")
+    parser.set_defaults(dry_run=True, real=False)
     return parser.parse_args()
+
+
+def _resolved_mode_order(provider: str, requested_mode: str) -> list[str]:
+    p = str(provider).strip().lower()
+    mode = str(requested_mode).strip().lower()
+    if mode == "responses":
+        return ["responses", "chat"]
+    if mode == "chat":
+        return ["chat"]
+    # auto
+    preset = get_preset(p)
+    if bool(getattr(preset, "supports_responses", False)):
+        return ["responses", "chat"]
+    return ["chat"]
 
 
 def _print_preview(cfg: ModelClientConfig, *, dry_run: bool, api_key_present: bool) -> None:
@@ -40,6 +56,8 @@ def _print_preview(cfg: ModelClientConfig, *, dry_run: bool, api_key_present: bo
     print(f"base_url={redact_url(str(cfg.base_url or ''))}")
     print(f"api_key_env={cfg.api_key_env}")
     print(f"api_key_present={str(bool(api_key_present)).lower()}")
+    print(f"api_mode={cfg.api_mode}")
+    print(f"api_mode_order={_resolved_mode_order(cfg.provider, cfg.api_mode)}")
     print(f"timeout_s={int(cfg.timeout_s)}")
     print(f"max_retries={int(cfg.max_retries)}")
     print(f"dry_run={str(bool(dry_run)).lower()}")
@@ -54,6 +72,7 @@ def main() -> int:
         model=str(args.model),
         base_url=str(args.base_url) if args.base_url else None,
         api_key_env=api_key_env,
+        api_mode=str(args.api_mode),
         timeout_s=int(args.timeout_s),
         max_tokens=32,
         temperature=0.0,
@@ -61,7 +80,7 @@ def main() -> int:
         model_cache_enabled=False,
     )
     api_key_present = bool(os.environ.get(cfg.api_key_env, ""))
-    dry_run = bool(args.dry_run) or not bool(args.do_request)
+    dry_run = bool(args.dry_run) and not bool(args.real)
     _print_preview(cfg, dry_run=dry_run, api_key_present=api_key_present)
 
     if dry_run:
@@ -102,4 +121,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

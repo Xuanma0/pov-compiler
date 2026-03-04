@@ -13,7 +13,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from pov_compiler.ir.events_v1 import ensure_events_v1
-from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model
+from pov_compiler.l3_decisions.model_compiler import compile_decisions_with_model_and_meta
 from pov_compiler.models import ModelClientConfig, get_model_cache_stats, make_client
 from pov_compiler.schemas import Output
 
@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=1)
     parser.add_argument("--max_tokens", type=int, default=800)
     parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--api-mode", choices=["auto", "responses", "chat"], default="auto")
     parser.add_argument("--dry-run", action="store_true", help="Do not call remote model; only print resolved config/output paths.")
     parser.add_argument("--fake-mode", choices=["minimal", "diverse"], default="minimal")
     parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
@@ -109,6 +110,7 @@ def main() -> int:
     cfg = ModelClientConfig(
         provider=str(args.provider),
         model=str(args.model or _provider_default_model(str(args.provider))),
+        api_mode=str(args.api_mode),
         base_url=str(args.base_url) if args.base_url else None,
         api_key_env=str(args.api_key_env or ""),
         timeout_s=int(args.timeout_s),
@@ -123,6 +125,7 @@ def main() -> int:
         print(f"env_hint={cfg.api_key_env}")
 
     decisions_model_v1: list[dict[str, Any]] = []
+    parse_meta: dict[str, Any] = {"parse_ok": False, "api_mode_used": "", "parse_report": {}, "error": ""}
     if bool(args.dry_run):
         cache_stats = {
             "enabled": bool(args.model_cache),
@@ -134,7 +137,7 @@ def main() -> int:
         }
     else:
         client = make_client(cfg)
-        decisions_model_v1 = compile_decisions_with_model(output=output, client=client, cfg=cfg)
+        decisions_model_v1, parse_meta = compile_decisions_with_model_and_meta(output=output, client=client, cfg=cfg)
         cache_stats = get_model_cache_stats(client)
 
     decisions_path = out_dir / "decisions_model_v1.json"
@@ -149,6 +152,9 @@ def main() -> int:
         f"- model: `{cfg.model}`",
         f"- decisions_model_v1_total: `{len(decisions_model_v1)}`",
         f"- dry_run: `{str(bool(args.dry_run)).lower()}`",
+        f"- api_mode: `{cfg.api_mode}`",
+        f"- api_mode_used: `{str(parse_meta.get('api_mode_used', ''))}`",
+        f"- parse_ok: `{str(bool(parse_meta.get('parse_ok', False))).lower()}`",
         f"- model_cache_enabled: `{str(bool(cache_stats.get('enabled', False))).lower()}`",
         f"- model_cache_dir: `{cache_stats.get('dir', '')}`",
         f"- model_cache_stats: `{json.dumps({'hit': int(cache_stats.get('hit', 0)), 'miss': int(cache_stats.get('miss', 0)), 'write_fail': int(cache_stats.get('write_fail', 0))}, ensure_ascii=False, sort_keys=True)}`",
@@ -163,12 +169,18 @@ def main() -> int:
             "json": str(in_path),
             "provider": cfg.provider,
             "model": cfg.model,
+            "api_mode": cfg.api_mode,
         },
         "client_cfg": cfg.to_public_dict(),
         "outputs": {
             "decisions_model_v1_json": str(decisions_path),
             "report_md": str(report_path),
             "decisions_model_v1_total": len(decisions_model_v1),
+            "parse_meta": {
+                "parse_ok": bool(parse_meta.get("parse_ok", False)),
+                "api_mode_used": str(parse_meta.get("api_mode_used", "")),
+                "error": str(parse_meta.get("error", "")),
+            },
             "model_cache_stats": {
                 "enabled": bool(cache_stats.get("enabled", False)),
                 "dir": str(cache_stats.get("dir", "")),
@@ -187,6 +199,9 @@ def main() -> int:
     print(f"provider={cfg.provider}")
     print(f"model={cfg.model}")
     print(f"dry_run={str(bool(args.dry_run)).lower()}")
+    print(f"api_mode={cfg.api_mode}")
+    print(f"api_mode_used={str(parse_meta.get('api_mode_used', ''))}")
+    print(f"parse_ok={str(bool(parse_meta.get('parse_ok', False))).lower()}")
     print(f"decisions_model_v1_total={len(decisions_model_v1)}")
     print(f"model_cache_enabled={str(bool(cache_stats.get('enabled', False))).lower()}")
     print(f"model_cache_dir={cache_stats.get('dir', '')}")

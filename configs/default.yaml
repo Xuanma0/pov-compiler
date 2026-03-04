@@ -40,6 +40,7 @@ decisions:
     # qwen/deepseek/glm are routed through OpenAI-compatible endpoints by default.
     provider: fake
     model: fake-decision-v1
+    api_mode: auto
     base_url: null
     # optional env indirection for base_url:
     # OPENAI_BASE_URL / QWEN_BASE_URL / DEEPSEEK_BASE_URL / GLM_BASE_URL
@@ -73,6 +74,7 @@ retrieval:
   planner_model:
     provider: fake
     model: fake-planner-v1
+    api_mode: auto
     base_url: null
     base_url_env: OPENAI_BASE_URL
     api_key_env: OPENAI_API_KEY
@@ -176,6 +178,7 @@ repo:
       enabled: false
       provider: fake
       model: fake-summary-v0
+      api_mode: auto
       api_key_env: OPENAI_API_KEY
       base_url_env: OPENAI_BASE_URL
       timeout_s: 60

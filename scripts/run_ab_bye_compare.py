@@ -95,6 +95,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--real-model-base-url", default=None)
     parser.add_argument("--stub-model-api-key-env", default=None)
     parser.add_argument("--real-model-api-key-env", default=None)
+    parser.add_argument("--stub-model-api-mode", choices=["auto", "responses", "chat"], default="auto")
+    parser.add_argument("--real-model-api-mode", choices=["auto", "responses", "chat"], default="auto")
     parser.add_argument("--stub-model-fake-mode", choices=["minimal", "diverse"], default="minimal")
     parser.add_argument("--real-model-fake-mode", choices=["minimal", "diverse"], default="minimal")
     parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
@@ -202,6 +204,7 @@ def _build_smoke_cmd(
     model_name: str | None,
     model_base_url: str | None,
     model_api_key_env: str | None,
+    model_api_mode: str,
     model_fake_mode: str,
     model_cache_enabled: bool,
     model_cache_dir: str,
@@ -284,6 +287,8 @@ def _build_smoke_cmd(
             cmd.extend(["--model-base-url", str(model_base_url)])
         if model_api_key_env:
             cmd.extend(["--model-api-key-env", str(model_api_key_env)])
+        if model_api_mode:
+            cmd.extend(["--model-api-mode", str(model_api_mode)])
         cmd.extend(["--model-fake-mode", str(model_fake_mode)])
         cmd.extend(["--model-cache-dir", str(model_cache_dir)])
         cmd.append("--model-cache" if model_cache_enabled else "--no-model-cache")
@@ -716,6 +721,7 @@ def main() -> int:
         model_name=str(args.stub_model_name) if args.stub_model_name else None,
         model_base_url=str(args.stub_model_base_url) if args.stub_model_base_url else None,
         model_api_key_env=str(args.stub_model_api_key_env) if args.stub_model_api_key_env else None,
+        model_api_mode=str(args.stub_model_api_mode),
         model_fake_mode=str(args.stub_model_fake_mode),
         model_cache_enabled=bool(args.model_cache),
         model_cache_dir=str(args.model_cache_dir),
@@ -776,6 +782,7 @@ def main() -> int:
         model_name=str(args.real_model_name) if args.real_model_name else None,
         model_base_url=str(args.real_model_base_url) if args.real_model_base_url else None,
         model_api_key_env=str(args.real_model_api_key_env) if args.real_model_api_key_env else None,
+        model_api_mode=str(args.real_model_api_mode),
         model_fake_mode=str(args.real_model_fake_mode),
         model_cache_enabled=bool(args.model_cache),
         model_cache_dir=str(args.model_cache_dir),
@@ -1323,6 +1330,8 @@ def main() -> int:
             "export_paper_ready": bool(args.export_paper_ready),
             "model_cache_enabled": bool(args.model_cache),
             "model_cache_dir": str(args.model_cache_dir),
+            "stub_model_api_mode": str(args.stub_model_api_mode),
+            "real_model_api_mode": str(args.real_model_api_mode),
         },
         "outputs": {
             "run_stub": str(run_stub),
@@ -1354,6 +1363,8 @@ def main() -> int:
             "dir": str(compare_decisions_backend),
             "stub_backend": str(args.stub_decisions_backend),
             "real_backend": str(args.real_decisions_backend),
+            "stub_model_api_mode": str(args.stub_model_api_mode),
+            "real_model_api_mode": str(args.real_model_api_mode),
         },
     }
     (compare_dir / "snapshot.json").write_text(json.dumps(compare_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")

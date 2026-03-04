@@ -133,6 +133,24 @@ def _pick_latency(row: dict[str, str]) -> float | None:
     return None
 
 
+def _pick_trials(row: dict[str, str]) -> float | None:
+    for key in ("avg_trials_per_query", "avg_trials_per_query_step", "trials_per_query"):
+        v = _to_float(row.get(key))
+        if v is not None:
+            return float(v)
+    return None
+
+
+def _pick_parse_fail_rate(row: dict[str, str]) -> float | None:
+    parse_ok = str(row.get("decisions_model_parse_ok", "")).strip().lower()
+    if parse_ok in {"true", "false"}:
+        return 0.0 if parse_ok == "true" else 1.0
+    explicit = _to_float(row.get("decisions_model_parse_fail_rate"))
+    if explicit is not None:
+        return float(explicit)
+    return None
+
+
 def _metric_or_nan(row: dict[str, str], keys: tuple[str, ...]) -> float:
     for key in keys:
         v = _to_float(row.get(key))
@@ -274,6 +292,10 @@ def _compare_runs(run_a: Path, run_b: Path, out_dir: Path, a_label: str, b_label
 
         lat_a = _pick_latency(sa)
         lat_b = _pick_latency(sb)
+        trials_a = _pick_trials(sa)
+        trials_b = _pick_trials(sb)
+        parse_fail_a = _pick_parse_fail_rate(sa)
+        parse_fail_b = _pick_parse_fail_rate(sb)
 
         row = {
             "uid": uid,
@@ -295,6 +317,12 @@ def _compare_runs(run_a: Path, run_b: Path, out_dir: Path, a_label: str, b_label
             "latency_p95_ms_stub": _maybe(lat_a),
             "latency_p95_ms_real": _maybe(lat_b),
             "delta_latency_p95_ms": _safe_delta(_maybe(lat_a), _maybe(lat_b)),
+            "trials_stub": _maybe(trials_a),
+            "trials_real": _maybe(trials_b),
+            "delta_trials": _safe_delta(_maybe(trials_a), _maybe(trials_b)),
+            "parse_fail_rate_stub": _maybe(parse_fail_a),
+            "parse_fail_rate_real": _maybe(parse_fail_b),
+            "delta_parse_fail_rate": _safe_delta(_maybe(parse_fail_a), _maybe(parse_fail_b)),
         }
         rows.append(row)
 
@@ -318,6 +346,12 @@ def _compare_runs(run_a: Path, run_b: Path, out_dir: Path, a_label: str, b_label
         "latency_p95_ms_stub",
         "latency_p95_ms_real",
         "delta_latency_p95_ms",
+        "trials_stub",
+        "trials_real",
+        "delta_trials",
+        "parse_fail_rate_stub",
+        "parse_fail_rate_real",
+        "delta_parse_fail_rate",
     ]
 
     tables = out_dir / "tables"
@@ -356,6 +390,8 @@ def _compare_runs(run_a: Path, run_b: Path, out_dir: Path, a_label: str, b_label
             "distractor_rate": _stats("delta_distractor_rate"),
             "critical_fn_rate": _stats("delta_critical_fn_rate"),
             "latency_p95_ms": _stats("delta_latency_p95_ms"),
+            "trials": _stats("delta_trials"),
+            "parse_fail_rate": _stats("delta_parse_fail_rate"),
         },
         "outputs": {
             "table_csv": str(table_csv),
@@ -381,6 +417,7 @@ def _build_smoke_cmd(
     model_name: str | None,
     model_base_url: str | None,
     model_api_key_env: str | None,
+    model_api_mode: str,
     fake_mode: str,
     model_cache_enabled: bool,
     model_cache_dir: str,
@@ -421,6 +458,8 @@ def _build_smoke_cmd(
             cmd.extend(["--model-base-url", str(model_base_url)])
         if model_api_key_env:
             cmd.extend(["--model-api-key-env", str(model_api_key_env)])
+        if model_api_mode:
+            cmd.extend(["--model-api-mode", str(model_api_mode)])
         cmd.extend(["--model-fake-mode", str(fake_mode)])
         cmd.extend(["--model-cache-dir", str(model_cache_dir)])
         cmd.append("--model-cache" if model_cache_enabled else "--no-model-cache")
@@ -452,6 +491,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-name", default=None)
     parser.add_argument("--model-base-url", default=None)
     parser.add_argument("--model-api-key-env", default=None)
+    parser.add_argument("--model-api-mode", default="auto", choices=["auto", "responses", "chat"])
     parser.add_argument("--fake-mode", choices=["minimal", "diverse"], default="diverse")
     parser.add_argument("--model-cache-dir", default="data/outputs/model_cache")
     parser.set_defaults(model_cache=True)
@@ -500,6 +540,7 @@ def main() -> int:
             model_name=str(args.model_name) if args.model_name else None,
             model_base_url=str(args.model_base_url) if args.model_base_url else None,
             model_api_key_env=str(args.model_api_key_env) if args.model_api_key_env else None,
+            model_api_mode=str(args.model_api_mode),
             fake_mode=str(args.fake_mode),
             model_cache_enabled=bool(args.model_cache),
             model_cache_dir=str(args.model_cache_dir),
@@ -522,6 +563,7 @@ def main() -> int:
             model_name=str(args.model_name) if args.model_name else None,
             model_base_url=str(args.model_base_url) if args.model_base_url else None,
             model_api_key_env=str(args.model_api_key_env) if args.model_api_key_env else None,
+            model_api_mode=str(args.model_api_mode),
             fake_mode=str(args.fake_mode),
             model_cache_enabled=bool(args.model_cache),
             model_cache_dir=str(args.model_cache_dir),
@@ -546,6 +588,7 @@ def main() -> int:
             "model_name": str(args.model_name) if args.model_name else None,
             "model_base_url": _redact_token(str(args.model_base_url), "--model-base-url") if args.model_base_url else None,
             "model_api_key_env": "***ENV***" if args.model_api_key_env else None,
+            "model_api_mode": str(args.model_api_mode),
             "fake_mode": str(args.fake_mode),
             "model_cache_enabled": bool(args.model_cache),
             "model_cache_dir": str(args.model_cache_dir),

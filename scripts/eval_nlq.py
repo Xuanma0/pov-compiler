@@ -792,6 +792,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planner-model", default=None, help="Planner model override")
     parser.add_argument("--planner-base-url", default=None, help="Planner model base URL override")
     parser.add_argument("--planner-api-key-env", default=None, help="Planner model API key env override")
+    parser.add_argument("--planner-api-mode", choices=["auto", "responses", "chat"], default=None, help="Planner model API mode override")
     parser.add_argument("--hard-constraints", choices=["on", "off"], default="on")
     parser.add_argument(
         "--hard-constraints-cfg",
@@ -835,6 +836,8 @@ def main() -> int:
         planner_model_cfg["base_url"] = str(args.planner_base_url)
     if args.planner_api_key_env is not None:
         planner_model_cfg["api_key_env"] = str(args.planner_api_key_env)
+    if args.planner_api_mode is not None:
+        planner_model_cfg["api_mode"] = str(args.planner_api_mode)
     safety_cfg = dict(cfg.get("safety", {}))
     rerank_cfg_yaml = cfg.get("reranker", {})
     resolved_cfg: WeightConfig

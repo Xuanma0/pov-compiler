@@ -121,6 +121,7 @@ docs/
 | `scripts\compare_bye_metrics.py` | Compare BYE metrics across two smoke outputs (e.g., stub vs real) | `--run_a --run_b --out_dir` | `table_bye_compare.csv`, `table_bye_compare.md` |
 | `scripts\run_ab_bye_compare.py` | Reproducible AB runner with optional BYE/NLQ/streaming budget sweeps, BYE report panel compare, reranker sweep, and recommendation | `--root --out_dir [--uids-file] --with-bye --with-bye-report --bye-gate --max-bye-critical-fn --with-bye-budget-sweep --with-nlq-budget-sweep --with-reranker-sweep` | `run_stub/`, `run_real/`, `compare/bye/*`, `compare/bye_report/*`, `compare/bye_budget/*`, `compare/nlq_budget/*`, `compare/reranker_sweep/*`, `compare/budget_recommend/*` |
 | `scripts\run_decisions_backend_compare.py` | One-click heuristic vs model decisions backend compare (default model provider=`fake`) | `--root --out_dir [--uids-file] --model-provider --fake-mode` | `run_A/`, `run_B/`, `compare/tables/table_decisions_backend_compare.*`, `compare/figures/fig_decisions_backend_*`, `compare_summary.json` |
+| `scripts\run_model_stack_compare.py` | One-click model stack attribution compare (A/B/C/D for decisions/planner/summary with optional auto signal UID selection) | `--pov-json-dir/--root --out_dir --budgets [--auto-select-uids] --provider --model --api-mode` | `run_A..run_D/`, `compare/tables/table_model_stack_compare.*`, `compare/figures/fig_model_stack_*`, `compare_summary.json`, `compare/selection/*` |
 | `scripts\run_component_attribution.py` | Component Attribution Panel (A/B/C/D) for Repo vs Perception vs Streaming contribution under same UID/budget/query set | `--root --uids-file --out_dir --budgets --with-nlq --with-streaming-budget --with-perception` | `run_A/..run_D/`, `compare/tables/table_component_attribution.*`, `compare/figures/fig_component_attribution_*`, `compare_summary.json`, `snapshot.json` |
 
 ## Output Directory Contract
@@ -753,7 +754,7 @@ Optional connectivity check (real network call; never used by tests):
 python scripts/model_health_check.py --provider deepseek --model deepseek-chat --dry-run
 python scripts/model_health_check.py --provider qwen --model qwen-plus --dry-run
 python scripts/model_health_check.py --provider glm --model glm-5 --dry-run
-python scripts/model_health_check.py --provider openai --model gpt-4o-mini --do-request --api-key-env OPENAI_API_KEY
+python scripts/model_health_check.py --provider openai --model gpt-4o-mini --real --api-key-env OPENAI_API_KEY
 ```
 
 Security rules remain strict:
@@ -854,6 +855,36 @@ Key artifacts:
 - `compare/figures/fig_planner_backend_delta.png`
 - `paper_ready/planner_backend/table_planner_backend_compare.csv`
 - `paper_ready/figures/fig_planner_backend_delta.png`
+
+### v1.40 Model Stack Compare (Decisions + Planner + Summary)
+
+The model integration path now supports `api_mode={auto,responses,chat}` with automatic fallback and redacted metadata.  
+`run_model_stack_compare.py` runs four reproducible variants over the same UID selection and budget points:
+- A: heuristic decisions + heuristic planner + heuristic summary
+- B: model decisions + heuristic planner + heuristic summary
+- C: heuristic decisions + model planner + heuristic summary
+- D: model decisions + model planner + optional model summary
+
+Auto UID selection is supported and recommended when you want non-empty comparison panels:
+
+```text
+python scripts/run_model_stack_compare.py --root data/outputs/ab_v12_root --out_dir data/outputs/model_stack_compare_v140_demo --auto-select-uids --signal-audit-json-dir data/outputs/ab_v12_demo/run_stub/json --signal-min-score 1 --jobs 1 --provider fake --model fake-stack-v1 --api-mode auto
+```
+
+Paper-ready copy:
+
+```text
+python scripts/export_paper_ready.py --out_dir data/outputs/paper_ready_v140_demo --model-stack-compare-dir data/outputs/model_stack_compare_v140_demo/compare
+```
+
+Key artifacts:
+- `compare/tables/table_model_stack_compare.csv`
+- `compare/figures/fig_model_stack_delta.png`
+- `compare/figures/fig_model_stack_tradeoff.png`
+- `compare/selection/coverage.csv`
+- `paper_ready/model_stack/table_model_stack_compare.csv`
+
+Security note: API keys are read from environment variables only (`*_API_KEY`), never from tracked yaml/json, and are redacted in snapshots/logs.
 
 ### Local Fast Tests (xdist)
 

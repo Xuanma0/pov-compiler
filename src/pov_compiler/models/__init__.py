@@ -34,7 +34,7 @@ def make_client(cfg: ModelClientConfig) -> ChatModelClient:
         from pov_compiler.models.fake import FakeModelClient
 
         return maybe_wrap_with_cache(FakeModelClient(cfg), cfg)
-    if provider in {"openai_compat", "deepseek", "qwen", "glm"}:
+    if provider in {"openai_compat", "deepseek", "qwen", "qwen_intl", "glm"}:
         from pov_compiler.models.openai_compat import OpenAICompatClient
 
         return maybe_wrap_with_cache(OpenAICompatClient(cfg), cfg)

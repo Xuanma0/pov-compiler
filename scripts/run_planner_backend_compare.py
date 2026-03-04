@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planner-b-model", default="fake-planner-v1")
     parser.add_argument("--planner-b-base-url", default=None)
     parser.add_argument("--planner-b-api-key-env", default=None)
+    parser.add_argument("--planner-b-api-mode", choices=["auto", "responses", "chat"], default="auto")
     parser.add_argument("--retrieval-plan", default="baseline", choices=["baseline", "summary_then_token", "summary_then_decision", "summary_then_event"])
     parser.add_argument("--summary-topk", type=int, default=3)
     parser.add_argument("--index-dir", default=None)
@@ -376,6 +377,8 @@ def main() -> int:
                         str(args.planner_b_provider),
                         "--planner-model",
                         str(args.planner_b_model),
+                        "--planner-api-mode",
+                        str(args.planner_b_api_mode),
                     ])
                     if args.planner_b_base_url:
                         cmd.extend(["--planner-base-url", str(args.planner_b_base_url)])

@@ -370,6 +370,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planner-model", default=None, help="Planner model name override")
     parser.add_argument("--planner-base-url", default=None, help="Planner model base URL override")
     parser.add_argument("--planner-api-key-env", default=None, help="Planner API key env name override")
+    parser.add_argument("--planner-api-mode", choices=["auto", "responses", "chat"], default=None, help="Planner API mode override")
     return parser.parse_args()
 
 
@@ -389,6 +390,8 @@ def main() -> int:
         planner_model_cfg["base_url"] = str(args.planner_base_url)
     if args.planner_api_key_env is not None:
         planner_model_cfg["api_key_env"] = str(args.planner_api_key_env)
+    if args.planner_api_mode is not None:
+        planner_model_cfg["api_mode"] = str(args.planner_api_mode)
     hard_cfg = dict(cfg.get("hard_constraints", {}))
     rerank_cfg = cfg.get("reranker", {})
 

@@ -90,6 +90,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional directory from run_planner_backend_compare.py compare output",
     )
     parser.add_argument(
+        "--model-stack-compare-dir",
+        default=None,
+        help="Optional directory from run_model_stack_compare.py compare output",
+    )
+    parser.add_argument(
         "--lost-object-panel-dir",
         default=None,
         help="Optional directory containing table_lost_object_budget.(csv/md) and optional figures",
@@ -1325,6 +1330,51 @@ def main() -> int:
             except Exception:
                 pass
 
+    model_stack_compare: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "summary": {},
+    }
+    if args.model_stack_compare_dir:
+        ms_dir = Path(args.model_stack_compare_dir)
+        model_stack_compare["enabled"] = True
+        model_stack_compare["source_dir"] = str(ms_dir)
+        dst_root = out_dir / "model_stack"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        to_copy = [
+            ms_dir / "tables" / "table_model_stack_compare.csv",
+            ms_dir / "tables" / "table_model_stack_compare.md",
+            ms_dir / "compare_summary.json",
+            ms_dir / "figures" / "fig_model_stack_delta.png",
+            ms_dir / "figures" / "fig_model_stack_delta.pdf",
+            ms_dir / "figures" / "fig_model_stack_tradeoff.png",
+            ms_dir / "figures" / "fig_model_stack_tradeoff.pdf",
+        ]
+        copied: list[str] = []
+        for src in to_copy:
+            if not src.exists():
+                continue
+            if src.parent.name == "figures":
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        model_stack_compare["copied_files"] = copied
+        for p in copied:
+            if str(p).endswith(".png") or str(p).endswith(".pdf"):
+                figure_paths.append(str(p))
+        summary_src = ms_dir / "compare_summary.json"
+        if summary_src.exists():
+            try:
+                payload = json.loads(summary_src.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    model_stack_compare["summary"] = dict(payload)
+            except Exception:
+                pass
+
     lost_object_panel: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1681,6 +1731,19 @@ def main() -> int:
             )
         else:
             report_lines.append("- planner_backend_compare: source provided but artifacts missing.")
+    if args.model_stack_compare_dir:
+        if model_stack_compare.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Model Stack Compare",
+                    "",
+                    f"- model_stack_compare_dir: `{model_stack_compare.get('source_dir')}`",
+                    f"- model_stack_compare_files: `{model_stack_compare.get('copied_files')}`",
+                    f"- model_stack_compare_summary: `{json.dumps(model_stack_compare.get('summary', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- model_stack_compare: source provided but artifacts missing.")
     if args.lost_object_panel_dir:
         if lost_object_panel.get("copied_files"):
             report_lines.extend(
@@ -1790,6 +1853,9 @@ def main() -> int:
             "planner_backend_compare_dir": str(args.planner_backend_compare_dir)
             if args.planner_backend_compare_dir
             else None,
+            "model_stack_compare_dir": str(args.model_stack_compare_dir)
+            if args.model_stack_compare_dir
+            else None,
             "lost_object_panel_dir": str(args.lost_object_panel_dir) if args.lost_object_panel_dir else None,
             "chain_nlq_dir": str(args.chain_nlq_dir) if args.chain_nlq_dir else None,
             "chain_repo_compare_dir": str(args.chain_repo_compare_dir) if args.chain_repo_compare_dir else None,
@@ -1823,6 +1889,7 @@ def main() -> int:
             "bye_report_compare": bye_report_compare,
             "decisions_backend_compare": decisions_backend_compare,
             "planner_backend_compare": planner_backend_compare,
+            "model_stack_compare": model_stack_compare,
             "lost_object_panel": lost_object_panel,
             "chain_nlq_panel": chain_nlq_panel,
             "chain_repo_compare_panel": chain_repo_compare_panel,

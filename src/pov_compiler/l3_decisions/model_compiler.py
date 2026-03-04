@@ -4,7 +4,36 @@ import json
 from typing import Any
 
 from pov_compiler.models.client import ChatModelClient, ModelClientConfig
+from pov_compiler.models.structured_output import generate_structured
 from pov_compiler.schemas import Output
+
+_DECISIONS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "decision_type": {"type": "string"},
+                    "t0_ms": {"type": "number"},
+                    "t1_ms": {"type": "number"},
+                    "conf": {"type": "number"},
+                    "evidence": {
+                        "type": "object",
+                        "properties": {
+                            "event_id": {"type": "string"},
+                            "span": {"type": "string"},
+                        },
+                    },
+                },
+                "required": ["decision_type", "t0_ms", "t1_ms", "conf"],
+            },
+        }
+    },
+    "required": ["decisions"],
+}
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -103,19 +132,22 @@ def _validate_decisions(raw: Any, duration_ms: int) -> list[dict[str, Any]]:
     return out
 
 
-def compile_decisions_with_model(
+def compile_decisions_with_model_and_meta(
     output: Output,
     client: ChatModelClient,
     cfg: ModelClientConfig,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     duration_ms = int(round(float(getattr(output, "meta", {}).get("duration_s", 0.0)) * 1000.0))
     system, user = _build_prompts(output)
-    payload = client.complete_json(
-        system=system,
-        user=user,
-        timeout_s=int(cfg.timeout_s),
-        max_tokens=int(cfg.max_tokens),
+    payload, _raw, parse_meta = generate_structured(
+        client,
+        schema_name="decisions_model_v1",
+        schema_json=_DECISIONS_SCHEMA,
+        system_prompt=system,
+        user_prompt=user,
         temperature=float(cfg.temperature),
+        max_tokens=int(cfg.max_tokens),
+        timeout_s=float(cfg.timeout_s),
     )
     if not isinstance(payload, dict):
         raise RuntimeError("model client returned non-dict payload")
@@ -124,4 +156,21 @@ def compile_decisions_with_model(
         decisions_raw = payload.get("decision_points")
     if decisions_raw is None:
         raise RuntimeError("model payload missing 'decisions' key")
-    return _validate_decisions(decisions_raw, duration_ms=duration_ms)
+    decisions = _validate_decisions(decisions_raw, duration_ms=duration_ms)
+    meta = {
+        "api_mode_used": str(parse_meta.get("api_mode_used", "")),
+        "used_mode": str(parse_meta.get("used_mode", "")),
+        "parse_ok": bool(parse_meta.get("parse_ok", False)),
+        "parse_report": dict(parse_meta.get("parse_report", {})) if isinstance(parse_meta.get("parse_report", {}), dict) else {},
+        "error": str(parse_meta.get("error", "")),
+    }
+    return decisions, meta
+
+
+def compile_decisions_with_model(
+    output: Output,
+    client: ChatModelClient,
+    cfg: ModelClientConfig,
+) -> list[dict[str, Any]]:
+    decisions, _meta = compile_decisions_with_model_and_meta(output=output, client=client, cfg=cfg)
+    return decisions
