@@ -54,6 +54,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
+    parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
+    parser.add_argument("--query-promotion-pack-dir", default=None, help="Optional query promotion pack output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional freeze output directory")
     parser.add_argument("--paper-freeze-dir", default=None, help="Optional canonical paper freeze directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML")
@@ -83,6 +85,8 @@ def main() -> int:
     pack_delta_audit = out_dir / "delta_audit"
     pack_query_strength_audit = out_dir / "query_strength_audit"
     pack_provider_telemetry = out_dir / "provider_telemetry"
+    pack_provider_normalization = out_dir / "provider_normalization"
+    pack_query_promotion_pack = out_dir / "query_promotion_pack"
     pack_freeze = out_dir / "freeze"
     pack_paper_freeze = out_dir / "paper_freeze"
     pack_prompts = out_dir / "prompts"
@@ -99,6 +103,8 @@ def main() -> int:
         pack_delta_audit,
         pack_query_strength_audit,
         pack_provider_telemetry,
+        pack_provider_normalization,
+        pack_query_promotion_pack,
         pack_freeze,
         pack_paper_freeze,
         pack_prompts,
@@ -115,6 +121,8 @@ def main() -> int:
     _copy_dir_if_exists(paper_ready_dir / "delta_audit", pack_paper_ready / "delta_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "query_strength_audit", pack_paper_ready / "query_strength_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_telemetry", pack_paper_ready / "provider_telemetry", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "provider_normalization", pack_paper_ready / "provider_normalization", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "query_promotion_pack", pack_paper_ready / "query_promotion_pack", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "report.md", pack_paper_ready / "report.md", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "snapshot.json", pack_paper_ready / "snapshot.json", copied, missing)
 
@@ -182,6 +190,17 @@ def main() -> int:
         _copy_file_if_exists(provider_telemetry_dir / "by_variant.csv", pack_provider_telemetry / "by_variant.csv", copied, missing)
         _copy_file_if_exists(provider_telemetry_dir / "summary.json", pack_provider_telemetry / "summary.json", copied, missing)
 
+    provider_normalization_dir = Path(args.provider_normalization_dir) if args.provider_normalization_dir else None
+    if provider_normalization_dir is not None:
+        _copy_dir_if_exists(provider_normalization_dir / "tables", pack_provider_normalization / "tables", copied, missing)
+        _copy_file_if_exists(provider_normalization_dir / "report.md", pack_provider_normalization / "report.md", copied, missing)
+        _copy_file_if_exists(provider_normalization_dir / "snapshot.json", pack_provider_normalization / "snapshot.json", copied, missing)
+
+    query_promotion_pack_dir = Path(args.query_promotion_pack_dir) if args.query_promotion_pack_dir else None
+    if query_promotion_pack_dir is not None:
+        _copy_dir_if_exists(query_promotion_pack_dir / "query_pack", pack_query_promotion_pack / "query_pack", copied, missing)
+        _copy_file_if_exists(query_promotion_pack_dir / "report.md", pack_query_promotion_pack / "report.md", copied, missing)
+
     freeze_dir = Path(args.benchmark_freeze_dir) if args.benchmark_freeze_dir else None
     if freeze_dir is not None:
         _copy_file_if_exists(freeze_dir / "freeze_manifest.json", pack_freeze / "freeze_manifest.json", copied, missing)
@@ -230,6 +249,8 @@ def main() -> int:
         f"- delta_audit_dir: `{delta_audit_dir}`",
         f"- query_strength_audit_dir: `{query_strength_audit_dir}`",
         f"- provider_telemetry_dir: `{provider_telemetry_dir}`",
+        f"- provider_normalization_dir: `{provider_normalization_dir}`",
+        f"- query_promotion_pack_dir: `{query_promotion_pack_dir}`",
         f"- benchmark_freeze_dir: `{freeze_dir}`",
         f"- paper_freeze_dir: `{paper_freeze_dir}`",
         f"- paper_map: `{paper_map_path}`",
@@ -250,6 +271,8 @@ def main() -> int:
         "- `delta_audit/`: per-budget delta audit and next-step action suggestions",
         "- `query_strength_audit/`: query-group strength audit for main-paper inclusion decisions",
         "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
+        "- `provider_normalization/`: normalized provider telemetry with explicit missing-field semantics",
+        "- `query_promotion_pack/`: candidate packs for promoting or keeping queries outside the main bank",
         "- `freeze/`: freeze manifest and artifact hashes",
         "- `paper_freeze/`: canonical paper-artifact freeze manifest and hashes",
         "- `prompts/`: registry and prompt source files",
@@ -275,9 +298,11 @@ def main() -> int:
             "",
             "- Read `admission_control/` first.",
             "- If admission is blocked, read `admission_calibration/` next.",
+            "- Then read `provider_normalization/`.",
             "- Then read `result_diagnosis/`.",
             "- Then read `delta_audit/`.",
             "- If main figures still look weak, read `query_strength_audit/` before interpreting them.",
+            "- Then read `query_promotion_pack/` before changing the frozen main query bank.",
             "- Only then cite the canonical main tables and figures under `paper_ready/canonical/`.",
         ]
     )
@@ -335,6 +360,24 @@ def main() -> int:
                 "- If main results look noisy, read `provider_telemetry/summary.json` before trusting weak deltas.",
             ]
         )
+    if provider_normalization_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Normalized Telemetry",
+                "",
+                "- Read `provider_normalization/snapshot.json` before comparing provider cost, usage, or latency across backends.",
+            ]
+        )
+    if query_promotion_pack_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Query Promotion",
+                "",
+                "- Read `query_promotion_pack/report.md` before promoting any query into the frozen main-result bank.",
+            ]
+        )
     readme_path = out_dir / "README.md"
     readme_path.write_text("\n".join(readme_lines), encoding="utf-8")
 
@@ -350,6 +393,8 @@ def main() -> int:
         "delta_audit_dir": str(delta_audit_dir) if delta_audit_dir is not None else None,
         "query_strength_audit_dir": str(query_strength_audit_dir) if query_strength_audit_dir is not None else None,
         "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,
+        "provider_normalization_dir": str(provider_normalization_dir) if provider_normalization_dir is not None else None,
+        "query_promotion_pack_dir": str(query_promotion_pack_dir) if query_promotion_pack_dir is not None else None,
         "benchmark_freeze_dir": str(freeze_dir) if freeze_dir is not None else None,
         "paper_freeze_dir": str(paper_freeze_dir) if paper_freeze_dir is not None else None,
         "paper_map": str(paper_map_path) if paper_map_path is not None else None,

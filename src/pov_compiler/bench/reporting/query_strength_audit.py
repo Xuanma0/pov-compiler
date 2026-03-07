@@ -161,6 +161,33 @@ def _recommended_action(
     return "keep_for_analysis_only"
 
 
+def _promotion_reason(
+    *,
+    matched_tasks: list[str],
+    coverage_rate: float,
+    signal_support_rate: float,
+    nonzero_delta_rate: float,
+    significance_available_rate: float,
+    provider_noise_flag: bool,
+    recommended_action: str,
+) -> str:
+    if recommended_action == "promote_to_core_query_bank":
+        return "strong_signal_and_nonzero_delta"
+    if not matched_tasks:
+        return "no_matched_tasks"
+    if signal_support_rate < 0.35:
+        return "weak_signal_support"
+    if coverage_rate < 0.50:
+        return "insufficient_sample"
+    if provider_noise_flag and nonzero_delta_rate < 0.50:
+        return "provider_noise_dominates"
+    if significance_available_rate < 0.50:
+        return "insufficient_significance"
+    if nonzero_delta_rate < 0.34:
+        return "algorithm_no_effect_detected"
+    return recommended_action
+
+
 def build_query_strength_audit_table(
     *,
     suite_dir: str | Path,
@@ -243,12 +270,23 @@ def build_query_strength_audit_table(
             significance_available_rate=significance_available_rate,
             provider_noise_flag=provider_noise_flag,
         )
+        promotion_candidate = bool(recommended_action == "promote_to_core_query_bank")
+        promotion_reason = _promotion_reason(
+            matched_tasks=matched_tasks,
+            coverage_rate=coverage_rate,
+            signal_support_rate=signal_support_rate,
+            nonzero_delta_rate=nonzero_delta_rate,
+            significance_available_rate=significance_available_rate,
+            provider_noise_flag=provider_noise_flag,
+            recommended_action=recommended_action,
+        )
 
         rows.append(
             {
                 "query_group": str(group.group_id),
                 "query_type": "|".join(mode_set) if mode_set else "|".join(task_set),
                 "query_bank_id": bank.query_bank_id,
+                "query_ids": json.dumps([query.query_id for query in group_queries], ensure_ascii=False),
                 "queries_total": len(group_queries),
                 "matched_tasks": json.dumps(matched_tasks, ensure_ascii=False),
                 "coverage_rate": float(coverage_rate),
@@ -257,6 +295,8 @@ def build_query_strength_audit_table(
                 "significance_available_rate": float(significance_available_rate),
                 "weak_query_flag": bool(weak_query_flag),
                 "provider_noise_flag": bool(provider_noise_flag),
+                "promotion_candidate": promotion_candidate,
+                "promotion_reason": promotion_reason,
                 "recommended_action": recommended_action,
             }
         )
@@ -269,6 +309,7 @@ def build_query_strength_audit_table(
                     "query_group": "unknown",
                     "query_type": "",
                     "query_bank_id": bank.query_bank_id,
+                    "query_ids": "[]",
                     "queries_total": 0,
                     "matched_tasks": "[]",
                     "coverage_rate": 0.0,
@@ -277,6 +318,8 @@ def build_query_strength_audit_table(
                     "significance_available_rate": 0.0,
                     "weak_query_flag": True,
                     "provider_noise_flag": provider_noise_flag,
+                    "promotion_candidate": False,
+                    "promotion_reason": "no_query_groups",
                     "recommended_action": "keep_for_analysis_only",
                 }
             ]
@@ -284,6 +327,12 @@ def build_query_strength_audit_table(
 
     action_counter = Counter(str(value) for value in out_df["recommended_action"].tolist())
     weak_count = int(out_df["weak_query_flag"].astype(bool).sum())
+    promoted_groups = sorted(
+        out_df.loc[out_df["promotion_candidate"].astype(bool), "query_group"].astype(str).tolist()
+    )
+    analysis_only_groups = sorted(
+        out_df.loc[out_df["recommended_action"].astype(str) == "keep_for_analysis_only", "query_group"].astype(str).tolist()
+    )
     main_recommendation = ""
     if action_counter:
         main_recommendation = sorted(action_counter.items(), key=lambda item: (-int(item[1]), str(item[0])))[0][0]
@@ -298,6 +347,8 @@ def build_query_strength_audit_table(
         "provider_noise_summary": provider_summary,
         "weak_query_groups_count": weak_count,
         "recommended_action_counts": {key: int(value) for key, value in sorted(action_counter.items())},
+        "promoted_query_groups": promoted_groups,
+        "analysis_only_query_groups": analysis_only_groups,
         "main_recommendation": main_recommendation,
         "available_tasks": available_tasks,
     }

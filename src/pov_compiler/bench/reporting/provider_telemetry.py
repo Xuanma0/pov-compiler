@@ -240,6 +240,20 @@ def _overall_availability(rows: list[dict[str, Any]]) -> str:
     return statuses[0]
 
 
+def _overall_real_call_status(rows: list[dict[str, Any]]) -> str:
+    real_rows = []
+    for row in rows:
+        provider = str(row.get("provider", "")).strip().lower()
+        if provider.startswith("fake") or provider == "fake":
+            continue
+        real_rows.append(row)
+    if not real_rows:
+        return "simulated"
+    if any(int(_to_int(row.get("calls_total")) or 0) > 0 for row in real_rows):
+        return "observed"
+    return "missing_or_unavailable"
+
+
 def _collect_source_paths(
     *,
     manifest_path: Path,
@@ -306,6 +320,23 @@ def build_provider_telemetry_table(
         api_mode_used = _pick_text(variant_df, ["api_mode_used", "strategy_used"]) or str(
             manifest_variant.get("api_mode_used", "")
         ).strip()
+        prompt_tokens = _pick_number(
+            variant_df,
+            ["prompt_tokens", "input_tokens", "usage_prompt_tokens"],
+            reducer="sum",
+        )
+        if prompt_tokens is None:
+            prompt_tokens = _to_float(manifest_variant.get("prompt_tokens"))
+        completion_tokens = _pick_number(
+            variant_df,
+            ["completion_tokens", "output_tokens", "usage_completion_tokens"],
+            reducer="sum",
+        )
+        if completion_tokens is None:
+            completion_tokens = _to_float(manifest_variant.get("completion_tokens"))
+        total_tokens = _pick_number(variant_df, ["total_tokens", "usage_total_tokens"], reducer="sum")
+        if total_tokens is None:
+            total_tokens = _to_float(manifest_variant.get("total_tokens"))
 
         usage_present = _pick_bool(variant_df, ["usage_present"])
         if usage_present is None:
@@ -382,6 +413,9 @@ def build_provider_telemetry_table(
                 "model": model,
                 "api_mode_used": api_mode_used,
                 "usage_present": bool(usage_present),
+                "prompt_tokens": _to_int(prompt_tokens),
+                "completion_tokens": _to_int(completion_tokens),
+                "total_tokens": _to_int(total_tokens),
                 "cost_known": bool(cost_known),
                 "model_cost_usd_total": model_cost_total,
                 "model_cost_usd_mean_per_query": model_cost_mean,
@@ -419,6 +453,7 @@ def build_provider_telemetry_table(
         "calls_with_cost": _safe_sum([_to_int(row.get("calls_with_cost")) for row in rows]),
         "provider_unavailable_count": sum(1 for row in rows if row.get("availability") == "provider_unavailable"),
         "no_real_call_count": sum(1 for row in rows if row.get("availability") == "no_real_call"),
+        "real_call_status": _overall_real_call_status(rows),
         "telemetry_source_paths": source_paths,
         "variants_total": len(rows),
     }

@@ -219,6 +219,42 @@ D:\Ego4D_Dataset
   - retrieval/query constraints now support `place=*`, `place_segment_id=*`, `interaction_min=*`, `interaction_object=*`
   - trace includes place-segment hit distribution and interaction top-k diagnostics
 
+## v1.49 Main-Result Pilot
+
+`v1.49` keeps the runtime stable and extends only the result layer:
+
+- `scripts\run_main_real_benchmark.py` is the single pilot entrypoint.
+- Real/fake pilot manifests live under `configs\benchmarks\v1.49_main_*.yaml`.
+- Provider telemetry is normalized into a single schema under `provider_normalization/`.
+- Query-strength recommendations can be exported as a candidate `query_promotion_pack/`.
+- `paper_ready/`, `paper_freeze/`, and `submission_pack/` remain the only canonical export roots.
+
+Real small pilot:
+
+```text
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.49_main_real_pilot.yaml --mode pilot --out_dir data\outputs\v149_main_real_pilot
+```
+
+Normalize provider telemetry:
+
+```text
+python scripts\normalize_provider_telemetry.py --suite-dir data\outputs\v149_main_real_pilot --out_dir data\outputs\v149_main_real_pilot\provider_normalization
+```
+
+Export query promotion candidates:
+
+```text
+python scripts\export_query_promotion_pack.py --suite-dir data\outputs\v149_main_real_pilot --out_dir data\outputs\v149_main_real_pilot\query_promotion_pack
+```
+
+What to read first after a weak real pilot:
+
+- `provider_normalization/snapshot.json`
+- `result_diagnosis/report.md`
+- `delta_audit/report.md`
+- `query_strength_audit/report.md`
+- `query_promotion_pack/report.md`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

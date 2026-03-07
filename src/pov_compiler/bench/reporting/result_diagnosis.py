@@ -11,6 +11,7 @@ except Exception:  # pragma: no cover - dependency should exist in runtime env.
     pd = None
 
 from pov_compiler.bench.reporting.latex import df_to_markdown_table
+from pov_compiler.bench.reporting.provider_normalization import load_provider_normalization_outputs
 from pov_compiler.bench.reporting.provider_telemetry import load_provider_telemetry_outputs
 from pov_compiler.bench.reporting.result_health import build_result_health_table
 
@@ -120,6 +121,7 @@ def _normalize_provider_summary(summary: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(summary, dict) or not summary:
         return {
             "availability": "unavailable",
+            "normalization_status": "unavailable",
             "usage_present_rate": "unavailable",
             "model_cost_known_rate": "unavailable",
             "model_latency_p95_ms_mean": "unavailable",
@@ -128,10 +130,12 @@ def _normalize_provider_summary(summary: dict[str, Any]) -> dict[str, Any]:
             "calls_total": 0,
             "calls_with_usage": 0,
             "calls_with_cost": 0,
+            "real_call_status": "missing_or_unavailable",
             "telemetry_source_paths": [],
         }
     return {
         "availability": str(summary.get("availability", "unavailable")),
+        "normalization_status": str(summary.get("normalization_status", summary.get("availability", "unavailable"))),
         "usage_present_rate": _clean_rate(summary.get("usage_present_rate")),
         "model_cost_known_rate": _clean_rate(summary.get("model_cost_known_rate")),
         "model_latency_p95_ms_mean": _clean_rate(summary.get("model_latency_p95_ms_mean")),
@@ -140,6 +144,7 @@ def _normalize_provider_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "calls_total": _to_int(summary.get("calls_total")),
         "calls_with_usage": _to_int(summary.get("calls_with_usage")),
         "calls_with_cost": _to_int(summary.get("calls_with_cost")),
+        "real_call_status": str(summary.get("real_call_status", "missing_or_unavailable")),
         "telemetry_source_paths": list(summary.get("telemetry_source_paths", []))
         if isinstance(summary.get("telemetry_source_paths"), list)
         else [],
@@ -206,10 +211,19 @@ def _provider_summary(
     results_df: Any,
     telemetry_df: Any,
     telemetry_summary: dict[str, Any],
+    normalized_df: Any,
+    normalization_summary: dict[str, Any],
 ) -> dict[str, Any]:
+    if normalization_summary:
+        normalized = dict(normalization_summary)
+        if "availability" not in normalized:
+            normalized["availability"] = str(telemetry_summary.get("availability", "unavailable"))
+        if "telemetry_source_paths" not in normalized:
+            normalized["telemetry_source_paths"] = telemetry_summary.get("telemetry_source_paths", [])
+        return _normalize_provider_summary(normalized)
     if telemetry_summary:
         return _normalize_provider_summary(telemetry_summary)
-    return _fallback_provider_summary(results_df, telemetry_df)
+    return _fallback_provider_summary(results_df, telemetry_df if len(normalized_df) == 0 else normalized_df)
 
 
 def _coverage_score_mean(stats_payload: dict[str, Any]) -> float | None:
@@ -273,19 +287,37 @@ def build_result_diagnosis_table(
     effect_size_threshold: float = 1e-9,
     significance_threshold: float = 0.50,
     provider_telemetry_dir: str | Path | None = None,
+    provider_normalization_dir: str | Path | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     lib = _require_pandas()
     suite_root = Path(suite_dir).resolve()
     compare_dir = suite_root / "compare"
     resolved_provider_telemetry_dir = Path(provider_telemetry_dir).resolve() if provider_telemetry_dir else (suite_root / "provider_telemetry")
+    resolved_provider_normalization_dir = (
+        Path(provider_normalization_dir).resolve() if provider_normalization_dir else (suite_root / "provider_normalization")
+    )
 
-    health_df, health_snapshot = build_result_health_table(suite_dir=suite_root, epsilon=effect_size_threshold)
+    try:
+        health_df, health_snapshot = build_result_health_table(suite_dir=suite_root, epsilon=effect_size_threshold)
+    except Exception as exc:
+        health_df = lib.DataFrame()
+        health_snapshot = {
+            "overall_no_data_reason_counts": {"source_missing": 1},
+            "health_build_error": f"{type(exc).__name__}: {exc}",
+        }
     main_df = _read_csv(compare_dir / "tables" / "table_main_results.csv")
     results_df = _read_csv(suite_root / "ledger" / "results_long.csv")
     health_snapshot_file = _read_json(suite_root / "result_health" / "snapshot.json")
     detail_sig_df = _read_csv(suite_root / "significance" / "tables" / "table_significance_main.csv")
     telemetry_df, telemetry_summary_raw = load_provider_telemetry_outputs(resolved_provider_telemetry_dir)
-    provider_summary = _provider_summary(results_df=results_df, telemetry_df=telemetry_df, telemetry_summary=telemetry_summary_raw)
+    normalized_df, normalization_summary_raw = load_provider_normalization_outputs(resolved_provider_normalization_dir)
+    provider_summary = _provider_summary(
+        results_df=results_df,
+        telemetry_df=telemetry_df,
+        telemetry_summary=telemetry_summary_raw,
+        normalized_df=normalized_df,
+        normalization_summary=normalization_summary_raw,
+    )
 
     if health_df.empty:
         health_df = lib.DataFrame(
@@ -373,11 +405,13 @@ def build_result_diagnosis_table(
             overall_task_payload = row.copy()
         rows.append(row)
 
-    if len(telemetry_df) > 0:
-        for _, telemetry_row in telemetry_df.sort_values(["variant_label"]).iterrows():
+    variant_frame = normalized_df if len(normalized_df) > 0 else telemetry_df
+    if len(variant_frame) > 0:
+        for _, telemetry_row in variant_frame.sort_values(["variant_label"]).iterrows():
             variant_payload = telemetry_row.to_dict()
             provider_variant_summary = {
                 "availability": str(variant_payload.get("availability", "unavailable")),
+                "normalization_status": str(variant_payload.get("normalization_status", variant_payload.get("availability", "unavailable"))),
                 "usage_present_rate": 1.0 if bool(variant_payload.get("usage_present")) else 0.0,
                 "model_cost_known_rate": 1.0 if bool(variant_payload.get("cost_known")) else 0.0,
                 "model_latency_p95_ms_mean": _to_float(variant_payload.get("latency_p95_ms")) or "unavailable",
@@ -386,6 +420,7 @@ def build_result_diagnosis_table(
                 "calls_total": _to_int(variant_payload.get("calls_total")),
                 "calls_with_usage": _to_int(variant_payload.get("calls_with_usage")),
                 "calls_with_cost": _to_int(variant_payload.get("calls_with_cost")),
+                "real_call_status": str(variant_payload.get("real_call_status", "missing_or_unavailable")),
                 "telemetry_source_paths": _parse_json_list(variant_payload.get("telemetry_source_paths")),
             }
             variant_row = {
@@ -447,6 +482,7 @@ def build_result_diagnosis_table(
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "suite_dir": str(suite_root),
         "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir.exists() else None,
+        "provider_normalization_dir": str(resolved_provider_normalization_dir) if resolved_provider_normalization_dir.exists() else None,
         "thresholds": {
             "near_zero_threshold": float(near_zero_threshold),
             "effect_size_threshold": float(effect_size_threshold),
@@ -463,6 +499,7 @@ def build_result_diagnosis_table(
         "significance_available_rate": float(_to_float(overall_task_payload.get("significance_available_rate")) or 0.0),
         "provider_noise_summary": _normalize_provider_summary(overall_provider_summary),
         "diagnosis_recommendations": overall_recommendations,
+        "normalization_status": str(provider_summary.get("normalization_status", "unavailable")),
         "health_gate": health_snapshot_file.get("gate", {}),
         "detail_significance_rows": int(len(detail_sig_df)),
     }
@@ -477,6 +514,7 @@ def write_result_diagnosis_outputs(
     effect_size_threshold: float = 1e-9,
     significance_threshold: float = 0.50,
     provider_telemetry_dir: str | Path | None = None,
+    provider_normalization_dir: str | Path | None = None,
     figure_formats: list[str] | None = None,
 ) -> dict[str, Any]:
     import matplotlib.pyplot as plt
@@ -494,6 +532,7 @@ def write_result_diagnosis_outputs(
         effect_size_threshold=effect_size_threshold,
         significance_threshold=significance_threshold,
         provider_telemetry_dir=provider_telemetry_dir,
+        provider_normalization_dir=provider_normalization_dir,
     )
 
     table_csv = tables_dir / "table_result_diagnosis.csv"
@@ -553,6 +592,7 @@ def write_result_diagnosis_outputs(
         "",
         f"- suite_dir: `{Path(suite_dir).resolve()}`",
         f"- provider_telemetry_dir: `{snapshot.get('provider_telemetry_dir')}`",
+        f"- provider_normalization_dir: `{snapshot.get('provider_normalization_dir')}`",
         f"- rows_total: `{snapshot.get('rows_total', 0)}`",
         f"- task_rows_total: `{snapshot.get('task_rows_total', 0)}`",
         f"- variant_rows_total: `{snapshot.get('variant_rows_total', 0)}`",
@@ -561,6 +601,7 @@ def write_result_diagnosis_outputs(
         f"- effect_size_nonzero_rate: `{snapshot.get('effect_size_nonzero_rate', 0.0)}`",
         f"- near_zero_delta_rate: `{snapshot.get('near_zero_delta_rate', 0.0)}`",
         f"- provider_noise_summary: `{json.dumps(snapshot.get('provider_noise_summary', {}), ensure_ascii=False, sort_keys=True)}`",
+        f"- normalization_status: `{snapshot.get('normalization_status', 'unavailable')}`",
         f"- diagnosis_recommendations: `{snapshot.get('diagnosis_recommendations', [])}`",
         "",
         "## Files",

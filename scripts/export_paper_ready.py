@@ -144,8 +144,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
+    parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
     parser.add_argument("--admission-calibration-dir", default=None, help="Optional admission calibration output directory")
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
+    parser.add_argument("--query-promotion-pack-dir", default=None, help="Optional query promotion pack output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional benchmark freeze output directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML path")
     parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
@@ -1908,6 +1910,42 @@ def main() -> int:
             except Exception:
                 query_strength_audit_snapshot = {}
 
+    resolved_query_promotion_pack_dir: Path | None = None
+    if args.query_promotion_pack_dir:
+        resolved_query_promotion_pack_dir = Path(args.query_promotion_pack_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "query_promotion_pack"
+        if candidate.exists():
+            resolved_query_promotion_pack_dir = candidate
+    query_promotion_pack_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    query_promotion_summary: dict[str, Any] = {}
+    if resolved_query_promotion_pack_dir:
+        query_promotion_pack_panel["enabled"] = True
+        query_promotion_pack_panel["source_dir"] = str(resolved_query_promotion_pack_dir)
+        dst_root = out_dir / "query_promotion_pack"
+        copied = []
+        for src in (
+            resolved_query_promotion_pack_dir / "query_pack" / "promoted_queries.yaml",
+            resolved_query_promotion_pack_dir / "query_pack" / "analysis_only_queries.yaml",
+            resolved_query_promotion_pack_dir / "query_pack" / "promotion_summary.json",
+            resolved_query_promotion_pack_dir / "report.md",
+        ):
+            relative_name = src.name if src.parent.name != "query_pack" else str(Path("query_pack") / src.name)
+            cp = _copy_if_exists(src, dst_root / relative_name)
+            if cp:
+                copied.append(cp)
+        query_promotion_pack_panel["copied_files"] = copied
+        summary_src = resolved_query_promotion_pack_dir / "query_pack" / "promotion_summary.json"
+        if summary_src.exists():
+            try:
+                query_promotion_summary = json.loads(summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                query_promotion_summary = {}
+
     resolved_provider_telemetry_dir: Path | None = None
     if args.provider_telemetry_dir:
         resolved_provider_telemetry_dir = Path(args.provider_telemetry_dir)
@@ -1940,6 +1978,44 @@ def main() -> int:
                 provider_telemetry_summary = json.loads(summary_src.read_text(encoding="utf-8"))
             except Exception:
                 provider_telemetry_summary = {}
+
+    resolved_provider_normalization_dir: Path | None = None
+    if args.provider_normalization_dir:
+        resolved_provider_normalization_dir = Path(args.provider_normalization_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "provider_normalization"
+        if candidate.exists():
+            resolved_provider_normalization_dir = candidate
+    provider_normalization_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    provider_normalization_summary: dict[str, Any] = {}
+    if resolved_provider_normalization_dir:
+        provider_normalization_panel["enabled"] = True
+        provider_normalization_panel["source_dir"] = str(resolved_provider_normalization_dir)
+        dst_root = out_dir / "provider_normalization"
+        copied = []
+        for src in (
+            resolved_provider_normalization_dir / "tables" / "table_provider_normalization.csv",
+            resolved_provider_normalization_dir / "tables" / "table_provider_normalization.md",
+            resolved_provider_normalization_dir / "report.md",
+            resolved_provider_normalization_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        provider_normalization_panel["copied_files"] = copied
+        summary_src = resolved_provider_normalization_dir / "snapshot.json"
+        if summary_src.exists():
+            try:
+                provider_normalization_summary = json.loads(summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                provider_normalization_summary = {}
 
     resolved_admission_dir: Path | None = None
     if args.suite_dir:
@@ -2529,6 +2605,19 @@ def main() -> int:
             )
         else:
             report_lines.append("- query_strength_audit: source provided but artifacts missing.")
+    if resolved_query_promotion_pack_dir:
+        if query_promotion_pack_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Query Promotion Pack",
+                    "",
+                    f"- query_promotion_pack_dir: `{query_promotion_pack_panel.get('source_dir')}`",
+                    f"- query_promotion_pack_files: `{query_promotion_pack_panel.get('copied_files')}`",
+                    f"- query_promotion_summary: `{json.dumps(query_promotion_summary, ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- query_promotion_pack: source provided but artifacts missing.")
     if resolved_provider_telemetry_dir:
         if provider_telemetry_panel.get("copied_files"):
             report_lines.extend(
@@ -2545,6 +2634,21 @@ def main() -> int:
             )
         else:
             report_lines.append("- provider_telemetry: source provided but artifacts missing.")
+    if resolved_provider_normalization_dir:
+        if provider_normalization_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Provider Normalization",
+                    "",
+                    f"- provider_normalization_dir: `{provider_normalization_panel.get('source_dir')}`",
+                    f"- provider_normalization_files: `{provider_normalization_panel.get('copied_files')}`",
+                    f"- provider_normalization_status: `{provider_normalization_summary.get('normalization_status', 'unavailable')}`",
+                    f"- real_call_status: `{provider_normalization_summary.get('real_call_status', 'missing_or_unavailable')}`",
+                    f"- provider_normalization_missing_fields: `{provider_normalization_summary.get('missing_fields_union', [])}`",
+                ]
+            )
+        else:
+            report_lines.append("- provider_normalization: source provided but artifacts missing.")
     if resolved_freeze_dir:
         if benchmark_freeze_panel.get("copied_files"):
             report_lines.extend(
@@ -2658,6 +2762,8 @@ def main() -> int:
             "delta_audit_dir": str(resolved_delta_audit_dir) if resolved_delta_audit_dir else None,
             "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
+            "provider_normalization_dir": str(resolved_provider_normalization_dir) if resolved_provider_normalization_dir else None,
+            "query_promotion_pack_dir": str(resolved_query_promotion_pack_dir) if resolved_query_promotion_pack_dir else None,
             "benchmark_freeze_dir": str(resolved_freeze_dir) if resolved_freeze_dir else None,
             "paper_map": str(resolved_paper_map) if resolved_paper_map else None,
             "prompt_registry": str(args.prompt_registry) if args.prompt_registry else None,
@@ -2707,6 +2813,8 @@ def main() -> int:
             "delta_audit_panel": delta_audit_panel,
             "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
+            "provider_normalization_panel": provider_normalization_panel,
+            "query_promotion_pack_panel": query_promotion_pack_panel,
             "benchmark_freeze_panel": benchmark_freeze_panel,
             "paper_map_panel": paper_map_panel,
             "suite_provenance_panel": suite_provenance_panel,
@@ -2742,6 +2850,10 @@ def main() -> int:
             cmd.extend(["--query-strength-audit-dir", str(resolved_query_strength_audit_dir)])
         if resolved_provider_telemetry_dir:
             cmd.extend(["--provider-telemetry-dir", str(resolved_provider_telemetry_dir)])
+        if resolved_provider_normalization_dir:
+            cmd.extend(["--provider-normalization-dir", str(resolved_provider_normalization_dir)])
+        if resolved_query_promotion_pack_dir:
+            cmd.extend(["--query-promotion-pack-dir", str(resolved_query_promotion_pack_dir)])
         if resolved_freeze_dir:
             cmd.extend(["--benchmark-freeze-dir", str(resolved_freeze_dir)])
         if resolved_paper_map:

@@ -709,6 +709,53 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    provider_normalization_dir = tmp_path / "provider_normalization"
+    (provider_normalization_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (provider_normalization_dir / "tables" / "table_provider_normalization.csv").write_text(
+        "variant_label,provider,model,api_mode_used,usage_present,prompt_tokens,completion_tokens,total_tokens,cost_known,model_cost_usd_total,model_cost_usd_mean_per_query,latency_p50_ms,latency_p95_ms,structured_parse_fail_rate,planner_fallback_rate,calls_total,calls_with_usage,calls_with_cost,normalization_status,missing_fields\n"
+        "stub,fake,fake-stub-v1,fixture_json,True,0,0,0,True,0.0,0.0,8.0,12.0,0.0,0.0,6,6,6,ok,[]\n",
+        encoding="utf-8",
+    )
+    (provider_normalization_dir / "tables" / "table_provider_normalization.md").write_text(
+        "# provider normalization\n",
+        encoding="utf-8",
+    )
+    (provider_normalization_dir / "report.md").write_text("# provider normalization report\n", encoding="utf-8")
+    (provider_normalization_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "normalization_status": "ok",
+                "real_call_status": "simulated",
+                "missing_fields_union": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    query_promotion_pack_dir = tmp_path / "query_promotion_pack"
+    (query_promotion_pack_dir / "query_pack").mkdir(parents=True, exist_ok=True)
+    (query_promotion_pack_dir / "query_pack" / "promoted_queries.yaml").write_text(
+        "queries:\n  - query_id: chain_scene_to_object\n",
+        encoding="utf-8",
+    )
+    (query_promotion_pack_dir / "query_pack" / "analysis_only_queries.yaml").write_text(
+        "queries:\n  - query_id: repo_summary_place\n",
+        encoding="utf-8",
+    )
+    (query_promotion_pack_dir / "query_pack" / "promotion_summary.json").write_text(
+        json.dumps(
+            {
+                "promoted_count": 1,
+                "analysis_only_count": 1,
+                "dropped_count": 0,
+                "source_query_bank_id": "core_real_v1",
+                "source_query_bank_hash": "abc123",
+                "promotion_criteria": {"recommended_action": "promote_to_core_query_bank"},
+                "promotion_confidence": "high",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (query_promotion_pack_dir / "report.md").write_text("# query promotion pack report\n", encoding="utf-8")
 
     freeze_dir = tmp_path / "freeze"
     freeze_dir.mkdir(parents=True, exist_ok=True)
@@ -851,10 +898,14 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(delta_audit_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
+        "--provider-normalization-dir",
+        str(provider_normalization_dir),
         "--admission-calibration-dir",
         str(admission_calibration_dir),
         "--query-strength-audit-dir",
         str(query_strength_audit_dir),
+        "--query-promotion-pack-dir",
+        str(query_promotion_pack_dir),
         "--benchmark-freeze-dir",
         str(freeze_dir),
         "--paper-map",
@@ -893,6 +944,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Delta Audit" in report_text
     assert "## Query Strength Audit" in report_text
     assert "## Provider Telemetry" in report_text
+    assert "## Provider Normalization" in report_text
+    assert "## Query Promotion Pack" in report_text
     assert "## Benchmark Freeze" in report_text
     assert (out_dir / "canonical" / "tables" / "Table_1.csv").exists()
     assert (out_dir / "canonical" / "tables" / "Table_1.md").exists()
@@ -932,6 +985,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "delta_audit" / "report.md").exists()
     assert (out_dir / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (out_dir / "query_strength_audit" / "report.md").exists()
+    assert (out_dir / "provider_normalization" / "tables" / "table_provider_normalization.csv").exists()
+    assert (out_dir / "provider_normalization" / "snapshot.json").exists()
+    assert (out_dir / "query_promotion_pack" / "query_pack" / "promotion_summary.json").exists()
+    assert (out_dir / "query_promotion_pack" / "report.md").exists()
     assert (out_dir / "figures" / "fig_result_diagnosis_breakdown.png").exists()
     assert (out_dir / "figures" / "fig_delta_audit_breakdown.png").exists()
     assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()
@@ -1047,6 +1104,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
     assert (submission_pack / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (submission_pack / "provider_telemetry" / "summary.json").exists()
+    assert (submission_pack / "provider_normalization" / "snapshot.json").exists()
+    assert (submission_pack / "query_promotion_pack" / "query_pack" / "promotion_summary.json").exists()
     assert (submission_pack / "freeze" / "freeze_manifest.json").exists()
     assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
     assert (submission_pack / "manifest" / "prompt_lock.json").exists()
@@ -1070,3 +1129,5 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Delta Audit" in submission_readme
     assert "Query Strength Audit" in submission_readme
     assert "Provider Noise" in submission_readme
+    assert "Normalized Telemetry" in submission_readme
+    assert "Query Promotion" in submission_readme

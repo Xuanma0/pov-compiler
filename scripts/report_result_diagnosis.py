@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--effect-size-threshold", type=float, default=1e-9)
     parser.add_argument("--significance-threshold", type=float, default=0.50)
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional directory with supplemental provider telemetry CSVs")
+    parser.add_argument("--provider-normalization-dir", default=None, help="Optional directory with normalized provider telemetry outputs")
     return parser.parse_args()
 
 
@@ -30,6 +31,11 @@ def main() -> int:
         candidate = Path(args.suite_dir).resolve() / "provider_telemetry"
         if candidate.exists():
             provider_telemetry_dir = str(candidate)
+    provider_normalization_dir = args.provider_normalization_dir
+    if not provider_normalization_dir:
+        candidate = Path(args.suite_dir).resolve() / "provider_normalization"
+        if candidate.exists():
+            provider_normalization_dir = str(candidate)
     outputs = write_result_diagnosis_outputs(
         suite_dir=args.suite_dir,
         out_dir=args.out_dir,
@@ -37,6 +43,7 @@ def main() -> int:
         effect_size_threshold=float(args.effect_size_threshold),
         significance_threshold=float(args.significance_threshold),
         provider_telemetry_dir=provider_telemetry_dir,
+        provider_normalization_dir=provider_normalization_dir,
     )
     print(f"rows_total={outputs['rows_total']}")
     print(f"saved_table={outputs['table_csv']}")
