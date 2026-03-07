@@ -3,10 +3,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import subprocess
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _parse_bool_with_neg(parser: argparse.ArgumentParser, name: str, default: bool) -> None:
@@ -129,6 +133,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional directory containing signal selection artifacts (coverage.md, selection_report.md, selected_uids.txt)",
     )
+    parser.add_argument("--suite-dir", default=None, help="Optional benchmark suite root containing manifest/ and ledger/")
+    parser.add_argument("--significance-dir", default=None, help="Optional statistical significance output directory")
+    parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
+    parser.add_argument("--prompt-lock", default=None, help="Optional prompt lock JSON path")
+    parser.add_argument("--submission-pack-dir", default=None, help="Optional explicit submission_pack output directory")
+    _parse_bool_with_neg(parser, "export-submission-pack", default=False)
     parser.add_argument("--format", choices=["md", "csv", "md+csv"], default="md+csv")
     _parse_bool_with_neg(parser, "with-figs", default=True)
     parser.add_argument("--png", action="store_true")
@@ -1599,6 +1609,109 @@ def main() -> int:
                 copied.append(cp)
         signal_selection_panel["copied_files"] = copied
 
+    significance_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    if args.significance_dir:
+        sig_dir = Path(args.significance_dir)
+        significance_panel["enabled"] = True
+        significance_panel["source_dir"] = str(sig_dir)
+        dst_root = out_dir / "significance"
+        dst_root.mkdir(parents=True, exist_ok=True)
+        copied: list[str] = []
+        for src in (
+            sig_dir / "tables" / "table_significance_main.csv",
+            sig_dir / "tables" / "table_significance_main.md",
+            sig_dir / "tables" / "table_confidence_intervals.csv",
+            sig_dir / "tables" / "table_confidence_intervals.md",
+            sig_dir / "figures" / "fig_significance_delta_vs_budget_seconds.png",
+            sig_dir / "figures" / "fig_significance_delta_vs_budget_seconds.pdf",
+            sig_dir / "figures" / "fig_effect_size_forest.png",
+            sig_dir / "figures" / "fig_effect_size_forest.pdf",
+            sig_dir / "report.md",
+            sig_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                dst = figures_dir / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+                if str(cp).endswith(".png") or str(cp).endswith(".pdf"):
+                    figure_paths.append(str(cp))
+        significance_panel["copied_files"] = copied
+
+    suite_provenance_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "manifest_files": [],
+        "provenance_files": [],
+    }
+    if args.suite_dir:
+        suite_dir = Path(args.suite_dir)
+        suite_provenance_panel["enabled"] = True
+        suite_provenance_panel["source_dir"] = str(suite_dir)
+        manifest_dst = out_dir / "manifest"
+        provenance_dst = out_dir / "provenance"
+        manifest_dst.mkdir(parents=True, exist_ok=True)
+        provenance_dst.mkdir(parents=True, exist_ok=True)
+        manifest_copied: list[str] = []
+        provenance_copied: list[str] = []
+        for src in (
+            suite_dir / "manifest" / "experiment_manifest.yaml",
+            suite_dir / "manifest" / "manifest_resolved.json",
+            suite_dir / "manifest" / "prompt_lock.json",
+        ):
+            cp = _copy_if_exists(src, manifest_dst / src.name)
+            if cp:
+                manifest_copied.append(cp)
+        for src in (
+            suite_dir / "ledger" / "results_long.csv",
+            suite_dir / "ledger" / "runs.jsonl",
+            suite_dir / "compare" / "commands.sh",
+            suite_dir / "compare" / "compare_summary.json",
+            suite_dir / "compare" / "snapshot.json",
+            suite_dir / "compare" / "README.md",
+        ):
+            target_name = "compare_snapshot.json" if src.name == "snapshot.json" else src.name
+            cp = _copy_if_exists(src, provenance_dst / target_name)
+            if cp:
+                provenance_copied.append(cp)
+        suite_provenance_panel["manifest_files"] = manifest_copied
+        suite_provenance_panel["provenance_files"] = provenance_copied
+
+    prompt_panel: dict[str, Any] = {
+        "registry": None,
+        "prompt_lock": None,
+        "copied_files": [],
+    }
+    if args.prompt_registry or args.prompt_lock:
+        prompt_dst = out_dir / "prompts"
+        prompt_dst.mkdir(parents=True, exist_ok=True)
+        copied: list[str] = []
+        if args.prompt_registry:
+            registry_src = Path(args.prompt_registry)
+            cp = _copy_if_exists(registry_src, prompt_dst / registry_src.name)
+            if cp:
+                prompt_panel["registry"] = cp
+                copied.append(cp)
+        if args.prompt_lock:
+            lock_src = Path(args.prompt_lock)
+            cp = _copy_if_exists(lock_src, (out_dir / "manifest") / "prompt_lock.json")
+            if cp:
+                prompt_panel["prompt_lock"] = cp
+                copied.append(cp)
+        prompt_panel["copied_files"] = copied
+
+    submission_pack_dir = Path(args.submission_pack_dir) if args.submission_pack_dir else (out_dir / "submission_pack")
+    if bool(args.export_submission_pack):
+        report_lines_submission = f"- submission_pack_dir: `{submission_pack_dir}`"
+    else:
+        report_lines_submission = "- submission_pack_dir: `disabled`"
+
     report_path = out_dir / "report.md"
     if safety_present:
         safety_line = (
@@ -1855,6 +1968,44 @@ def main() -> int:
             )
         else:
             report_lines.append("- signal_selection: source provided but artifacts missing.")
+    if args.significance_dir:
+        if significance_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Statistical Significance",
+                    "",
+                    f"- significance_dir: `{significance_panel.get('source_dir')}`",
+                    f"- significance_files: `{significance_panel.get('copied_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- significance: source provided but artifacts missing.")
+    if args.suite_dir:
+        if suite_provenance_panel.get("manifest_files") or suite_provenance_panel.get("provenance_files"):
+            report_lines.extend(
+                [
+                    "## Suite Provenance",
+                    "",
+                    f"- suite_dir: `{suite_provenance_panel.get('source_dir')}`",
+                    f"- suite_manifest_files: `{suite_provenance_panel.get('manifest_files')}`",
+                    f"- suite_provenance_files: `{suite_provenance_panel.get('provenance_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- suite_provenance: source provided but artifacts missing.")
+    if args.prompt_registry or args.prompt_lock:
+        if prompt_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Prompt Provenance",
+                    "",
+                    f"- prompt_registry: `{args.prompt_registry}`",
+                    f"- prompt_lock: `{args.prompt_lock}`",
+                    f"- prompt_files: `{prompt_panel.get('copied_files')}`",
+                ]
+            )
+        else:
+            report_lines.append("- prompt_provenance: source provided but artifacts missing.")
     report_lines.extend(
         [
         "",
@@ -1863,6 +2014,7 @@ def main() -> int:
         f"- panel table: `{panel_csv}`",
         f"- delta table: `{delta_csv}`",
         f"- figures: `{figure_paths}`",
+        report_lines_submission,
         ]
     )
     report_path.write_text("\n".join(report_lines), encoding="utf-8")
@@ -1919,6 +2071,12 @@ def main() -> int:
             "chain_repo_compare_dir": str(args.chain_repo_compare_dir) if args.chain_repo_compare_dir else None,
             "chain_attribution_dir": str(args.chain_attribution_dir) if args.chain_attribution_dir else None,
             "signal_selection_dir": str(resolved_signal_selection_dir) if resolved_signal_selection_dir else None,
+            "suite_dir": str(args.suite_dir) if args.suite_dir else None,
+            "significance_dir": str(args.significance_dir) if args.significance_dir else None,
+            "prompt_registry": str(args.prompt_registry) if args.prompt_registry else None,
+            "prompt_lock": str(args.prompt_lock) if args.prompt_lock else None,
+            "export_submission_pack": bool(args.export_submission_pack),
+            "submission_pack_dir": str(submission_pack_dir) if bool(args.export_submission_pack) else None,
         },
         "sources": {
             task: {side: str(path) for side, path in side_paths.items()}
@@ -1954,15 +2112,50 @@ def main() -> int:
             "chain_repo_compare_panel": chain_repo_compare_panel,
             "chain_attribution_panel": chain_attribution_panel,
             "signal_selection_panel": signal_selection_panel,
+            "significance_panel": significance_panel,
+            "suite_provenance_panel": suite_provenance_panel,
+            "prompt_panel": prompt_panel,
             "report_md": str(report_path),
         },
     }
     snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    submission_pack_saved: str | None = None
+    if bool(args.export_submission_pack):
+        cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "export_submission_pack.py"),
+            "--paper-ready-dir",
+            str(out_dir),
+            "--out-dir",
+            str(submission_pack_dir),
+        ]
+        if args.suite_dir:
+            cmd.extend(["--suite-dir", str(args.suite_dir)])
+        if args.significance_dir:
+            cmd.extend(["--significance-dir", str(args.significance_dir)])
+        if args.prompt_registry:
+            cmd.extend(["--prompt-registry", str(args.prompt_registry)])
+        if args.prompt_lock:
+            cmd.extend(["--prompt-lock", str(args.prompt_lock)])
+        proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            if proc.stdout:
+                print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr, end="" if proc.stderr.endswith("\n") else "\n")
+            return int(proc.returncode)
+        submission_pack_saved = str(submission_pack_dir)
+        snapshot.setdefault("outputs", {})
+        snapshot["outputs"]["submission_pack_dir"] = submission_pack_saved
+        snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+
     print(f"saved_table_panel={panel_csv}")
     print(f"saved_table_delta={delta_csv}")
     print(f"saved_figures={figure_paths}")
     print(f"saved_snapshot={snapshot_path}")
+    if submission_pack_saved:
+        print(f"saved_submission_pack={submission_pack_saved}")
     return 0
 
 

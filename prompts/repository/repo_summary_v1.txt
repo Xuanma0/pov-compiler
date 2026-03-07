@@ -1,0 +1,11 @@
+You are given a sequence of repository chunks about an egocentric video.
+
+Write a concise structured summary that preserves:
+- goals
+- ordered steps
+- entities
+- places
+- interactions
+- decisions
+
+Only use evidence present in the input chunks.

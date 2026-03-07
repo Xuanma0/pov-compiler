@@ -915,6 +915,37 @@ Key additions:
 - `compare/figures/fig_model_parse_fail_rate.png`
 - `compare/compare_summary.json` includes `model_cost_stats` and gate config
 
+### v1.42 Benchmark Suite + Significance + Prompt Registry
+
+`v1.42` adds a manifest-driven benchmark production layer on top of existing compare/sweep outputs. The first version is intentionally additive:
+
+- `scripts/run_benchmark_suite.py` collects and aggregates existing compare artifacts into a stable ledger and compare report
+- `scripts/run_statistical_significance.py` computes paired bootstrap CI, Wilcoxon, McNemar, and FDR-corrected significance tables
+- `scripts/validate_prompt_registry.py` validates prompt provenance and exports a prompt lock
+- `scripts/export_paper_ready.py --export-submission-pack` extends the current paper-ready export with `submission_pack/`
+
+Minimal flow:
+
+```text
+python scripts/validate_prompt_registry.py --registry configs/prompts/registry_v1.yaml --profile v1.42_main
+python scripts/run_benchmark_suite.py --manifest configs/benchmarks/v1.42_main.yaml --out_dir data/outputs/v142_suite --mode collect-only
+python scripts/run_statistical_significance.py --suite_dir data/outputs/v142_suite --manifest configs/benchmarks/v1.42_main.yaml --out_dir data/outputs/v142_suite/significance
+python scripts/export_paper_ready.py --compare_dir data/outputs/v142_compare --out_dir data/outputs/v142_suite/paper_ready --suite-dir data/outputs/v142_suite --significance-dir data/outputs/v142_suite/significance --prompt-registry configs/prompts/registry_v1.yaml --prompt-lock data/outputs/v142_suite/manifest/prompt_lock.json --export-submission-pack
+```
+
+New key artifacts:
+
+- `ledger/results_long.csv`
+- `ledger/runs.jsonl`
+- `compare/tables/table_main_results.csv`
+- `compare/tables/table_significance.csv`
+- `compare/tables/table_failure_attribution.csv`
+- `compare/figures/fig_main_budget_frontier.png`
+- `compare/figures/fig_main_variant_delta.png`
+- `compare/figures/fig_main_failure_attribution.png`
+- `significance/tables/table_significance_main.csv`
+- `paper_ready/submission_pack/`
+
 ### Local Fast Tests (xdist)
 
 Use the helper script for local parallel pytest:

@@ -1,0 +1,11 @@
+You are given a compact POV event context.
+
+Produce structured decision summaries that preserve:
+- trigger
+- state
+- action
+- constraints
+- outcome
+- alternatives
+
+Do not invent objects or places that are not grounded in the provided evidence.

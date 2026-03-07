@@ -1,0 +1,66 @@
+suite_id: v1.42_main
+suite_version: "1.42"
+seed: 42
+description: Manifest-driven benchmark suite for stable paper main-result production.
+
+selection:
+  compare_dir: data/outputs/v1_42_compare
+  tasks:
+    - nlq
+    - streaming
+    - bye
+  labels:
+    a: stub
+    b: real
+  task_sources:
+    nlq: nlq_budget/{label}/aggregate/metrics_by_budget.csv
+    streaming: streaming_budget/{label}/aggregate/metrics_by_budget.csv
+    bye: bye_budget/{label}/aggregate/metrics_by_budget.csv
+  pair_sources: {}
+
+budgets:
+  points:
+    - key: 20/50/4
+    - key: 40/100/8
+    - key: 60/200/12
+
+queries:
+  profile: paper_main
+  families:
+    - hard_pseudo_nlq
+    - budget_compare
+    - paper_ready
+
+variants:
+  baseline: a
+  treatment: b
+
+metrics:
+  primary:
+    nlq: nlq_full_hit_at_k_strict
+    streaming: hit@k_strict
+    bye: qualityScore
+  binary:
+    nlq: hit_binary
+  failure:
+    nlq:
+      - safety_reason_budget_insufficient_rate
+      - safety_reason_evidence_missing_rate
+      - safety_reason_constraints_over_filtered_rate
+      - safety_reason_retrieval_distractor_rate
+      - safety_reason_other_rate
+    streaming: []
+    bye: []
+
+prompts:
+  registry: configs/prompts/registry_v1.yaml
+  profile: v1.42_main
+  lock_required: true
+
+output:
+  root: data/outputs/v1_42_suite
+  figure_formats:
+    - png
+    - pdf
+  include_paper_ready: true
+  include_submission_pack: true

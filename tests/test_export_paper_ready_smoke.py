@@ -507,6 +507,82 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "signal_selection" / "coverage.csv").write_text("uid,coverage_score\nu1,3\n", encoding="utf-8")
     (compare_dir / "signal_selection" / "snapshot.json").write_text(json.dumps({"rows": 1}), encoding="utf-8")
 
+    significance_dir = tmp_path / "significance"
+    (significance_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (significance_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (significance_dir / "tables" / "table_significance_main.csv").write_text(
+        "task,budget_key,budget_seconds,mean_delta,status\nnlq,20/50/4,20,0.10,ok\n",
+        encoding="utf-8",
+    )
+    (significance_dir / "tables" / "table_significance_main.md").write_text("# significance\n", encoding="utf-8")
+    (significance_dir / "tables" / "table_confidence_intervals.csv").write_text(
+        "task,budget_key,ci_low,ci_high,status\nnlq,20/50/4,0.02,0.18,ok\n",
+        encoding="utf-8",
+    )
+    (significance_dir / "tables" / "table_confidence_intervals.md").write_text("# ci\n", encoding="utf-8")
+    (significance_dir / "figures" / "fig_significance_delta_vs_budget_seconds.png").write_bytes(b"PNG")
+    (significance_dir / "figures" / "fig_significance_delta_vs_budget_seconds.pdf").write_bytes(b"PDF")
+    (significance_dir / "figures" / "fig_effect_size_forest.png").write_bytes(b"PNG")
+    (significance_dir / "figures" / "fig_effect_size_forest.pdf").write_bytes(b"PDF")
+    (significance_dir / "report.md").write_text("# significance report\n", encoding="utf-8")
+    (significance_dir / "snapshot.json").write_text(json.dumps({"rows": 1}), encoding="utf-8")
+
+    suite_dir = tmp_path / "suite"
+    (suite_dir / "manifest").mkdir(parents=True, exist_ok=True)
+    (suite_dir / "ledger").mkdir(parents=True, exist_ok=True)
+    (suite_dir / "compare").mkdir(parents=True, exist_ok=True)
+    (suite_dir / "manifest" / "experiment_manifest.yaml").write_text("suite_id: v1.42_main\n", encoding="utf-8")
+    (suite_dir / "manifest" / "manifest_resolved.json").write_text(json.dumps({"suite_id": "v1.42_main"}), encoding="utf-8")
+    (suite_dir / "manifest" / "prompt_lock.json").write_text(
+        json.dumps({"profile": "v1.42_main", "prompts": [{"task": "decisions", "hash": "abc"}]}),
+        encoding="utf-8",
+    )
+    (suite_dir / "ledger" / "results_long.csv").write_text("task,budget_key\nnlq,20/50/4\n", encoding="utf-8")
+    (suite_dir / "ledger" / "runs.jsonl").write_text('{"task":"nlq","status":"ok"}\n', encoding="utf-8")
+    (suite_dir / "compare" / "commands.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (suite_dir / "compare" / "compare_summary.json").write_text(json.dumps({"suite_id": "v1.42_main"}), encoding="utf-8")
+    (suite_dir / "compare" / "snapshot.json").write_text(json.dumps({"suite_id": "v1.42_main"}), encoding="utf-8")
+    (suite_dir / "compare" / "README.md").write_text("# suite compare\n", encoding="utf-8")
+
+    prompt_root = tmp_path / "prompt_assets"
+    (prompt_root / "prompts" / "decisions").mkdir(parents=True, exist_ok=True)
+    (prompt_root / "prompts" / "planner").mkdir(parents=True, exist_ok=True)
+    (prompt_root / "prompts" / "repository").mkdir(parents=True, exist_ok=True)
+    (prompt_root / "prompts" / "decisions" / "model_decision_v1.txt").write_text("decision prompt\n", encoding="utf-8")
+    (prompt_root / "prompts" / "planner" / "model_planner_v1.txt").write_text("planner prompt\n", encoding="utf-8")
+    (prompt_root / "prompts" / "repository" / "repo_summary_v1.txt").write_text("repo prompt\n", encoding="utf-8")
+    prompt_registry = prompt_root / "registry_v1.yaml"
+    prompt_registry.write_text(
+        "\n".join(
+            [
+                "registry_id: prompt_registry_v1",
+                'version: "1"',
+                "entries:",
+                "  - prompt_id: model_decision_v1",
+                "    task: decisions",
+                "    version: v1",
+                "    path: prompts/decisions/model_decision_v1.txt",
+                "  - prompt_id: model_planner_v1",
+                "    task: planner",
+                "    version: v1",
+                "    path: prompts/planner/model_planner_v1.txt",
+                "  - prompt_id: repo_summary_v1",
+                "    task: repository",
+                "    version: v1",
+                "    path: prompts/repository/repo_summary_v1.txt",
+                "profiles:",
+                "  v1.42_main:",
+                "    prompts:",
+                "      decisions: model_decision_v1",
+                "      planner: model_planner_v1",
+                "      repository: repo_summary_v1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    prompt_lock = prompt_root / "prompt_lock.json"
+    prompt_lock.write_text(json.dumps({"profile": "v1.42_main", "prompts": [{"task": "planner"}]}), encoding="utf-8")
+
     out_dir = tmp_path / "paper_ready"
     cmd = [
         sys.executable,
@@ -557,11 +633,21 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(compare_dir / "chain_attr"),
         "--signal-selection-dir",
         str(compare_dir / "signal_selection"),
+        "--suite-dir",
+        str(suite_dir),
+        "--significance-dir",
+        str(significance_dir),
+        "--prompt-registry",
+        str(prompt_registry),
+        "--prompt-lock",
+        str(prompt_lock),
+        "--export-submission-pack",
     ]
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "saved_table_panel=" in proc.stdout
     assert "saved_table_delta=" in proc.stdout
+    assert "saved_submission_pack=" in proc.stdout
 
     panel_csv = out_dir / "tables" / "table_budget_panel.csv"
     panel_md = out_dir / "tables" / "table_budget_panel.md"
@@ -595,6 +681,15 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "selection" / "coverage.md").exists()
     assert (out_dir / "selection" / "selection_report.md").exists()
     assert (out_dir / "selection" / "selected_uids.txt").exists()
+    assert (out_dir / "significance" / "table_significance_main.csv").exists()
+    assert (out_dir / "significance" / "table_confidence_intervals.csv").exists()
+    assert (out_dir / "significance" / "report.md").exists()
+    assert (out_dir / "manifest" / "experiment_manifest.yaml").exists()
+    assert (out_dir / "manifest" / "manifest_resolved.json").exists()
+    assert (out_dir / "manifest" / "prompt_lock.json").exists()
+    assert (out_dir / "provenance" / "results_long.csv").exists()
+    assert (out_dir / "provenance" / "runs.jsonl").exists()
+    assert (out_dir / "prompts" / "registry_v1.yaml").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.csv").exists()
     assert (out_dir / "tables" / "table_streaming_repo_compare.md").exists()
     assert (out_dir / "figures" / "fig_streaming_repo_compare_safety_latency.png").exists()
@@ -680,3 +775,19 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "primary_b" in header
     assert "delta_primary" in header
     assert "safety_critical_fn_rate_a" in header
+
+    submission_pack = out_dir / "submission_pack"
+    assert (submission_pack / "README.md").exists()
+    assert (submission_pack / "snapshot.json").exists()
+    assert (submission_pack / "paper_ready" / "tables" / "table_budget_panel.csv").exists()
+    assert (submission_pack / "paper_ready" / "figures" / "fig_budget_primary_vs_seconds_panel.png").exists()
+    assert (submission_pack / "significance" / "tables" / "table_significance_main.csv").exists()
+    assert (submission_pack / "significance" / "report.md").exists()
+    assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
+    assert (submission_pack / "manifest" / "prompt_lock.json").exists()
+    assert (submission_pack / "provenance" / "results_long.csv").exists()
+    assert (submission_pack / "provenance" / "commands.sh").exists()
+    assert (submission_pack / "prompts" / "registry_v1.yaml").exists()
+    assert (submission_pack / "prompts" / "decisions" / "model_decision_v1.txt").exists()
+    assert (submission_pack / "prompts" / "planner" / "model_planner_v1.txt").exists()
+    assert (submission_pack / "prompts" / "repository" / "repo_summary_v1.txt").exists()
