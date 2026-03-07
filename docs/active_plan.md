@@ -2,31 +2,32 @@
 
 ## Current milestone
 
-- `v1.45`: Main Real Pilot + Result Diagnosis Layer
+- `v1.46`: Real Pilot Provider Telemetry Diagnosis
 
 ## Single goal
 
-- Promote the main-result runner into a safe pilot flow that can explain why a real main-result run is empty, weak, or trustworthy through a standalone result diagnosis layer.
+- Promote the pilot runner from fake-only diagnosis to real-pilot-ready provider telemetry diagnosis, so weak deltas can be explained in terms of usage/cost/latency/parse-fail/fallback noise without touching runtime core modules.
 
 ## Status
 
-- [x] `v1.45` real/fake pilot manifests added with fixed query-bank reuse and smaller pilot budgets.
-- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, health, diagnosis, freeze, paper-ready, paper freeze, and submission pack.
-- [x] Standalone `result_diagnosis/` artifacts added with explicit no-data / near-zero / significance / provider-noise summaries.
-- [x] `paper_ready/` now carries `result_diagnosis/` and diagnosis figures.
-- [x] `submission_pack/` now carries `result_diagnosis/` and diagnosis-first guidance in `README.md`.
-- [x] Fake pilot validated end to end under `data/outputs/v145_fake_pilot`.
+- [x] `v1.46` real/fake pilot manifests added with telemetry contract flags and provider metadata.
+- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, health, provider telemetry, diagnosis, freeze, paper-ready, paper freeze, and submission pack.
+- [x] Standalone `provider_telemetry/` sidecar added with `summary.json` and `by_variant.csv`.
+- [x] `result_diagnosis/` now consumes provider telemetry and emits per-variant telemetry rows plus non-`unavailable` `provider_noise_summary`.
+- [x] `paper_ready/` now carries `provider_telemetry/` and a provider-noise section in `report.md`.
+- [x] `submission_pack/` now carries `provider_telemetry/` and provider-noise-first guidance in `README.md`.
+- [x] Fake pilot validated end to end under `data/outputs/v146_fake_pilot`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
 - [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
-- [x] `v1.45` milestone marked done.
+- [x] `v1.46` milestone marked done.
 
-## v1.46 Candidate Tasks
+## v1.47 Candidate Tasks
 
-- Real pilot provider telemetry ingestion
+- Real main_real pilot on live compare roots
+- Provider telemetry from real model-stack compare artifacts
 - Diagnosis-driven query-bank refinement loop
-- Main-result resume / partial rerun support
-- Canonical caption and caption-freeze pack
-- CI verification for benchmark freeze plus paper freeze
+- Partial rerun and resume for main-result runner
+- CI verification for paper-ready plus paper-freeze artifacts
 
 ## Frozen constraints
 

@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--significance-dir", default=None, help="Optional significance output directory")
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
+    parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional freeze output directory")
     parser.add_argument("--paper-freeze-dir", default=None, help="Optional canonical paper freeze directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML")
@@ -74,6 +75,7 @@ def main() -> int:
     pack_significance = out_dir / "significance"
     pack_result_health = out_dir / "result_health"
     pack_result_diagnosis = out_dir / "result_diagnosis"
+    pack_provider_telemetry = out_dir / "provider_telemetry"
     pack_freeze = out_dir / "freeze"
     pack_paper_freeze = out_dir / "paper_freeze"
     pack_prompts = out_dir / "prompts"
@@ -85,6 +87,7 @@ def main() -> int:
         pack_significance,
         pack_result_health,
         pack_result_diagnosis,
+        pack_provider_telemetry,
         pack_freeze,
         pack_paper_freeze,
         pack_prompts,
@@ -95,6 +98,8 @@ def main() -> int:
     _copy_dir_if_exists(paper_ready_dir / "tables", pack_paper_ready / "tables", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "figures", pack_paper_ready / "figures", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "canonical", pack_paper_ready / "canonical", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "result_diagnosis", pack_paper_ready / "result_diagnosis", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "provider_telemetry", pack_paper_ready / "provider_telemetry", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "report.md", pack_paper_ready / "report.md", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "snapshot.json", pack_paper_ready / "snapshot.json", copied, missing)
 
@@ -131,6 +136,11 @@ def main() -> int:
         _copy_dir_if_exists(result_diagnosis_dir / "figures", pack_result_diagnosis / "figures", copied, missing)
         _copy_file_if_exists(result_diagnosis_dir / "report.md", pack_result_diagnosis / "report.md", copied, missing)
         _copy_file_if_exists(result_diagnosis_dir / "snapshot.json", pack_result_diagnosis / "snapshot.json", copied, missing)
+
+    provider_telemetry_dir = Path(args.provider_telemetry_dir) if args.provider_telemetry_dir else None
+    if provider_telemetry_dir is not None:
+        _copy_file_if_exists(provider_telemetry_dir / "by_variant.csv", pack_provider_telemetry / "by_variant.csv", copied, missing)
+        _copy_file_if_exists(provider_telemetry_dir / "summary.json", pack_provider_telemetry / "summary.json", copied, missing)
 
     freeze_dir = Path(args.benchmark_freeze_dir) if args.benchmark_freeze_dir else None
     if freeze_dir is not None:
@@ -175,6 +185,7 @@ def main() -> int:
         f"- significance_dir: `{significance_dir}`",
         f"- result_health_dir: `{result_health_dir}`",
         f"- result_diagnosis_dir: `{result_diagnosis_dir}`",
+        f"- provider_telemetry_dir: `{provider_telemetry_dir}`",
         f"- benchmark_freeze_dir: `{freeze_dir}`",
         f"- paper_freeze_dir: `{paper_freeze_dir}`",
         f"- paper_map: `{paper_map_path}`",
@@ -190,6 +201,7 @@ def main() -> int:
         "- `significance/`: significance tables, figures, report, snapshot",
         "- `result_health/`: result-health tables, figures, snapshot",
         "- `result_diagnosis/`: diagnosis tables, figures, report, snapshot",
+        "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
         "- `freeze/`: freeze manifest and artifact hashes",
         "- `paper_freeze/`: canonical paper-artifact freeze manifest and hashes",
         "- `prompts/`: registry and prompt source files",
@@ -217,6 +229,15 @@ def main() -> int:
                 "- If a main figure or main table looks weak, read `result_diagnosis/report.md` before citing the result.",
             ]
         )
+    if provider_telemetry_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Provider Noise",
+                "",
+                "- If main results look noisy, read `provider_telemetry/summary.json` and `result_diagnosis/report.md` before citing the result.",
+            ]
+        )
     readme_path = out_dir / "README.md"
     readme_path.write_text("\n".join(readme_lines), encoding="utf-8")
 
@@ -227,6 +248,7 @@ def main() -> int:
         "significance_dir": str(significance_dir) if significance_dir is not None else None,
         "result_health_dir": str(result_health_dir) if result_health_dir is not None else None,
         "result_diagnosis_dir": str(result_diagnosis_dir) if result_diagnosis_dir is not None else None,
+        "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,
         "benchmark_freeze_dir": str(freeze_dir) if freeze_dir is not None else None,
         "paper_freeze_dir": str(paper_freeze_dir) if paper_freeze_dir is not None else None,
         "paper_map": str(paper_map_path) if paper_map_path is not None else None,

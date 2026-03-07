@@ -599,6 +599,37 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    provider_telemetry_dir = tmp_path / "provider_telemetry"
+    provider_telemetry_dir.mkdir(parents=True, exist_ok=True)
+    (provider_telemetry_dir / "by_variant.csv").write_text(
+        "\n".join(
+            [
+                "variant_label,provider,model,api_mode_used,usage_present,cost_known,model_cost_usd_total,model_cost_usd_mean_per_query,latency_p50_ms,latency_p95_ms,structured_parse_fail_rate,planner_fallback_rate,calls_total,calls_with_usage,calls_with_cost,availability,availability_reason,telemetry_source_paths",
+                'stub,fake,fake-stub-v1,fixture_json,True,True,0.0,0.0,8.0,12.0,0.0,0.0,6,6,6,ok,telemetry_available,"[]"',
+                'real,fake_openai,fake-gpt-4.1-mini,response_json,True,True,0.018,0.0015,84.0,133.0,0.02,0.04,6,6,6,ok,telemetry_available,"[]"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (provider_telemetry_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "availability": "ok",
+                "usage_present_rate": 1.0,
+                "model_cost_known_rate": 1.0,
+                "model_latency_p95_ms_mean": 72.5,
+                "structured_parse_fail_rate_mean": 0.01,
+                "planner_fallback_rate": 0.02,
+                "calls_total": 12,
+                "calls_with_usage": 12,
+                "calls_with_cost": 12,
+                "telemetry_source_paths": ["fixture_manifest"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
     freeze_dir = tmp_path / "freeze"
     freeze_dir.mkdir(parents=True, exist_ok=True)
     (freeze_dir / "freeze_manifest.json").write_text(
@@ -736,6 +767,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(result_health_dir),
         "--result-diagnosis-dir",
         str(result_diagnosis_dir),
+        "--provider-telemetry-dir",
+        str(provider_telemetry_dir),
         "--benchmark-freeze-dir",
         str(freeze_dir),
         "--paper-map",
@@ -769,6 +802,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Canonical Paper Map" in report_text
     assert "## Result Health" in report_text
     assert "## Result Diagnosis" in report_text
+    assert "## Provider Telemetry" in report_text
     assert "## Benchmark Freeze" in report_text
     assert (out_dir / "canonical" / "tables" / "Table_1.csv").exists()
     assert (out_dir / "canonical" / "tables" / "Table_1.md").exists()
@@ -803,6 +837,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
     assert (out_dir / "result_diagnosis" / "report.md").exists()
     assert (out_dir / "figures" / "fig_result_diagnosis_breakdown.png").exists()
+    assert (out_dir / "provider_telemetry" / "summary.json").exists()
+    assert (out_dir / "provider_telemetry" / "by_variant.csv").exists()
     assert (out_dir / "freeze" / "freeze_manifest.json").exists()
     assert (out_dir / "freeze" / "artifacts_sha256.csv").exists()
     assert (out_dir / "manifest" / "experiment_manifest.yaml").exists()
@@ -908,6 +944,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "significance" / "report.md").exists()
     assert (submission_pack / "result_health" / "tables" / "table_result_health.csv").exists()
     assert (submission_pack / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
+    assert (submission_pack / "provider_telemetry" / "summary.json").exists()
     assert (submission_pack / "freeze" / "freeze_manifest.json").exists()
     assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
     assert (submission_pack / "manifest" / "prompt_lock.json").exists()
@@ -926,3 +963,4 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Table 1" in submission_readme
     assert "Figure 2" in submission_readme
     assert "Diagnosis First" in submission_readme
+    assert "Provider Noise" in submission_readme

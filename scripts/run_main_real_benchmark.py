@@ -15,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
 
 from pov_compiler.bench.query_bank import load_query_banks_from_manifest
 from pov_compiler.bench.reporting.paper_map import load_paper_map, stable_paper_map_hash
+from pov_compiler.bench.reporting.provider_telemetry import write_provider_telemetry_outputs
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -116,6 +117,27 @@ def main() -> int:
         "query_banks": query_banks,
         "output_root": output_root,
         "diagnosis_enabled": bool(manifest_payload.get("diagnosis_enabled", False)),
+        "telemetry": {
+            "enabled": bool(
+                manifest_payload.get(
+                    "telemetry_enabled",
+                    manifest_payload.get("telemetry", {}).get("enabled", False),
+                )
+            ),
+            "require_usage": bool(
+                manifest_payload.get(
+                    "telemetry_require_usage",
+                    manifest_payload.get("telemetry", {}).get("require_usage", False),
+                )
+            ),
+            "require_latency": bool(
+                manifest_payload.get(
+                    "telemetry_require_latency",
+                    manifest_payload.get("telemetry", {}).get("require_latency", False),
+                )
+            ),
+            "variants": manifest_payload.get("telemetry", {}).get("variants", {}),
+        },
     }
     dry_snapshot_path = out_dir / "manifest" / "dry_collect_snapshot.json"
     dry_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,6 +146,7 @@ def main() -> int:
     if bool(args.dry_collect):
         print(f"saved_suite={out_dir}")
         print("saved_result_health=skipped")
+        print("saved_provider_telemetry=skipped")
         print("saved_result_diagnosis=skipped")
         print("saved_freeze=skipped")
         print("paper_ready_saved=skipped")
@@ -178,6 +201,13 @@ def main() -> int:
     )
     gate_status = "ok" if health_proc.returncode == 0 else ("partial" if args.mode == "pilot" else "fail")
 
+    provider_telemetry_dir = out_dir / "provider_telemetry"
+    provider_telemetry_outputs = write_provider_telemetry_outputs(suite_dir=out_dir, out_dir=provider_telemetry_dir)
+    provider_summary = provider_telemetry_outputs.get("summary", {})
+    provider_availability = str(provider_summary.get("availability", "")).strip()
+    if provider_availability in {"provider_unavailable", "no_real_call"} and gate_status == "ok":
+        gate_status = "partial"
+
     result_diagnosis_dir = out_dir / "result_diagnosis"
     _run_cmd(
         [
@@ -187,6 +217,8 @@ def main() -> int:
             str(out_dir),
             "--out_dir",
             str(result_diagnosis_dir),
+            "--provider-telemetry-dir",
+            str(provider_telemetry_dir),
         ]
     )
     _annotate_result_health_snapshot(result_health_dir / "snapshot.json", diagnosis_dir=result_diagnosis_dir)
@@ -221,6 +253,8 @@ def main() -> int:
             str(significance_dir),
             "--result-health-dir",
             str(result_health_dir),
+            "--provider-telemetry-dir",
+            str(provider_telemetry_dir),
             "--result-diagnosis-dir",
             str(result_diagnosis_dir),
             "--benchmark-freeze-dir",
@@ -263,6 +297,8 @@ def main() -> int:
             str(significance_dir),
             "--result-health-dir",
             str(result_health_dir),
+            "--provider-telemetry-dir",
+            str(provider_telemetry_dir),
             "--result-diagnosis-dir",
             str(result_diagnosis_dir),
             "--benchmark-freeze-dir",
@@ -278,6 +314,7 @@ def main() -> int:
 
     print(f"saved_suite={out_dir}")
     print(f"saved_result_health={result_health_dir}")
+    print(f"saved_provider_telemetry={provider_telemetry_dir}")
     print(f"saved_result_diagnosis={result_diagnosis_dir}")
     print(f"saved_freeze={freeze_dir}")
     print(f"paper_ready_saved={paper_ready_dir}")

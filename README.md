@@ -1029,6 +1029,31 @@ New key artifacts:
 - `paper_ready/result_diagnosis/`
 - `submission_pack/result_diagnosis/`
 
+### v1.46 Real Pilot Provider Telemetry Diagnosis
+
+`v1.46` keeps the v1.45 pilot shape but makes provider telemetry a first-class result-layer artifact, so fake pilots and future real pilots can distinguish weak model deltas from provider noise:
+
+- `configs/benchmarks/v1.46_main_real_pilot.yaml` and `v1.46_main_fake_pilot.yaml` add telemetry requirements without changing runtime core modules
+- `src/pov_compiler/bench/reporting/provider_telemetry.py` writes `provider_telemetry/summary.json` and `provider_telemetry/by_variant.csv`
+- `scripts/run_main_real_benchmark.py --mode pilot` now chains suite -> significance -> health -> provider_telemetry -> diagnosis -> freeze -> paper_ready -> paper_freeze -> submission_pack
+- `paper_ready/` and `submission_pack/` both carry `provider_telemetry/` alongside `result_diagnosis/`
+
+Minimal fake pilot:
+
+```text
+python scripts/run_main_real_benchmark.py --manifest configs/benchmarks/v1.46_main_fake_pilot.yaml --mode pilot --out_dir data/outputs/v146_fake_pilot
+python scripts/report_result_diagnosis.py --suite-dir data/outputs/v146_fake_pilot --out_dir data/outputs/v146_fake_pilot/result_diagnosis --provider-telemetry-dir data/outputs/v146_fake_pilot/provider_telemetry
+python scripts/export_paper_ready.py --compare_dir data/outputs/v146_fake_pilot/compare --suite-dir data/outputs/v146_fake_pilot --significance-dir data/outputs/v146_fake_pilot/significance --result-health-dir data/outputs/v146_fake_pilot/result_health --result-diagnosis-dir data/outputs/v146_fake_pilot/result_diagnosis --provider-telemetry-dir data/outputs/v146_fake_pilot/provider_telemetry --benchmark-freeze-dir data/outputs/v146_fake_pilot/freeze --paper-map configs/paper/main_result_map_v1.yaml --out_dir data/outputs/v146_fake_pilot/paper_ready
+```
+
+New key artifacts:
+
+- `provider_telemetry/summary.json`
+- `provider_telemetry/by_variant.csv`
+- `result_diagnosis/tables/table_result_diagnosis.csv` with `variant_telemetry` rows
+- `paper_ready/provider_telemetry/`
+- `submission_pack/provider_telemetry/`
+
 ### Local Fast Tests (xdist)
 
 Use the helper script for local parallel pytest:

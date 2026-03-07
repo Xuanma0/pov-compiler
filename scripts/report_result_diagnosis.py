@@ -25,13 +25,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    provider_telemetry_dir = args.provider_telemetry_dir
+    if not provider_telemetry_dir:
+        candidate = Path(args.suite_dir).resolve() / "provider_telemetry"
+        if candidate.exists():
+            provider_telemetry_dir = str(candidate)
     outputs = write_result_diagnosis_outputs(
         suite_dir=args.suite_dir,
         out_dir=args.out_dir,
         near_zero_threshold=float(args.near_zero_threshold),
         effect_size_threshold=float(args.effect_size_threshold),
         significance_threshold=float(args.significance_threshold),
-        provider_telemetry_dir=args.provider_telemetry_dir,
+        provider_telemetry_dir=provider_telemetry_dir,
     )
     print(f"rows_total={outputs['rows_total']}")
     print(f"saved_table={outputs['table_csv']}")
