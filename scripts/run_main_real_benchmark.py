@@ -65,8 +65,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", required=True, help="Main real/fake benchmark manifest YAML")
     parser.add_argument("--out_dir", required=True, help="Output root for the full result bundle")
     parser.add_argument("--dry-collect", action="store_true", help="Validate manifest and contracts without running suite collection")
-    parser.add_argument("--mode", choices=["smoke", "full"], default="full")
+    parser.add_argument("--mode", choices=["smoke", "pilot", "full"], default="full")
     return parser.parse_args()
+
+
+def _annotate_result_health_snapshot(snapshot_path: Path, *, diagnosis_dir: Path | None) -> None:
+    if not snapshot_path.exists():
+        return
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["diagnosis_available"] = bool(diagnosis_dir is not None and diagnosis_dir.exists())
+    payload["diagnosis_dir"] = str(diagnosis_dir) if diagnosis_dir is not None else None
+    snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> int:
@@ -101,6 +115,7 @@ def main() -> int:
         },
         "query_banks": query_banks,
         "output_root": output_root,
+        "diagnosis_enabled": bool(manifest_payload.get("diagnosis_enabled", False)),
     }
     dry_snapshot_path = out_dir / "manifest" / "dry_collect_snapshot.json"
     dry_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +124,7 @@ def main() -> int:
     if bool(args.dry_collect):
         print(f"saved_suite={out_dir}")
         print("saved_result_health=skipped")
+        print("saved_result_diagnosis=skipped")
         print("saved_freeze=skipped")
         print("paper_ready_saved=skipped")
         print("paper_freeze_saved=skipped")
@@ -160,7 +176,20 @@ def main() -> int:
         ],
         allow_failure=True,
     )
-    gate_status = "ok" if health_proc.returncode == 0 else "fail"
+    gate_status = "ok" if health_proc.returncode == 0 else ("partial" if args.mode == "pilot" else "fail")
+
+    result_diagnosis_dir = out_dir / "result_diagnosis"
+    _run_cmd(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "report_result_diagnosis.py"),
+            "--suite-dir",
+            str(out_dir),
+            "--out_dir",
+            str(result_diagnosis_dir),
+        ]
+    )
+    _annotate_result_health_snapshot(result_health_dir / "snapshot.json", diagnosis_dir=result_diagnosis_dir)
 
     freeze_dir = out_dir / "freeze"
     _run_cmd(
@@ -192,6 +221,8 @@ def main() -> int:
             str(significance_dir),
             "--result-health-dir",
             str(result_health_dir),
+            "--result-diagnosis-dir",
+            str(result_diagnosis_dir),
             "--benchmark-freeze-dir",
             str(freeze_dir),
             "--paper-map",
@@ -232,6 +263,8 @@ def main() -> int:
             str(significance_dir),
             "--result-health-dir",
             str(result_health_dir),
+            "--result-diagnosis-dir",
+            str(result_diagnosis_dir),
             "--benchmark-freeze-dir",
             str(freeze_dir),
             "--paper-freeze-dir",
@@ -245,6 +278,7 @@ def main() -> int:
 
     print(f"saved_suite={out_dir}")
     print(f"saved_result_health={result_health_dir}")
+    print(f"saved_result_diagnosis={result_diagnosis_dir}")
     print(f"saved_freeze={freeze_dir}")
     print(f"paper_ready_saved={paper_ready_dir}")
     print(f"paper_freeze_saved={paper_freeze_dir}")

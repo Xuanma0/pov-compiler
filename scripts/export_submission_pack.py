@@ -49,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--suite-dir", default=None, help="Benchmark suite root containing manifest/ and ledger/")
     parser.add_argument("--significance-dir", default=None, help="Optional significance output directory")
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
+    parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional freeze output directory")
     parser.add_argument("--paper-freeze-dir", default=None, help="Optional canonical paper freeze directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML")
@@ -72,6 +73,7 @@ def main() -> int:
     pack_manifest = out_dir / "manifest"
     pack_significance = out_dir / "significance"
     pack_result_health = out_dir / "result_health"
+    pack_result_diagnosis = out_dir / "result_diagnosis"
     pack_freeze = out_dir / "freeze"
     pack_paper_freeze = out_dir / "paper_freeze"
     pack_prompts = out_dir / "prompts"
@@ -82,6 +84,7 @@ def main() -> int:
         pack_manifest,
         pack_significance,
         pack_result_health,
+        pack_result_diagnosis,
         pack_freeze,
         pack_paper_freeze,
         pack_prompts,
@@ -121,6 +124,13 @@ def main() -> int:
         _copy_dir_if_exists(result_health_dir / "tables", pack_result_health / "tables", copied, missing)
         _copy_dir_if_exists(result_health_dir / "figures", pack_result_health / "figures", copied, missing)
         _copy_file_if_exists(result_health_dir / "snapshot.json", pack_result_health / "snapshot.json", copied, missing)
+
+    result_diagnosis_dir = Path(args.result_diagnosis_dir) if args.result_diagnosis_dir else None
+    if result_diagnosis_dir is not None:
+        _copy_dir_if_exists(result_diagnosis_dir / "tables", pack_result_diagnosis / "tables", copied, missing)
+        _copy_dir_if_exists(result_diagnosis_dir / "figures", pack_result_diagnosis / "figures", copied, missing)
+        _copy_file_if_exists(result_diagnosis_dir / "report.md", pack_result_diagnosis / "report.md", copied, missing)
+        _copy_file_if_exists(result_diagnosis_dir / "snapshot.json", pack_result_diagnosis / "snapshot.json", copied, missing)
 
     freeze_dir = Path(args.benchmark_freeze_dir) if args.benchmark_freeze_dir else None
     if freeze_dir is not None:
@@ -164,6 +174,7 @@ def main() -> int:
         f"- suite_dir: `{suite_dir}`",
         f"- significance_dir: `{significance_dir}`",
         f"- result_health_dir: `{result_health_dir}`",
+        f"- result_diagnosis_dir: `{result_diagnosis_dir}`",
         f"- benchmark_freeze_dir: `{freeze_dir}`",
         f"- paper_freeze_dir: `{paper_freeze_dir}`",
         f"- paper_map: `{paper_map_path}`",
@@ -178,6 +189,7 @@ def main() -> int:
         "- `paper_ready/`: tables, figures, report, snapshot",
         "- `significance/`: significance tables, figures, report, snapshot",
         "- `result_health/`: result-health tables, figures, snapshot",
+        "- `result_diagnosis/`: diagnosis tables, figures, report, snapshot",
         "- `freeze/`: freeze manifest and artifact hashes",
         "- `paper_freeze/`: canonical paper-artifact freeze manifest and hashes",
         "- `prompts/`: registry and prompt source files",
@@ -196,6 +208,15 @@ def main() -> int:
             readme_lines.append(
                 f"- `{row.get('canonical_id')}` -> `{Path('paper_ready') / row.get('canonical_relpath', '')}`"
             )
+    if result_diagnosis_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Diagnosis First",
+                "",
+                "- If a main figure or main table looks weak, read `result_diagnosis/report.md` before citing the result.",
+            ]
+        )
     readme_path = out_dir / "README.md"
     readme_path.write_text("\n".join(readme_lines), encoding="utf-8")
 
@@ -205,6 +226,7 @@ def main() -> int:
         "suite_dir": str(suite_dir) if suite_dir is not None else None,
         "significance_dir": str(significance_dir) if significance_dir is not None else None,
         "result_health_dir": str(result_health_dir) if result_health_dir is not None else None,
+        "result_diagnosis_dir": str(result_diagnosis_dir) if result_diagnosis_dir is not None else None,
         "benchmark_freeze_dir": str(freeze_dir) if freeze_dir is not None else None,
         "paper_freeze_dir": str(paper_freeze_dir) if paper_freeze_dir is not None else None,
         "paper_map": str(paper_map_path) if paper_map_path is not None else None,

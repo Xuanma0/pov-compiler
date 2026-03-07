@@ -578,6 +578,27 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    result_diagnosis_dir = tmp_path / "result_diagnosis"
+    (result_diagnosis_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (result_diagnosis_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (result_diagnosis_dir / "tables" / "table_result_diagnosis.csv").write_text(
+        "task,near_zero_delta_rate,diagnosis_recommendations\nnlq,0.0,\"[\"\"keep_current_query_bank\"\"]\"\n",
+        encoding="utf-8",
+    )
+    (result_diagnosis_dir / "tables" / "table_result_diagnosis.md").write_text("# diagnosis\n", encoding="utf-8")
+    (result_diagnosis_dir / "figures" / "fig_result_diagnosis_breakdown.png").write_bytes(b"PNG")
+    (result_diagnosis_dir / "figures" / "fig_result_diagnosis_breakdown.pdf").write_bytes(b"PDF")
+    (result_diagnosis_dir / "report.md").write_text("# diagnosis report\n", encoding="utf-8")
+    (result_diagnosis_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "provider_noise_summary": {"availability": "unavailable"},
+                "diagnosis_recommendations": ["inspect diagnosis"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
     freeze_dir = tmp_path / "freeze"
     freeze_dir.mkdir(parents=True, exist_ok=True)
     (freeze_dir / "freeze_manifest.json").write_text(
@@ -713,6 +734,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(significance_dir),
         "--result-health-dir",
         str(result_health_dir),
+        "--result-diagnosis-dir",
+        str(result_diagnosis_dir),
         "--benchmark-freeze-dir",
         str(freeze_dir),
         "--paper-map",
@@ -745,6 +768,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Main Result Contract" in report_text
     assert "## Canonical Paper Map" in report_text
     assert "## Result Health" in report_text
+    assert "## Result Diagnosis" in report_text
     assert "## Benchmark Freeze" in report_text
     assert (out_dir / "canonical" / "tables" / "Table_1.csv").exists()
     assert (out_dir / "canonical" / "tables" / "Table_1.md").exists()
@@ -776,6 +800,9 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "significance" / "report.md").exists()
     assert (out_dir / "result_health" / "tables" / "table_result_health.csv").exists()
     assert (out_dir / "result_health" / "figures" / "fig_result_health_breakdown.png").exists()
+    assert (out_dir / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
+    assert (out_dir / "result_diagnosis" / "report.md").exists()
+    assert (out_dir / "figures" / "fig_result_diagnosis_breakdown.png").exists()
     assert (out_dir / "freeze" / "freeze_manifest.json").exists()
     assert (out_dir / "freeze" / "artifacts_sha256.csv").exists()
     assert (out_dir / "manifest" / "experiment_manifest.yaml").exists()
@@ -880,6 +907,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "significance" / "tables" / "table_significance_main.csv").exists()
     assert (submission_pack / "significance" / "report.md").exists()
     assert (submission_pack / "result_health" / "tables" / "table_result_health.csv").exists()
+    assert (submission_pack / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
     assert (submission_pack / "freeze" / "freeze_manifest.json").exists()
     assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
     assert (submission_pack / "manifest" / "prompt_lock.json").exists()
@@ -897,3 +925,4 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     submission_readme = (submission_pack / "README.md").read_text(encoding="utf-8")
     assert "Table 1" in submission_readme
     assert "Figure 2" in submission_readme
+    assert "Diagnosis First" in submission_readme

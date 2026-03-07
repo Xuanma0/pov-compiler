@@ -118,6 +118,7 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
                 'suite_version: "1.42"',
                 "seed: 5",
                 "health_gate_profile: main_real",
+                "diagnosis_enabled: true",
                 "paper_map: configs/paper/main_result_map_v1.yaml",
                 f"output_root: {tmp_path / 'main_result_root'}",
                 "selection:",

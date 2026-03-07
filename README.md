@@ -1004,6 +1004,31 @@ New key artifacts:
 - `paper_freeze/freeze_manifest.json`
 - `submission_pack/README.md`
 
+### v1.45 Main Real Pilot + Result Diagnosis Layer
+
+`v1.45` keeps the v1.44 runner structure but adds a separate diagnosis layer so pilot runs can explain why a main result is empty, near-zero, statistically weak, or dominated by provider noise:
+
+- `configs/benchmarks/v1.45_main_real_pilot.yaml` and `v1.45_main_fake_pilot.yaml` define the small pilot contracts
+- `scripts/report_result_diagnosis.py` emits `result_diagnosis/` tables, figures, report, and snapshot
+- `scripts/run_main_real_benchmark.py --mode pilot` now chains suite -> significance -> health -> diagnosis -> freeze -> paper_ready -> paper_freeze -> submission_pack
+- `paper_ready/` and `submission_pack/` both carry `result_diagnosis/`
+
+Minimal fake pilot:
+
+```text
+python scripts/run_main_real_benchmark.py --manifest configs/benchmarks/v1.45_main_fake_pilot.yaml --mode pilot --out_dir data/outputs/v145_fake_pilot
+python scripts/report_result_diagnosis.py --suite-dir data/outputs/v145_fake_pilot --out_dir data/outputs/v145_fake_pilot/result_diagnosis
+python scripts/export_paper_ready.py --compare_dir data/outputs/v145_fake_pilot/compare --suite-dir data/outputs/v145_fake_pilot --significance-dir data/outputs/v145_fake_pilot/significance --result-health-dir data/outputs/v145_fake_pilot/result_health --result-diagnosis-dir data/outputs/v145_fake_pilot/result_diagnosis --benchmark-freeze-dir data/outputs/v145_fake_pilot/freeze --paper-map configs/paper/main_result_map_v1.yaml --out_dir data/outputs/v145_fake_pilot/paper_ready
+```
+
+New key artifacts:
+
+- `result_diagnosis/tables/table_result_diagnosis.csv`
+- `result_diagnosis/figures/fig_result_diagnosis_breakdown.png`
+- `result_diagnosis/report.md`
+- `paper_ready/result_diagnosis/`
+- `submission_pack/result_diagnosis/`
+
 ### Local Fast Tests (xdist)
 
 Use the helper script for local parallel pytest:

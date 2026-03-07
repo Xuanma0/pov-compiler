@@ -2,32 +2,31 @@
 
 ## Current milestone
 
-- `v1.44`: Main Real Runner + Health Gate + Canonical Paper Map + Paper Freeze
+- `v1.45`: Main Real Pilot + Result Diagnosis Layer
 
 ## Single goal
 
-- Promote the benchmark suite into a real main-result execution layer with one canonical runner, gate-checked outputs, canonical paper numbering, and paper-level freeze.
+- Promote the main-result runner into a safe pilot flow that can explain why a real main-result run is empty, weak, or trustworthy through a standalone result diagnosis layer.
 
 ## Status
 
-- [x] `v1.44` main real/fake manifests added as the canonical entry contracts.
-- [x] `scripts/run_main_real_benchmark.py` added as the single result-layer orchestrator.
-- [x] Result-health gate added with explicit fail reasons and non-zero exit on gate failure.
-- [x] Canonical paper map export added with stable `Table N` / `Figure N` copies.
-- [x] Paper-level freeze added for canonical paper artifacts.
-- [x] `paper_ready/` and `submission_pack/` now carry canonical paper assets and paper freeze.
-- [x] Dry collect validated at `data/outputs/v144_main_real_dry`.
-- [x] Fake smoke path validated end-to-end under `data/outputs/v144_fake_smoke`.
+- [x] `v1.45` real/fake pilot manifests added with fixed query-bank reuse and smaller pilot budgets.
+- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, health, diagnosis, freeze, paper-ready, paper freeze, and submission pack.
+- [x] Standalone `result_diagnosis/` artifacts added with explicit no-data / near-zero / significance / provider-noise summaries.
+- [x] `paper_ready/` now carries `result_diagnosis/` and diagnosis figures.
+- [x] `submission_pack/` now carries `result_diagnosis/` and diagnosis-first guidance in `README.md`.
+- [x] Fake pilot validated end to end under `data/outputs/v145_fake_pilot`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
-- [x] `v1.44` milestone marked done.
+- [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
+- [x] `v1.45` milestone marked done.
 
-## v1.45 Candidate Tasks
+## v1.46 Candidate Tasks
 
-- Real compare producer execution lanes
-- Provider cost and parse-fail health gates
-- Canonical caption metadata and paper metadata pack
-- CI paper-freeze verification
-- Partial rerun and resume for main-result bundles
+- Real pilot provider telemetry ingestion
+- Diagnosis-driven query-bank refinement loop
+- Main-result resume / partial rerun support
+- Canonical caption and caption-freeze pack
+- CI verification for benchmark freeze plus paper freeze
 
 ## Frozen constraints
 

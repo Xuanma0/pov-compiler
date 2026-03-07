@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -18,7 +19,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out_dir", required=True, help="Output directory for result-health artifacts")
     parser.add_argument("--epsilon", type=float, default=1e-9, help="Absolute threshold for zero-delta checks")
     parser.add_argument("--gate-profile", default=None, help="Optional health-gate profile name")
+    parser.add_argument("--diagnosis-dir", default=None, help="Optional diagnosis directory for snapshot linkage")
     return parser.parse_args()
+
+
+def _annotate_snapshot(snapshot_path: Path, diagnosis_dir: str | None) -> None:
+    if not snapshot_path.exists():
+        return
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    diagnosis_path = Path(diagnosis_dir).resolve() if diagnosis_dir else None
+    payload["diagnosis_available"] = bool(diagnosis_path is not None and diagnosis_path.exists())
+    payload["diagnosis_dir"] = str(diagnosis_path) if diagnosis_path is not None else None
+    snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> int:
@@ -29,6 +46,7 @@ def main() -> int:
         epsilon=float(args.epsilon),
         gate_profile=args.gate_profile,
     )
+    _annotate_snapshot(Path(outputs["snapshot_json"]), args.diagnosis_dir)
     print(f"rows_total={outputs['rows_total']}")
     print(f"saved_table={outputs['table_csv']}")
     print(f"saved_snapshot={outputs['snapshot_json']}")
