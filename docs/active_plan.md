@@ -2,32 +2,32 @@
 
 ## Current milestone
 
-- `v1.46`: Real Pilot Provider Telemetry Diagnosis
+- `v1.47`: Real Pilot Admission Control And Delta Audit
 
 ## Single goal
 
-- Promote the pilot runner from fake-only diagnosis to real-pilot-ready provider telemetry diagnosis, so weak deltas can be explained in terms of usage/cost/latency/parse-fail/fallback noise without touching runtime core modules.
+- Promote the pilot runner from telemetry-aware diagnosis to admission-controlled real-pilot triage, so weak deltas can explicitly say whether to expand the run and which layer to tune next without touching runtime core modules.
 
 ## Status
 
-- [x] `v1.46` real/fake pilot manifests added with telemetry contract flags and provider metadata.
-- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, health, provider telemetry, diagnosis, freeze, paper-ready, paper freeze, and submission pack.
-- [x] Standalone `provider_telemetry/` sidecar added with `summary.json` and `by_variant.csv`.
-- [x] `result_diagnosis/` now consumes provider telemetry and emits per-variant telemetry rows plus non-`unavailable` `provider_noise_summary`.
-- [x] `paper_ready/` now carries `provider_telemetry/` and a provider-noise section in `report.md`.
-- [x] `submission_pack/` now carries `provider_telemetry/` and provider-noise-first guidance in `README.md`.
-- [x] Fake pilot validated end to end under `data/outputs/v146_fake_pilot`.
+- [x] `v1.47` real/fake admission manifests added with explicit admission thresholds for sample size, no-data rate, effect size, and provider noise.
+- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, health, provider telemetry, diagnosis, delta audit, admission control, freeze, paper-ready, paper freeze, and submission pack.
+- [x] Standalone `delta_audit/` artifact layer added with per-budget `recommended_action` rows and `fig_delta_audit_breakdown.*`.
+- [x] Standalone `admission_control/` artifact layer added with `admission_status`, fail reasons, and admission metrics.
+- [x] `paper_ready/` now carries `admission_control/` and `delta_audit/`, and `report.md` includes admission plus delta-audit summaries.
+- [x] `submission_pack/` now carries `admission_control/` and `delta_audit/`, and its README enforces the order admission -> diagnosis -> delta audit -> canonical figures.
+- [x] Fake admission pilot validated end to end under `data/outputs/v147_fake_admission`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
 - [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
-- [x] `v1.46` milestone marked done.
+- [x] `v1.47` milestone marked done.
 
-## v1.47 Candidate Tasks
+## v1.48 Candidate Tasks
 
-- Real main_real pilot on live compare roots
-- Provider telemetry from real model-stack compare artifacts
-- Diagnosis-driven query-bank refinement loop
-- Partial rerun and resume for main-result runner
-- CI verification for paper-ready plus paper-freeze artifacts
+- Live main_real pilot on real compare roots
+- Per-query query-bank weakness attribution
+- Admission-aware sample expansion policy
+- Real-provider telemetry ingestion from external sidecars
+- CI verification for admission plus delta-audit artifacts
 
 ## Frozen constraints
 

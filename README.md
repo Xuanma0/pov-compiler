@@ -1054,6 +1054,32 @@ New key artifacts:
 - `paper_ready/provider_telemetry/`
 - `submission_pack/provider_telemetry/`
 
+### v1.47 Real Pilot Admission Control And Delta Audit
+
+`v1.47` keeps the same collect / aggregate / export / provenance spine, but adds a new decision layer on top of the pilot artifacts so weak real-pilot runs can answer whether they are worth expanding and which module should be tuned next:
+
+- `configs/benchmarks/v1.47_main_real_admission.yaml` and `v1.47_main_fake_admission.yaml` add admission thresholds without changing runtime core modules
+- `src/pov_compiler/bench/reporting/delta_audit.py` emits per-budget `delta_audit/` rows with `recommended_action`
+- `src/pov_compiler/bench/reporting/admission_control.py` emits `admission_control/` snapshots and reports for `ok | partial | fail`
+- `scripts/run_main_real_benchmark.py --mode pilot` now chains suite -> significance -> health -> provider_telemetry -> diagnosis -> delta_audit -> admission_control -> freeze -> paper_ready -> paper_freeze -> submission_pack
+- `paper_ready/` and `submission_pack/` now both carry `delta_audit/`, and the pack README points readers to admission -> diagnosis -> delta_audit before main figures
+
+```powershell
+python scripts/run_main_real_benchmark.py --manifest configs/benchmarks/v1.47_main_fake_admission.yaml --mode pilot --out_dir data/outputs/v147_fake_admission
+python scripts/report_delta_audit.py --suite-dir data/outputs/v147_fake_admission --out_dir data/outputs/v147_fake_admission/delta_audit
+python scripts/export_paper_ready.py --compare_dir data/outputs/v147_fake_admission/compare --suite-dir data/outputs/v147_fake_admission --significance-dir data/outputs/v147_fake_admission/significance --result-health-dir data/outputs/v147_fake_admission/result_health --result-diagnosis-dir data/outputs/v147_fake_admission/result_diagnosis --delta-audit-dir data/outputs/v147_fake_admission/delta_audit --provider-telemetry-dir data/outputs/v147_fake_admission/provider_telemetry --benchmark-freeze-dir data/outputs/v147_fake_admission/freeze --paper-map configs/paper/main_result_map_v1.yaml --out_dir data/outputs/v147_fake_admission/paper_ready
+```
+
+Key outputs:
+
+- `admission_control/snapshot.json`
+- `admission_control/report.md`
+- `delta_audit/tables/table_delta_audit.csv`
+- `delta_audit/figures/fig_delta_audit_breakdown.png`
+- `delta_audit/report.md`
+- `paper_ready/delta_audit/`
+- `submission_pack/delta_audit/`
+
 ### Local Fast Tests (xdist)
 
 Use the helper script for local parallel pytest:

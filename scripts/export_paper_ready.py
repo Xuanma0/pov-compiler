@@ -142,6 +142,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--significance-dir", default=None, help="Optional statistical significance output directory")
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
+    parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional benchmark freeze output directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML path")
@@ -1771,6 +1772,54 @@ def main() -> int:
             except Exception:
                 result_diagnosis_snapshot = {}
 
+    resolved_delta_audit_dir: Path | None = None
+    if args.delta_audit_dir:
+        resolved_delta_audit_dir = Path(args.delta_audit_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "delta_audit"
+        if candidate.exists():
+            resolved_delta_audit_dir = candidate
+    delta_audit_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    delta_audit_snapshot: dict[str, Any] = {}
+    if resolved_delta_audit_dir:
+        delta_audit_panel["enabled"] = True
+        delta_audit_panel["source_dir"] = str(resolved_delta_audit_dir)
+        dst_root = out_dir / "delta_audit"
+        copied: list[str] = []
+        for src in (
+            resolved_delta_audit_dir / "tables" / "table_delta_audit.csv",
+            resolved_delta_audit_dir / "tables" / "table_delta_audit.md",
+            resolved_delta_audit_dir / "figures" / "fig_delta_audit_breakdown.png",
+            resolved_delta_audit_dir / "figures" / "fig_delta_audit_breakdown.pdf",
+            resolved_delta_audit_dir / "report.md",
+            resolved_delta_audit_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+                if cp:
+                    copied.append(cp)
+        delta_audit_panel["copied_files"] = copied
+        snapshot_src = resolved_delta_audit_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                delta_audit_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                delta_audit_snapshot = {}
+
     resolved_provider_telemetry_dir: Path | None = None
     if args.provider_telemetry_dir:
         resolved_provider_telemetry_dir = Path(args.provider_telemetry_dir)
@@ -1803,6 +1852,37 @@ def main() -> int:
                 provider_telemetry_summary = json.loads(summary_src.read_text(encoding="utf-8"))
             except Exception:
                 provider_telemetry_summary = {}
+
+    resolved_admission_dir: Path | None = None
+    if args.suite_dir:
+        candidate = Path(args.suite_dir) / "admission_control"
+        if candidate.exists():
+            resolved_admission_dir = candidate
+    admission_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    admission_snapshot: dict[str, Any] = {}
+    if resolved_admission_dir:
+        admission_panel["enabled"] = True
+        admission_panel["source_dir"] = str(resolved_admission_dir)
+        dst_root = out_dir / "admission_control"
+        copied = []
+        for src in (
+            resolved_admission_dir / "report.md",
+            resolved_admission_dir / "snapshot.json",
+        ):
+            cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        admission_panel["copied_files"] = copied
+        snapshot_src = resolved_admission_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                admission_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                admission_snapshot = {}
 
     resolved_freeze_dir: Path | None = None
     if args.benchmark_freeze_dir:
@@ -2285,6 +2365,21 @@ def main() -> int:
             )
         else:
             report_lines.append("- result_health: source provided but artifacts missing.")
+    if resolved_admission_dir:
+        if admission_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Admission Control",
+                    "",
+                    f"- admission_dir: `{admission_panel.get('source_dir')}`",
+                    f"- admission_files: `{admission_panel.get('copied_files')}`",
+                    f"- admission_status: `{admission_snapshot.get('admission_status', 'skipped')}`",
+                    f"- admission_fail_reasons: `{admission_snapshot.get('admission_fail_reasons', [])}`",
+                    f"- admission_metrics: `{json.dumps(admission_snapshot.get('admission_metrics', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- admission_control: source provided but artifacts missing.")
     if resolved_result_diagnosis_dir:
         if result_diagnosis_panel.get("copied_files"):
             report_lines.extend(
@@ -2300,6 +2395,21 @@ def main() -> int:
             )
         else:
             report_lines.append("- result_diagnosis: source provided but artifacts missing.")
+    if resolved_delta_audit_dir:
+        if delta_audit_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Delta Audit",
+                    "",
+                    f"- delta_audit_dir: `{delta_audit_panel.get('source_dir')}`",
+                    f"- delta_audit_files: `{delta_audit_panel.get('copied_files')}`",
+                    f"- delta_audit_main_recommendation: `{delta_audit_snapshot.get('main_recommendation', '')}`",
+                    f"- delta_audit_action_counts: `{delta_audit_snapshot.get('recommended_action_counts', {})}`",
+                    f"- delta_audit_report: `{Path(delta_audit_panel.get('source_dir', '')) / 'report.md' if delta_audit_panel.get('source_dir') else None}`",
+                ]
+            )
+        else:
+            report_lines.append("- delta_audit: source provided but artifacts missing.")
     if resolved_provider_telemetry_dir:
         if provider_telemetry_panel.get("copied_files"):
             report_lines.extend(
@@ -2423,7 +2533,9 @@ def main() -> int:
             "suite_dir": str(args.suite_dir) if args.suite_dir else None,
             "significance_dir": str(args.significance_dir) if args.significance_dir else None,
             "result_health_dir": str(resolved_result_health_dir) if resolved_result_health_dir else None,
+            "admission_dir": str(resolved_admission_dir) if resolved_admission_dir else None,
             "result_diagnosis_dir": str(resolved_result_diagnosis_dir) if resolved_result_diagnosis_dir else None,
+            "delta_audit_dir": str(resolved_delta_audit_dir) if resolved_delta_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
             "benchmark_freeze_dir": str(resolved_freeze_dir) if resolved_freeze_dir else None,
             "paper_map": str(resolved_paper_map) if resolved_paper_map else None,
@@ -2468,7 +2580,9 @@ def main() -> int:
             "signal_selection_panel": signal_selection_panel,
             "significance_panel": significance_panel,
             "result_health_panel": result_health_panel,
+            "admission_panel": admission_panel,
             "result_diagnosis_panel": result_diagnosis_panel,
+            "delta_audit_panel": delta_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
             "benchmark_freeze_panel": benchmark_freeze_panel,
             "paper_map_panel": paper_map_panel,
@@ -2497,6 +2611,8 @@ def main() -> int:
             cmd.extend(["--result-health-dir", str(resolved_result_health_dir)])
         if resolved_result_diagnosis_dir:
             cmd.extend(["--result-diagnosis-dir", str(resolved_result_diagnosis_dir)])
+        if resolved_delta_audit_dir:
+            cmd.extend(["--delta-audit-dir", str(resolved_delta_audit_dir)])
         if resolved_provider_telemetry_dir:
             cmd.extend(["--provider-telemetry-dir", str(resolved_provider_telemetry_dir)])
         if resolved_freeze_dir:

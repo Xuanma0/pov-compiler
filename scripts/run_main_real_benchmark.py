@@ -13,6 +13,7 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from pov_compiler.bench.reporting.admission_control import write_admission_outputs
 from pov_compiler.bench.query_bank import load_query_banks_from_manifest
 from pov_compiler.bench.reporting.paper_map import load_paper_map, stable_paper_map_hash
 from pov_compiler.bench.reporting.provider_telemetry import write_provider_telemetry_outputs
@@ -70,7 +71,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _annotate_result_health_snapshot(snapshot_path: Path, *, diagnosis_dir: Path | None) -> None:
+def _annotate_result_health_snapshot(
+    snapshot_path: Path,
+    *,
+    diagnosis_dir: Path | None,
+    delta_audit_dir: Path | None = None,
+    admission_dir: Path | None = None,
+    admission_status: str | None = None,
+) -> None:
     if not snapshot_path.exists():
         return
     try:
@@ -81,6 +89,11 @@ def _annotate_result_health_snapshot(snapshot_path: Path, *, diagnosis_dir: Path
         payload = {}
     payload["diagnosis_available"] = bool(diagnosis_dir is not None and diagnosis_dir.exists())
     payload["diagnosis_dir"] = str(diagnosis_dir) if diagnosis_dir is not None else None
+    payload["delta_audit_available"] = bool(delta_audit_dir is not None and delta_audit_dir.exists())
+    payload["delta_audit_dir"] = str(delta_audit_dir) if delta_audit_dir is not None else None
+    payload["admission_available"] = bool(admission_dir is not None and admission_dir.exists())
+    payload["admission_dir"] = str(admission_dir) if admission_dir is not None else None
+    payload["admission_status"] = str(admission_status or "skipped")
     snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -92,6 +105,7 @@ def main() -> int:
     manifest_payload = _load_yaml(manifest_path)
     manifest_hash = _sha256_path(manifest_path)
     health_gate_profile = str(manifest_payload.get("health_gate_profile", "")).strip()
+    admission_profile = str(manifest_payload.get("admission_profile", "")).strip()
     paper_map_path = _resolve_optional_path(str(manifest_payload.get("paper_map", "")).strip(), manifest_path.parent)
     output_root = str(manifest_payload.get("output_root", manifest_payload.get("output", {}).get("root", ""))).strip()
     query_banks = load_query_banks_from_manifest(manifest_path)
@@ -117,6 +131,18 @@ def main() -> int:
         "query_banks": query_banks,
         "output_root": output_root,
         "diagnosis_enabled": bool(manifest_payload.get("diagnosis_enabled", False)),
+        "admission": {
+            "profile": admission_profile,
+            "min_selected_uids": manifest_payload.get("min_selected_uids"),
+            "min_coverage_score_mean": manifest_payload.get("min_coverage_score_mean"),
+            "min_significance_available_rate": manifest_payload.get("min_significance_available_rate"),
+            "max_no_data_rate": manifest_payload.get("max_no_data_rate"),
+            "min_effect_size_nonzero_rate": manifest_payload.get("min_effect_size_nonzero_rate"),
+            "max_provider_noise_parse_fail_rate": manifest_payload.get("max_provider_noise_parse_fail_rate"),
+            "max_provider_noise_fallback_rate": manifest_payload.get("max_provider_noise_fallback_rate"),
+            "min_usage_present_rate": manifest_payload.get("min_usage_present_rate"),
+            "allow_partial": manifest_payload.get("allow_partial"),
+        },
         "telemetry": {
             "enabled": bool(
                 manifest_payload.get(
@@ -148,11 +174,13 @@ def main() -> int:
         print("saved_result_health=skipped")
         print("saved_provider_telemetry=skipped")
         print("saved_result_diagnosis=skipped")
+        print("saved_delta_audit=skipped")
         print("saved_freeze=skipped")
         print("paper_ready_saved=skipped")
         print("paper_freeze_saved=skipped")
         print("submission_pack_saved=skipped")
         print("gate_status=skipped")
+        print("admission_status=skipped")
         return 0
 
     suite_cmd = [
@@ -221,7 +249,45 @@ def main() -> int:
             str(provider_telemetry_dir),
         ]
     )
-    _annotate_result_health_snapshot(result_health_dir / "snapshot.json", diagnosis_dir=result_diagnosis_dir)
+    delta_audit_dir = out_dir / "delta_audit"
+    _run_cmd(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "report_delta_audit.py"),
+            "--suite-dir",
+            str(out_dir),
+            "--out_dir",
+            str(delta_audit_dir),
+            "--provider-telemetry-dir",
+            str(provider_telemetry_dir),
+        ]
+        + (["--admission-profile", admission_profile] if admission_profile else [])
+    )
+
+    admission_dir = out_dir / "admission_control"
+    admission_outputs = write_admission_outputs(
+        suite_dir=out_dir,
+        out_dir=admission_dir,
+        admission_profile=admission_profile or None,
+        health_snapshot=json.loads((result_health_dir / "snapshot.json").read_text(encoding="utf-8"))
+        if (result_health_dir / "snapshot.json").exists()
+        else {},
+        diagnosis_snapshot=json.loads((result_diagnosis_dir / "snapshot.json").read_text(encoding="utf-8"))
+        if (result_diagnosis_dir / "snapshot.json").exists()
+        else {},
+        provider_summary=provider_summary,
+        delta_audit_snapshot=json.loads((delta_audit_dir / "snapshot.json").read_text(encoding="utf-8"))
+        if (delta_audit_dir / "snapshot.json").exists()
+        else {},
+    )
+    admission_status = str(admission_outputs.get("admission_status", "skipped"))
+    _annotate_result_health_snapshot(
+        result_health_dir / "snapshot.json",
+        diagnosis_dir=result_diagnosis_dir,
+        delta_audit_dir=delta_audit_dir,
+        admission_dir=admission_dir,
+        admission_status=admission_status,
+    )
 
     freeze_dir = out_dir / "freeze"
     _run_cmd(
@@ -257,6 +323,8 @@ def main() -> int:
             str(provider_telemetry_dir),
             "--result-diagnosis-dir",
             str(result_diagnosis_dir),
+            "--delta-audit-dir",
+            str(delta_audit_dir),
             "--benchmark-freeze-dir",
             str(freeze_dir),
             "--paper-map",
@@ -301,6 +369,8 @@ def main() -> int:
             str(provider_telemetry_dir),
             "--result-diagnosis-dir",
             str(result_diagnosis_dir),
+            "--delta-audit-dir",
+            str(delta_audit_dir),
             "--benchmark-freeze-dir",
             str(freeze_dir),
             "--paper-freeze-dir",
@@ -316,12 +386,14 @@ def main() -> int:
     print(f"saved_result_health={result_health_dir}")
     print(f"saved_provider_telemetry={provider_telemetry_dir}")
     print(f"saved_result_diagnosis={result_diagnosis_dir}")
+    print(f"saved_delta_audit={delta_audit_dir}")
     print(f"saved_freeze={freeze_dir}")
     print(f"paper_ready_saved={paper_ready_dir}")
     print(f"paper_freeze_saved={paper_freeze_dir}")
     print(f"submission_pack_saved={submission_pack_dir}")
     print(f"gate_status={gate_status}")
-    return 0 if gate_status == "ok" else 1
+    print(f"admission_status={admission_status}")
+    return 0 if gate_status == "ok" and admission_status in {"ok", "skipped"} else 1
 
 
 if __name__ == "__main__":

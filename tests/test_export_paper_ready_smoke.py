@@ -562,6 +562,18 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (suite_dir / "compare" / "tables" / "table_main_results.csv").write_text("task,budget_key\nnlq,20/50/4\n", encoding="utf-8")
     (suite_dir / "compare" / "tables" / "table_main_results.md").write_text("# main results\n", encoding="utf-8")
     (suite_dir / "compare" / "figures" / "fig_main_budget_frontier.png").write_bytes(b"PNG")
+    (suite_dir / "admission_control").mkdir(parents=True, exist_ok=True)
+    (suite_dir / "admission_control" / "report.md").write_text("# admission report\n", encoding="utf-8")
+    (suite_dir / "admission_control" / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "admission_status": "partial",
+                "admission_fail_reasons": ["selected_uids_count<3 (2)"],
+                "admission_metrics": {"selected_uids_count": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result_health_dir = tmp_path / "result_health"
     (result_health_dir / "tables").mkdir(parents=True, exist_ok=True)
@@ -594,6 +606,27 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
             {
                 "provider_noise_summary": {"availability": "unavailable"},
                 "diagnosis_recommendations": ["inspect diagnosis"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    delta_audit_dir = tmp_path / "delta_audit"
+    (delta_audit_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (delta_audit_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (delta_audit_dir / "tables" / "table_delta_audit.csv").write_text(
+        "variant,task,metric,budget,delta_value,recommended_action\nstub->real,nlq,nlq_full_hit_at_k_strict,20/50/4,0.0,strengthen_query_bank\n",
+        encoding="utf-8",
+    )
+    (delta_audit_dir / "tables" / "table_delta_audit.md").write_text("# delta audit\n", encoding="utf-8")
+    (delta_audit_dir / "figures" / "fig_delta_audit_breakdown.png").write_bytes(b"PNG")
+    (delta_audit_dir / "figures" / "fig_delta_audit_breakdown.pdf").write_bytes(b"PDF")
+    (delta_audit_dir / "report.md").write_text("# delta audit report\n", encoding="utf-8")
+    (delta_audit_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "main_recommendation": "strengthen_query_bank",
+                "recommended_action_counts": {"strengthen_query_bank": 1},
             }
         ),
         encoding="utf-8",
@@ -767,6 +800,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(result_health_dir),
         "--result-diagnosis-dir",
         str(result_diagnosis_dir),
+        "--delta-audit-dir",
+        str(delta_audit_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
         "--benchmark-freeze-dir",
@@ -801,7 +836,9 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Main Result Contract" in report_text
     assert "## Canonical Paper Map" in report_text
     assert "## Result Health" in report_text
+    assert "## Admission Control" in report_text
     assert "## Result Diagnosis" in report_text
+    assert "## Delta Audit" in report_text
     assert "## Provider Telemetry" in report_text
     assert "## Benchmark Freeze" in report_text
     assert (out_dir / "canonical" / "tables" / "Table_1.csv").exists()
@@ -834,9 +871,13 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "significance" / "report.md").exists()
     assert (out_dir / "result_health" / "tables" / "table_result_health.csv").exists()
     assert (out_dir / "result_health" / "figures" / "fig_result_health_breakdown.png").exists()
+    assert (out_dir / "admission_control" / "snapshot.json").exists()
     assert (out_dir / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
     assert (out_dir / "result_diagnosis" / "report.md").exists()
+    assert (out_dir / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
+    assert (out_dir / "delta_audit" / "report.md").exists()
     assert (out_dir / "figures" / "fig_result_diagnosis_breakdown.png").exists()
+    assert (out_dir / "figures" / "fig_delta_audit_breakdown.png").exists()
     assert (out_dir / "provider_telemetry" / "summary.json").exists()
     assert (out_dir / "provider_telemetry" / "by_variant.csv").exists()
     assert (out_dir / "freeze" / "freeze_manifest.json").exists()
@@ -943,7 +984,9 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "significance" / "tables" / "table_significance_main.csv").exists()
     assert (submission_pack / "significance" / "report.md").exists()
     assert (submission_pack / "result_health" / "tables" / "table_result_health.csv").exists()
+    assert (submission_pack / "admission_control" / "snapshot.json").exists()
     assert (submission_pack / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
+    assert (submission_pack / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
     assert (submission_pack / "provider_telemetry" / "summary.json").exists()
     assert (submission_pack / "freeze" / "freeze_manifest.json").exists()
     assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
@@ -962,5 +1005,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     submission_readme = (submission_pack / "README.md").read_text(encoding="utf-8")
     assert "Table 1" in submission_readme
     assert "Figure 2" in submission_readme
+    assert "Admission First" in submission_readme
     assert "Diagnosis First" in submission_readme
+    assert "Delta Audit" in submission_readme
     assert "Provider Noise" in submission_readme
