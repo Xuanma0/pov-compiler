@@ -161,6 +161,8 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
                 "telemetry_enabled: true",
                 "telemetry_require_usage: false",
                 "telemetry_require_latency: true",
+                "admission_calibration_enabled: true",
+                "query_strength_audit_enabled: true",
                 "admission_profile: main_real",
                 "min_selected_uids: 2",
                 "min_coverage_score_mean: 2.0",

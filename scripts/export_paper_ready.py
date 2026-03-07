@@ -144,6 +144,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
+    parser.add_argument("--admission-calibration-dir", default=None, help="Optional admission calibration output directory")
+    parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional benchmark freeze output directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML path")
     parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
@@ -1820,6 +1822,92 @@ def main() -> int:
             except Exception:
                 delta_audit_snapshot = {}
 
+    resolved_admission_calibration_dir: Path | None = None
+    if args.admission_calibration_dir:
+        resolved_admission_calibration_dir = Path(args.admission_calibration_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "admission_calibration"
+        if candidate.exists():
+            resolved_admission_calibration_dir = candidate
+    admission_calibration_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    admission_calibration_snapshot: dict[str, Any] = {}
+    if resolved_admission_calibration_dir:
+        admission_calibration_panel["enabled"] = True
+        admission_calibration_panel["source_dir"] = str(resolved_admission_calibration_dir)
+        dst_root = out_dir / "admission_calibration"
+        copied = []
+        for src in (
+            resolved_admission_calibration_dir / "tables" / "table_admission_calibration.csv",
+            resolved_admission_calibration_dir / "tables" / "table_admission_calibration.md",
+            resolved_admission_calibration_dir / "report.md",
+            resolved_admission_calibration_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        admission_calibration_panel["copied_files"] = copied
+        snapshot_src = resolved_admission_calibration_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                admission_calibration_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                admission_calibration_snapshot = {}
+
+    resolved_query_strength_audit_dir: Path | None = None
+    if args.query_strength_audit_dir:
+        resolved_query_strength_audit_dir = Path(args.query_strength_audit_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "query_strength_audit"
+        if candidate.exists():
+            resolved_query_strength_audit_dir = candidate
+    query_strength_audit_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    query_strength_audit_snapshot: dict[str, Any] = {}
+    if resolved_query_strength_audit_dir:
+        query_strength_audit_panel["enabled"] = True
+        query_strength_audit_panel["source_dir"] = str(resolved_query_strength_audit_dir)
+        dst_root = out_dir / "query_strength_audit"
+        copied = []
+        for src in (
+            resolved_query_strength_audit_dir / "tables" / "table_query_strength_audit.csv",
+            resolved_query_strength_audit_dir / "tables" / "table_query_strength_audit.md",
+            resolved_query_strength_audit_dir / "figures" / "fig_query_strength_breakdown.png",
+            resolved_query_strength_audit_dir / "figures" / "fig_query_strength_breakdown.pdf",
+            resolved_query_strength_audit_dir / "report.md",
+            resolved_query_strength_audit_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+                if cp:
+                    copied.append(cp)
+        query_strength_audit_panel["copied_files"] = copied
+        snapshot_src = resolved_query_strength_audit_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                query_strength_audit_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                query_strength_audit_snapshot = {}
+
     resolved_provider_telemetry_dir: Path | None = None
     if args.provider_telemetry_dir:
         resolved_provider_telemetry_dir = Path(args.provider_telemetry_dir)
@@ -2380,6 +2468,22 @@ def main() -> int:
             )
         else:
             report_lines.append("- admission_control: source provided but artifacts missing.")
+    if resolved_admission_calibration_dir:
+        if admission_calibration_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Admission Calibration",
+                    "",
+                    f"- admission_calibration_dir: `{admission_calibration_panel.get('source_dir')}`",
+                    f"- admission_calibration_files: `{admission_calibration_panel.get('copied_files')}`",
+                    f"- calibration_status: `{admission_calibration_snapshot.get('calibration_status', 'weak')}`",
+                    f"- calibration_confidence: `{admission_calibration_snapshot.get('calibration_confidence', 'low')}`",
+                    f"- calibration_basis: `{json.dumps(admission_calibration_snapshot.get('calibration_basis', {}), ensure_ascii=False, sort_keys=True)}`",
+                    f"- recommended_profile: `{json.dumps(admission_calibration_snapshot.get('recommended_profile', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- admission_calibration: source provided but artifacts missing.")
     if resolved_result_diagnosis_dir:
         if result_diagnosis_panel.get("copied_files"):
             report_lines.extend(
@@ -2410,6 +2514,21 @@ def main() -> int:
             )
         else:
             report_lines.append("- delta_audit: source provided but artifacts missing.")
+    if resolved_query_strength_audit_dir:
+        if query_strength_audit_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Query Strength Audit",
+                    "",
+                    f"- query_strength_audit_dir: `{query_strength_audit_panel.get('source_dir')}`",
+                    f"- query_strength_audit_files: `{query_strength_audit_panel.get('copied_files')}`",
+                    f"- query_strength_main_recommendation: `{query_strength_audit_snapshot.get('main_recommendation', '')}`",
+                    f"- query_strength_action_counts: `{query_strength_audit_snapshot.get('recommended_action_counts', {})}`",
+                    f"- query_strength_report: `{Path(query_strength_audit_panel.get('source_dir', '')) / 'report.md' if query_strength_audit_panel.get('source_dir') else None}`",
+                ]
+            )
+        else:
+            report_lines.append("- query_strength_audit: source provided but artifacts missing.")
     if resolved_provider_telemetry_dir:
         if provider_telemetry_panel.get("copied_files"):
             report_lines.extend(
@@ -2534,8 +2653,10 @@ def main() -> int:
             "significance_dir": str(args.significance_dir) if args.significance_dir else None,
             "result_health_dir": str(resolved_result_health_dir) if resolved_result_health_dir else None,
             "admission_dir": str(resolved_admission_dir) if resolved_admission_dir else None,
+            "admission_calibration_dir": str(resolved_admission_calibration_dir) if resolved_admission_calibration_dir else None,
             "result_diagnosis_dir": str(resolved_result_diagnosis_dir) if resolved_result_diagnosis_dir else None,
             "delta_audit_dir": str(resolved_delta_audit_dir) if resolved_delta_audit_dir else None,
+            "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
             "benchmark_freeze_dir": str(resolved_freeze_dir) if resolved_freeze_dir else None,
             "paper_map": str(resolved_paper_map) if resolved_paper_map else None,
@@ -2581,8 +2702,10 @@ def main() -> int:
             "significance_panel": significance_panel,
             "result_health_panel": result_health_panel,
             "admission_panel": admission_panel,
+            "admission_calibration_panel": admission_calibration_panel,
             "result_diagnosis_panel": result_diagnosis_panel,
             "delta_audit_panel": delta_audit_panel,
+            "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
             "benchmark_freeze_panel": benchmark_freeze_panel,
             "paper_map_panel": paper_map_panel,
@@ -2609,10 +2732,14 @@ def main() -> int:
             cmd.extend(["--significance-dir", str(args.significance_dir)])
         if resolved_result_health_dir:
             cmd.extend(["--result-health-dir", str(resolved_result_health_dir)])
+        if resolved_admission_calibration_dir:
+            cmd.extend(["--admission-calibration-dir", str(resolved_admission_calibration_dir)])
         if resolved_result_diagnosis_dir:
             cmd.extend(["--result-diagnosis-dir", str(resolved_result_diagnosis_dir)])
         if resolved_delta_audit_dir:
             cmd.extend(["--delta-audit-dir", str(resolved_delta_audit_dir)])
+        if resolved_query_strength_audit_dir:
+            cmd.extend(["--query-strength-audit-dir", str(resolved_query_strength_audit_dir)])
         if resolved_provider_telemetry_dir:
             cmd.extend(["--provider-telemetry-dir", str(resolved_provider_telemetry_dir)])
         if resolved_freeze_dir:

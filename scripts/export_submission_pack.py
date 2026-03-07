@@ -49,8 +49,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--suite-dir", default=None, help="Benchmark suite root containing manifest/ and ledger/")
     parser.add_argument("--significance-dir", default=None, help="Optional significance output directory")
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
+    parser.add_argument("--admission-calibration-dir", default=None, help="Optional admission calibration output directory")
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
+    parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional freeze output directory")
     parser.add_argument("--paper-freeze-dir", default=None, help="Optional canonical paper freeze directory")
@@ -76,8 +78,10 @@ def main() -> int:
     pack_significance = out_dir / "significance"
     pack_result_health = out_dir / "result_health"
     pack_admission = out_dir / "admission_control"
+    pack_admission_calibration = out_dir / "admission_calibration"
     pack_result_diagnosis = out_dir / "result_diagnosis"
     pack_delta_audit = out_dir / "delta_audit"
+    pack_query_strength_audit = out_dir / "query_strength_audit"
     pack_provider_telemetry = out_dir / "provider_telemetry"
     pack_freeze = out_dir / "freeze"
     pack_paper_freeze = out_dir / "paper_freeze"
@@ -90,8 +94,10 @@ def main() -> int:
         pack_significance,
         pack_result_health,
         pack_admission,
+        pack_admission_calibration,
         pack_result_diagnosis,
         pack_delta_audit,
+        pack_query_strength_audit,
         pack_provider_telemetry,
         pack_freeze,
         pack_paper_freeze,
@@ -104,8 +110,10 @@ def main() -> int:
     _copy_dir_if_exists(paper_ready_dir / "figures", pack_paper_ready / "figures", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "canonical", pack_paper_ready / "canonical", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "admission_control", pack_paper_ready / "admission_control", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "admission_calibration", pack_paper_ready / "admission_calibration", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "result_diagnosis", pack_paper_ready / "result_diagnosis", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "delta_audit", pack_paper_ready / "delta_audit", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "query_strength_audit", pack_paper_ready / "query_strength_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_telemetry", pack_paper_ready / "provider_telemetry", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "report.md", pack_paper_ready / "report.md", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "snapshot.json", pack_paper_ready / "snapshot.json", copied, missing)
@@ -142,6 +150,12 @@ def main() -> int:
         _copy_file_if_exists(admission_dir / "report.md", pack_admission / "report.md", copied, missing)
         _copy_file_if_exists(admission_dir / "snapshot.json", pack_admission / "snapshot.json", copied, missing)
 
+    admission_calibration_dir = Path(args.admission_calibration_dir) if args.admission_calibration_dir else None
+    if admission_calibration_dir is not None:
+        _copy_dir_if_exists(admission_calibration_dir / "tables", pack_admission_calibration / "tables", copied, missing)
+        _copy_file_if_exists(admission_calibration_dir / "report.md", pack_admission_calibration / "report.md", copied, missing)
+        _copy_file_if_exists(admission_calibration_dir / "snapshot.json", pack_admission_calibration / "snapshot.json", copied, missing)
+
     result_diagnosis_dir = Path(args.result_diagnosis_dir) if args.result_diagnosis_dir else None
     if result_diagnosis_dir is not None:
         _copy_dir_if_exists(result_diagnosis_dir / "tables", pack_result_diagnosis / "tables", copied, missing)
@@ -155,6 +169,13 @@ def main() -> int:
         _copy_dir_if_exists(delta_audit_dir / "figures", pack_delta_audit / "figures", copied, missing)
         _copy_file_if_exists(delta_audit_dir / "report.md", pack_delta_audit / "report.md", copied, missing)
         _copy_file_if_exists(delta_audit_dir / "snapshot.json", pack_delta_audit / "snapshot.json", copied, missing)
+
+    query_strength_audit_dir = Path(args.query_strength_audit_dir) if args.query_strength_audit_dir else None
+    if query_strength_audit_dir is not None:
+        _copy_dir_if_exists(query_strength_audit_dir / "tables", pack_query_strength_audit / "tables", copied, missing)
+        _copy_dir_if_exists(query_strength_audit_dir / "figures", pack_query_strength_audit / "figures", copied, missing)
+        _copy_file_if_exists(query_strength_audit_dir / "report.md", pack_query_strength_audit / "report.md", copied, missing)
+        _copy_file_if_exists(query_strength_audit_dir / "snapshot.json", pack_query_strength_audit / "snapshot.json", copied, missing)
 
     provider_telemetry_dir = Path(args.provider_telemetry_dir) if args.provider_telemetry_dir else None
     if provider_telemetry_dir is not None:
@@ -204,8 +225,10 @@ def main() -> int:
         f"- significance_dir: `{significance_dir}`",
         f"- result_health_dir: `{result_health_dir}`",
         f"- admission_dir: `{admission_dir}`",
+        f"- admission_calibration_dir: `{admission_calibration_dir}`",
         f"- result_diagnosis_dir: `{result_diagnosis_dir}`",
         f"- delta_audit_dir: `{delta_audit_dir}`",
+        f"- query_strength_audit_dir: `{query_strength_audit_dir}`",
         f"- provider_telemetry_dir: `{provider_telemetry_dir}`",
         f"- benchmark_freeze_dir: `{freeze_dir}`",
         f"- paper_freeze_dir: `{paper_freeze_dir}`",
@@ -222,8 +245,10 @@ def main() -> int:
         "- `significance/`: significance tables, figures, report, snapshot",
         "- `result_health/`: result-health tables, figures, snapshot",
         "- `admission_control/`: admission decision snapshot and report",
+        "- `admission_calibration/`: suggested admission thresholds for the next real pilot",
         "- `result_diagnosis/`: diagnosis tables, figures, report, snapshot",
         "- `delta_audit/`: per-budget delta audit and next-step action suggestions",
+        "- `query_strength_audit/`: query-group strength audit for main-paper inclusion decisions",
         "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
         "- `freeze/`: freeze manifest and artifact hashes",
         "- `paper_freeze/`: canonical paper-artifact freeze manifest and hashes",
@@ -249,8 +274,10 @@ def main() -> int:
             "## Reading Order",
             "",
             "- Read `admission_control/` first.",
+            "- If admission is blocked, read `admission_calibration/` next.",
             "- Then read `result_diagnosis/`.",
             "- Then read `delta_audit/`.",
+            "- If main figures still look weak, read `query_strength_audit/` before interpreting them.",
             "- Only then cite the canonical main tables and figures under `paper_ready/canonical/`.",
         ]
     )
@@ -281,6 +308,24 @@ def main() -> int:
                 "- After diagnosis, read `delta_audit/report.md` to decide whether to tune signal coverage, query bank, planner, repo policy, or stop for no-effect.",
             ]
         )
+    if admission_calibration_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Calibration First",
+                "",
+                "- If admission is partial or blocked, read `admission_calibration/report.md` before loosening thresholds.",
+            ]
+        )
+    if query_strength_audit_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Query Strength Audit",
+                "",
+                "- If main figures look weak, read `query_strength_audit/report.md` before blaming the algorithm.",
+            ]
+        )
     if provider_telemetry_dir is not None:
         readme_lines.extend(
             [
@@ -300,8 +345,10 @@ def main() -> int:
         "significance_dir": str(significance_dir) if significance_dir is not None else None,
         "result_health_dir": str(result_health_dir) if result_health_dir is not None else None,
         "admission_dir": str(admission_dir) if admission_dir is not None else None,
+        "admission_calibration_dir": str(admission_calibration_dir) if admission_calibration_dir is not None else None,
         "result_diagnosis_dir": str(result_diagnosis_dir) if result_diagnosis_dir is not None else None,
         "delta_audit_dir": str(delta_audit_dir) if delta_audit_dir is not None else None,
+        "query_strength_audit_dir": str(query_strength_audit_dir) if query_strength_audit_dir is not None else None,
         "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,
         "benchmark_freeze_dir": str(freeze_dir) if freeze_dir is not None else None,
         "paper_freeze_dir": str(paper_freeze_dir) if paper_freeze_dir is not None else None,

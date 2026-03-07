@@ -78,6 +78,9 @@ def _annotate_result_health_snapshot(
     delta_audit_dir: Path | None = None,
     admission_dir: Path | None = None,
     admission_status: str | None = None,
+    admission_calibration_dir: Path | None = None,
+    calibration_status: str | None = None,
+    query_strength_audit_dir: Path | None = None,
 ) -> None:
     if not snapshot_path.exists():
         return
@@ -94,6 +97,19 @@ def _annotate_result_health_snapshot(
     payload["admission_available"] = bool(admission_dir is not None and admission_dir.exists())
     payload["admission_dir"] = str(admission_dir) if admission_dir is not None else None
     payload["admission_status"] = str(admission_status or "skipped")
+    payload["admission_calibration_available"] = bool(
+        admission_calibration_dir is not None and admission_calibration_dir.exists()
+    )
+    payload["admission_calibration_dir"] = (
+        str(admission_calibration_dir) if admission_calibration_dir is not None else None
+    )
+    payload["calibration_status"] = str(calibration_status or "skipped")
+    payload["query_strength_audit_available"] = bool(
+        query_strength_audit_dir is not None and query_strength_audit_dir.exists()
+    )
+    payload["query_strength_audit_dir"] = (
+        str(query_strength_audit_dir) if query_strength_audit_dir is not None else None
+    )
     snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -143,6 +159,8 @@ def main() -> int:
             "min_usage_present_rate": manifest_payload.get("min_usage_present_rate"),
             "allow_partial": manifest_payload.get("allow_partial"),
         },
+        "admission_calibration_enabled": bool(manifest_payload.get("admission_calibration_enabled", False)),
+        "query_strength_audit_enabled": bool(manifest_payload.get("query_strength_audit_enabled", False)),
         "telemetry": {
             "enabled": bool(
                 manifest_payload.get(
@@ -175,12 +193,15 @@ def main() -> int:
         print("saved_provider_telemetry=skipped")
         print("saved_result_diagnosis=skipped")
         print("saved_delta_audit=skipped")
+        print("saved_admission_calibration=skipped")
+        print("saved_query_strength_audit=skipped")
         print("saved_freeze=skipped")
         print("paper_ready_saved=skipped")
         print("paper_freeze_saved=skipped")
         print("submission_pack_saved=skipped")
         print("gate_status=skipped")
         print("admission_status=skipped")
+        print("calibration_status=skipped")
         return 0
 
     suite_cmd = [
@@ -281,12 +302,53 @@ def main() -> int:
         else {},
     )
     admission_status = str(admission_outputs.get("admission_status", "skipped"))
+
+    admission_calibration_dir = out_dir / "admission_calibration"
+    admission_calibration_enabled = bool(manifest_payload.get("admission_calibration_enabled", False))
+    if admission_calibration_enabled:
+        _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "calibrate_admission_profile.py"),
+                "--suite-dir",
+                str(out_dir),
+                "--out_dir",
+                str(admission_calibration_dir),
+            ],
+            allow_failure=True,
+        )
+        calibration_snapshot = (
+            json.loads((admission_calibration_dir / "snapshot.json").read_text(encoding="utf-8"))
+            if (admission_calibration_dir / "snapshot.json").exists()
+            else {}
+        )
+        calibration_status = str(calibration_snapshot.get("calibration_status", "weak"))
+    else:
+        calibration_status = "skipped"
+
+    query_strength_audit_dir = out_dir / "query_strength_audit"
+    query_strength_audit_enabled = bool(manifest_payload.get("query_strength_audit_enabled", False))
+    if query_strength_audit_enabled:
+        _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "report_query_strength_audit.py"),
+                "--suite-dir",
+                str(out_dir),
+                "--out_dir",
+                str(query_strength_audit_dir),
+            ]
+        )
+
     _annotate_result_health_snapshot(
         result_health_dir / "snapshot.json",
         diagnosis_dir=result_diagnosis_dir,
         delta_audit_dir=delta_audit_dir,
         admission_dir=admission_dir,
         admission_status=admission_status,
+        admission_calibration_dir=admission_calibration_dir if admission_calibration_enabled else None,
+        calibration_status=calibration_status,
+        query_strength_audit_dir=query_strength_audit_dir if query_strength_audit_enabled else None,
     )
 
     freeze_dir = out_dir / "freeze"
@@ -332,6 +394,16 @@ def main() -> int:
             "--out_dir",
             str(paper_ready_dir),
         ]
+        + (
+            ["--admission-calibration-dir", str(admission_calibration_dir)]
+            if admission_calibration_enabled
+            else []
+        )
+        + (
+            ["--query-strength-audit-dir", str(query_strength_audit_dir)]
+            if query_strength_audit_enabled
+            else []
+        )
         + (["--prompt-registry", str(prompt_registry)] if prompt_registry is not None else [])
         + (["--prompt-lock", str(prompt_lock)] if prompt_lock.exists() else [])
     )
@@ -378,6 +450,16 @@ def main() -> int:
             "--paper-map",
             str(paper_map_path),
         ]
+        + (
+            ["--admission-calibration-dir", str(admission_calibration_dir)]
+            if admission_calibration_enabled
+            else []
+        )
+        + (
+            ["--query-strength-audit-dir", str(query_strength_audit_dir)]
+            if query_strength_audit_enabled
+            else []
+        )
         + (["--prompt-registry", str(prompt_registry)] if prompt_registry is not None else [])
         + (["--prompt-lock", str(prompt_lock)] if prompt_lock.exists() else [])
     )
@@ -387,13 +469,20 @@ def main() -> int:
     print(f"saved_provider_telemetry={provider_telemetry_dir}")
     print(f"saved_result_diagnosis={result_diagnosis_dir}")
     print(f"saved_delta_audit={delta_audit_dir}")
+    print(
+        f"saved_admission_calibration={admission_calibration_dir if admission_calibration_enabled else 'skipped'}"
+    )
+    print(
+        f"saved_query_strength_audit={query_strength_audit_dir if query_strength_audit_enabled else 'skipped'}"
+    )
     print(f"saved_freeze={freeze_dir}")
     print(f"paper_ready_saved={paper_ready_dir}")
     print(f"paper_freeze_saved={paper_freeze_dir}")
     print(f"submission_pack_saved={submission_pack_dir}")
     print(f"gate_status={gate_status}")
     print(f"admission_status={admission_status}")
-    return 0 if gate_status == "ok" and admission_status in {"ok", "skipped"} else 1
+    print(f"calibration_status={calibration_status}")
+    return 0 if gate_status == "ok" and admission_status in {"ok", "partial", "skipped"} and calibration_status in {"ok", "partial", "skipped"} else 1
 
 
 if __name__ == "__main__":

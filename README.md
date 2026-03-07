@@ -1080,6 +1080,34 @@ Key outputs:
 - `paper_ready/delta_audit/`
 - `submission_pack/delta_audit/`
 
+### v1.48 Admission Calibration And Query Strength Audit
+
+`v1.48` keeps the `v1.47` pilot triage flow, but adds two more result-layer artifacts so a small pilot can say whether the admission thresholds look sensible and whether weak deltas come from weak queries rather than weak algorithms:
+
+- `configs/benchmarks/v1.48_main_real_pilot.yaml` and `v1.48_main_fake_pilot.yaml` add `admission_calibration_enabled` and `query_strength_audit_enabled`
+- `src/pov_compiler/bench/reporting/admission_calibration.py` writes `admission_calibration/` with recommended next-round thresholds instead of mutating the manifest in place
+- `src/pov_compiler/bench/reporting/query_strength_audit.py` writes `query_strength_audit/` so query groups can be promoted, kept for analysis, or dropped from `main_real`
+- `scripts/run_main_real_benchmark.py --mode pilot` now chains suite -> significance -> health -> provider_telemetry -> diagnosis -> delta_audit -> admission_control -> admission_calibration -> query_strength_audit -> freeze -> paper_ready -> paper_freeze -> submission_pack
+- `paper_ready/` and `submission_pack/` now both carry `admission_calibration/` and `query_strength_audit/`
+
+```powershell
+python scripts/run_main_real_benchmark.py --manifest configs/benchmarks/v1.48_main_fake_pilot.yaml --mode pilot --out_dir data/outputs/v148_fake_pilot
+python scripts/calibrate_admission_profile.py --suite-dir data/outputs/v148_fake_pilot --out_dir data/outputs/v148_fake_pilot/admission_calibration
+python scripts/report_query_strength_audit.py --suite-dir data/outputs/v148_fake_pilot --out_dir data/outputs/v148_fake_pilot/query_strength_audit
+python scripts/export_paper_ready.py --compare_dir data/outputs/v148_fake_pilot/compare --suite-dir data/outputs/v148_fake_pilot --significance-dir data/outputs/v148_fake_pilot/significance --result-health-dir data/outputs/v148_fake_pilot/result_health --result-diagnosis-dir data/outputs/v148_fake_pilot/result_diagnosis --delta-audit-dir data/outputs/v148_fake_pilot/delta_audit --provider-telemetry-dir data/outputs/v148_fake_pilot/provider_telemetry --admission-calibration-dir data/outputs/v148_fake_pilot/admission_calibration --query-strength-audit-dir data/outputs/v148_fake_pilot/query_strength_audit --benchmark-freeze-dir data/outputs/v148_fake_pilot/freeze --paper-map configs/paper/main_result_map_v1.yaml --out_dir data/outputs/v148_fake_pilot/paper_ready
+```
+
+Key outputs:
+
+- `admission_calibration/tables/table_admission_calibration.csv`
+- `admission_calibration/report.md`
+- `query_strength_audit/tables/table_query_strength_audit.csv`
+- `query_strength_audit/figures/fig_query_strength_breakdown.png`
+- `paper_ready/admission_calibration/`
+- `paper_ready/query_strength_audit/`
+- `submission_pack/admission_calibration/`
+- `submission_pack/query_strength_audit/`
+
 ### Local Fast Tests (xdist)
 
 Use the helper script for local parallel pytest:

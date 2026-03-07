@@ -632,6 +632,29 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    admission_calibration_dir = tmp_path / "admission_calibration"
+    (admission_calibration_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (admission_calibration_dir / "tables" / "table_admission_calibration.csv").write_text(
+        "admission_profile,calibration_status,recommended_min_selected_uids\nmain_real,partial,3\n",
+        encoding="utf-8",
+    )
+    (admission_calibration_dir / "tables" / "table_admission_calibration.md").write_text(
+        "# admission calibration\n",
+        encoding="utf-8",
+    )
+    (admission_calibration_dir / "report.md").write_text("# admission calibration report\n", encoding="utf-8")
+    (admission_calibration_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "calibration_status": "partial",
+                "calibration_confidence": "medium",
+                "recommended_profile": {"min_selected_uids": 3},
+                "calibration_basis": {"available_runs": 36, "query_groups": 4},
+            }
+        ),
+        encoding="utf-8",
+    )
+
     provider_telemetry_dir = tmp_path / "provider_telemetry"
     provider_telemetry_dir.mkdir(parents=True, exist_ok=True)
     (provider_telemetry_dir / "by_variant.csv").write_text(
@@ -641,6 +664,30 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
                 'stub,fake,fake-stub-v1,fixture_json,True,True,0.0,0.0,8.0,12.0,0.0,0.0,6,6,6,ok,telemetry_available,"[]"',
                 'real,fake_openai,fake-gpt-4.1-mini,response_json,True,True,0.018,0.0015,84.0,133.0,0.02,0.04,6,6,6,ok,telemetry_available,"[]"',
             ]
+        ),
+        encoding="utf-8",
+    )
+
+    query_strength_audit_dir = tmp_path / "query_strength_audit"
+    (query_strength_audit_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (query_strength_audit_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (query_strength_audit_dir / "tables" / "table_query_strength_audit.csv").write_text(
+        "query_group,query_type,coverage_rate,signal_support_rate,nonzero_delta_rate,significance_available_rate,weak_query_flag,recommended_action\nchain,hard_pseudo_chain,1.0,0.83,1.0,1.0,False,promote_to_core_query_bank\nrepo_summary,summary_first,1.0,0.92,0.0,0.0,True,keep_for_analysis_only\n",
+        encoding="utf-8",
+    )
+    (query_strength_audit_dir / "tables" / "table_query_strength_audit.md").write_text("# query strength\n", encoding="utf-8")
+    (query_strength_audit_dir / "figures" / "fig_query_strength_breakdown.png").write_bytes(b"PNG")
+    (query_strength_audit_dir / "figures" / "fig_query_strength_breakdown.pdf").write_bytes(b"PDF")
+    (query_strength_audit_dir / "report.md").write_text("# query strength report\n", encoding="utf-8")
+    (query_strength_audit_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "main_recommendation": "promote_to_core_query_bank",
+                "recommended_action_counts": {
+                    "keep_for_analysis_only": 1,
+                    "promote_to_core_query_bank": 1,
+                },
+            }
         ),
         encoding="utf-8",
     )
@@ -804,6 +851,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(delta_audit_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
+        "--admission-calibration-dir",
+        str(admission_calibration_dir),
+        "--query-strength-audit-dir",
+        str(query_strength_audit_dir),
         "--benchmark-freeze-dir",
         str(freeze_dir),
         "--paper-map",
@@ -837,8 +888,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Canonical Paper Map" in report_text
     assert "## Result Health" in report_text
     assert "## Admission Control" in report_text
+    assert "## Admission Calibration" in report_text
     assert "## Result Diagnosis" in report_text
     assert "## Delta Audit" in report_text
+    assert "## Query Strength Audit" in report_text
     assert "## Provider Telemetry" in report_text
     assert "## Benchmark Freeze" in report_text
     assert (out_dir / "canonical" / "tables" / "Table_1.csv").exists()
@@ -872,12 +925,16 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "result_health" / "tables" / "table_result_health.csv").exists()
     assert (out_dir / "result_health" / "figures" / "fig_result_health_breakdown.png").exists()
     assert (out_dir / "admission_control" / "snapshot.json").exists()
+    assert (out_dir / "admission_calibration" / "snapshot.json").exists()
     assert (out_dir / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
     assert (out_dir / "result_diagnosis" / "report.md").exists()
     assert (out_dir / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
     assert (out_dir / "delta_audit" / "report.md").exists()
+    assert (out_dir / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
+    assert (out_dir / "query_strength_audit" / "report.md").exists()
     assert (out_dir / "figures" / "fig_result_diagnosis_breakdown.png").exists()
     assert (out_dir / "figures" / "fig_delta_audit_breakdown.png").exists()
+    assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()
     assert (out_dir / "provider_telemetry" / "summary.json").exists()
     assert (out_dir / "provider_telemetry" / "by_variant.csv").exists()
     assert (out_dir / "freeze" / "freeze_manifest.json").exists()
@@ -985,8 +1042,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "significance" / "report.md").exists()
     assert (submission_pack / "result_health" / "tables" / "table_result_health.csv").exists()
     assert (submission_pack / "admission_control" / "snapshot.json").exists()
+    assert (submission_pack / "admission_calibration" / "snapshot.json").exists()
     assert (submission_pack / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
     assert (submission_pack / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
+    assert (submission_pack / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (submission_pack / "provider_telemetry" / "summary.json").exists()
     assert (submission_pack / "freeze" / "freeze_manifest.json").exists()
     assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
@@ -1006,6 +1065,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Table 1" in submission_readme
     assert "Figure 2" in submission_readme
     assert "Admission First" in submission_readme
+    assert "Calibration First" in submission_readme
     assert "Diagnosis First" in submission_readme
     assert "Delta Audit" in submission_readme
+    assert "Query Strength Audit" in submission_readme
     assert "Provider Noise" in submission_readme

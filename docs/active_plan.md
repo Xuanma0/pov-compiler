@@ -2,32 +2,32 @@
 
 ## Current milestone
 
-- `v1.47`: Real Pilot Admission Control And Delta Audit
+- `v1.48`: Admission Calibration And Query Strength Audit
 
 ## Single goal
 
-- Promote the pilot runner from telemetry-aware diagnosis to admission-controlled real-pilot triage, so weak deltas can explicitly say whether to expand the run and which layer to tune next without touching runtime core modules.
+- Promote the pilot runner from admission-controlled triage to calibration-aware and query-aware real-pilot analysis, so small pilots can say whether the admission profile is sensible and whether weak deltas come from weak queries rather than weak algorithms.
 
 ## Status
 
-- [x] `v1.47` real/fake admission manifests added with explicit admission thresholds for sample size, no-data rate, effect size, and provider noise.
-- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, health, provider telemetry, diagnosis, delta audit, admission control, freeze, paper-ready, paper freeze, and submission pack.
-- [x] Standalone `delta_audit/` artifact layer added with per-budget `recommended_action` rows and `fig_delta_audit_breakdown.*`.
-- [x] Standalone `admission_control/` artifact layer added with `admission_status`, fail reasons, and admission metrics.
-- [x] `paper_ready/` now carries `admission_control/` and `delta_audit/`, and `report.md` includes admission plus delta-audit summaries.
-- [x] `submission_pack/` now carries `admission_control/` and `delta_audit/`, and its README enforces the order admission -> diagnosis -> delta audit -> canonical figures.
-- [x] Fake admission pilot validated end to end under `data/outputs/v147_fake_admission`.
+- [x] `v1.48` real/fake pilot manifests added with `admission_calibration_enabled` and `query_strength_audit_enabled`.
+- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, health, provider telemetry, diagnosis, delta audit, admission control, admission calibration, query strength audit, freeze, paper-ready, paper freeze, and submission pack.
+- [x] Standalone `admission_calibration/` artifact layer added with threshold recommendations plus `calibration_status`.
+- [x] Standalone `query_strength_audit/` artifact layer added with per-group `recommended_action` rows and `fig_query_strength_breakdown.*`.
+- [x] `paper_ready/` now carries `admission_calibration/` and `query_strength_audit/`, and `report.md` includes calibration plus query-strength summaries.
+- [x] `submission_pack/` now carries `admission_calibration/` and `query_strength_audit/`, and its README enforces the order admission -> calibration -> diagnosis -> delta audit -> query strength -> canonical figures.
+- [x] Fake small pilot validated end to end under `data/outputs/v148_fake_pilot`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
 - [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
-- [x] `v1.47` milestone marked done.
+- [x] `v1.48` milestone marked done.
 
-## v1.48 Candidate Tasks
+## v1.49 Candidate Tasks
 
 - Live main_real pilot on real compare roots
-- Per-query query-bank weakness attribution
-- Admission-aware sample expansion policy
-- Real-provider telemetry ingestion from external sidecars
-- CI verification for admission plus delta-audit artifacts
+- Data-driven promotion and pruning of frozen query banks
+- Calibration history and trend tracking across repeated pilots
+- Real-provider cost and latency sidecar ingestion from external logs
+- Canonical paper export without missing task placeholders
 
 ## Frozen constraints
 
