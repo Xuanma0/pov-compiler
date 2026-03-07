@@ -102,6 +102,13 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
             {"budget_key": "40/100/8", "budget_seconds": 40, "qualityScore": 0.62},
         ],
     )
+    (compare_dir / "signal_selection").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "signal_selection" / "selected_uids.txt").write_text("u1\nu2\n", encoding="utf-8")
+    (compare_dir / "signal_selection" / "coverage.csv").write_text(
+        "uid,coverage_score,missing_place,missing_interaction,missing_lost_object\nu1,3.0,0,0,0\nu2,2.0,0,1,0\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "signal_selection" / "snapshot.json").write_text('{"selection_mode":"auto_signal_cache"}', encoding="utf-8")
 
     manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(
@@ -116,10 +123,21 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
                 "  labels:",
                 "    a: stub",
                 "    b: real",
+                "  mode: auto_signal_cache",
+                "  signal_min_score: 1.5",
+                "  top_k_uids: 2",
+                "  signal_selection_dir: signal_selection",
                 "budgets:",
                 "  points:",
                 "    - key: 20/50/4",
                 "    - key: 40/100/8",
+                "queries:",
+                "  query_bank: configs/queries/core_real_v1.yaml",
+                "  auxiliary_banks:",
+                "    - configs/queries/core_chain_v1.yaml",
+                "    - configs/queries/core_lost_object_v1.yaml",
+                "  groups: [decision, chain, lost_object, repo_summary]",
+                "  top_k: 6",
                 "metrics:",
                 "  primary:",
                 "    nlq: nlq_full_hit_at_k_strict",
@@ -155,10 +173,13 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "saved_results_long=" in proc.stdout
+    assert "saved_query_bank_lock=" in proc.stdout
 
     assert (out_dir / "manifest" / "experiment_manifest.yaml").exists()
     assert (out_dir / "manifest" / "manifest_resolved.json").exists()
     assert (out_dir / "manifest" / "prompt_lock.json").exists()
+    assert (out_dir / "manifest" / "query_bank_lock.json").exists()
+    assert (out_dir / "manifest" / "query_banks" / "core_real_v1.yaml").exists()
     assert (out_dir / "ledger" / "results_long.csv").exists()
     assert (out_dir / "ledger" / "runs.jsonl").exists()
     assert (out_dir / "compare" / "tables" / "table_main_results.csv").exists()
@@ -177,3 +198,9 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
     assert (out_dir / "compare" / "README.md").exists()
     assert (out_dir / "significance" / "tables" / "table_significance_main.csv").exists()
     assert "insufficient_pairs" in (out_dir / "compare" / "tables" / "table_significance.csv").read_text(encoding="utf-8")
+    compare_summary = (out_dir / "compare" / "compare_summary.json").read_text(encoding="utf-8")
+    assert "query_bank_id" in compare_summary
+    assert "query_bank_hash" in compare_summary
+    assert "selection_mode" in compare_summary
+    compare_snapshot = (out_dir / "compare" / "snapshot.json").read_text(encoding="utf-8")
+    assert "query_bank_hash" in compare_snapshot

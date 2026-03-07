@@ -537,12 +537,56 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         json.dumps({"profile": "v1.42_main", "prompts": [{"task": "decisions", "hash": "abc"}]}),
         encoding="utf-8",
     )
+    (suite_dir / "manifest" / "query_banks").mkdir(parents=True, exist_ok=True)
+    (suite_dir / "manifest" / "query_bank_lock.json").write_text(
+        json.dumps(
+            {
+                "primary": {
+                    "query_bank_id": "core_real_v1",
+                    "query_bank_version": "1",
+                    "query_bank_hash": "hash123",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (suite_dir / "manifest" / "query_banks" / "core_real_v1.yaml").write_text("query_bank_id: core_real_v1\n", encoding="utf-8")
     (suite_dir / "ledger" / "results_long.csv").write_text("task,budget_key\nnlq,20/50/4\n", encoding="utf-8")
     (suite_dir / "ledger" / "runs.jsonl").write_text('{"task":"nlq","status":"ok"}\n', encoding="utf-8")
     (suite_dir / "compare" / "commands.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     (suite_dir / "compare" / "compare_summary.json").write_text(json.dumps({"suite_id": "v1.42_main"}), encoding="utf-8")
     (suite_dir / "compare" / "snapshot.json").write_text(json.dumps({"suite_id": "v1.42_main"}), encoding="utf-8")
     (suite_dir / "compare" / "README.md").write_text("# suite compare\n", encoding="utf-8")
+    (suite_dir / "compare" / "tables").mkdir(parents=True, exist_ok=True)
+    (suite_dir / "compare" / "figures").mkdir(parents=True, exist_ok=True)
+    (suite_dir / "compare" / "tables" / "table_main_results.csv").write_text("task,budget_key\nnlq,20/50/4\n", encoding="utf-8")
+    (suite_dir / "compare" / "figures" / "fig_main_budget_frontier.png").write_bytes(b"PNG")
+
+    result_health_dir = tmp_path / "result_health"
+    (result_health_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (result_health_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (result_health_dir / "tables" / "table_result_health.csv").write_text(
+        "task,missing_metric_rate,no_data_reason_breakdown\nnlq,0.0,\"{\"\"ok\"\":1}\"\n",
+        encoding="utf-8",
+    )
+    (result_health_dir / "tables" / "table_result_health.md").write_text("# health\n", encoding="utf-8")
+    (result_health_dir / "figures" / "fig_result_health_breakdown.png").write_bytes(b"PNG")
+    (result_health_dir / "figures" / "fig_result_health_breakdown.pdf").write_bytes(b"PDF")
+    (result_health_dir / "snapshot.json").write_text(
+        json.dumps({"overall_no_data_reason_counts": {"ok": 1}, "rows_total": 1}),
+        encoding="utf-8",
+    )
+
+    freeze_dir = tmp_path / "freeze"
+    freeze_dir.mkdir(parents=True, exist_ok=True)
+    (freeze_dir / "freeze_manifest.json").write_text(
+        json.dumps({"suite_id": "v1.42_main", "query_bank_id": "core_real_v1", "artifact_count": 5}),
+        encoding="utf-8",
+    )
+    (freeze_dir / "artifacts_sha256.csv").write_text(
+        "artifact_group,relpath,sha256,size_bytes\ncompare_meta,compare/compare_summary.json,abc,10\n",
+        encoding="utf-8",
+    )
 
     prompt_root = tmp_path / "prompt_assets"
     (prompt_root / "prompts" / "decisions").mkdir(parents=True, exist_ok=True)
@@ -637,6 +681,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(suite_dir),
         "--significance-dir",
         str(significance_dir),
+        "--result-health-dir",
+        str(result_health_dir),
+        "--benchmark-freeze-dir",
+        str(freeze_dir),
         "--prompt-registry",
         str(prompt_registry),
         "--prompt-lock",
@@ -661,6 +709,9 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert delta_md.exists()
     assert report_md.exists()
     assert snapshot_json.exists()
+    report_text = report_md.read_text(encoding="utf-8")
+    assert "## Result Health" in report_text
+    assert "## Benchmark Freeze" in report_text
     assert (out_dir / "figures" / "fig_budget_primary_vs_seconds_panel.png").exists()
     assert (out_dir / "figures" / "fig_budget_primary_delta_vs_seconds_panel.png").exists()
     assert (out_dir / "figures" / "fig_budget_latency_vs_seconds_streaming.png").exists()
@@ -684,9 +735,15 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "significance" / "table_significance_main.csv").exists()
     assert (out_dir / "significance" / "table_confidence_intervals.csv").exists()
     assert (out_dir / "significance" / "report.md").exists()
+    assert (out_dir / "result_health" / "tables" / "table_result_health.csv").exists()
+    assert (out_dir / "result_health" / "figures" / "fig_result_health_breakdown.png").exists()
+    assert (out_dir / "freeze" / "freeze_manifest.json").exists()
+    assert (out_dir / "freeze" / "artifacts_sha256.csv").exists()
     assert (out_dir / "manifest" / "experiment_manifest.yaml").exists()
     assert (out_dir / "manifest" / "manifest_resolved.json").exists()
     assert (out_dir / "manifest" / "prompt_lock.json").exists()
+    assert (out_dir / "manifest" / "query_bank_lock.json").exists()
+    assert (out_dir / "manifest" / "query_banks" / "core_real_v1.yaml").exists()
     assert (out_dir / "provenance" / "results_long.csv").exists()
     assert (out_dir / "provenance" / "runs.jsonl").exists()
     assert (out_dir / "prompts" / "registry_v1.yaml").exists()
@@ -783,8 +840,13 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "paper_ready" / "figures" / "fig_budget_primary_vs_seconds_panel.png").exists()
     assert (submission_pack / "significance" / "tables" / "table_significance_main.csv").exists()
     assert (submission_pack / "significance" / "report.md").exists()
+    assert (submission_pack / "result_health" / "tables" / "table_result_health.csv").exists()
+    assert (submission_pack / "freeze" / "freeze_manifest.json").exists()
     assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
     assert (submission_pack / "manifest" / "prompt_lock.json").exists()
+    assert (submission_pack / "manifest" / "query_bank_lock.json").exists()
+    assert (submission_pack / "manifest" / "query_banks" / "core_real_v1.yaml").exists()
+    assert (submission_pack / "compare" / "tables" / "table_main_results.csv").exists()
     assert (submission_pack / "provenance" / "results_long.csv").exists()
     assert (submission_pack / "provenance" / "commands.sh").exists()
     assert (submission_pack / "prompts" / "registry_v1.yaml").exists()

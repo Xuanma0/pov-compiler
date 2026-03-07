@@ -1,0 +1,5 @@
+budget_key,budget_seconds,sample_unit,nlq_full_hit_at_k_strict
+20/50/4,20,u1,0.0
+20/50/4,20,u2,1.0
+40/100/8,40,u1,0.5
+40/100/8,40,u2,0.5

@@ -38,6 +38,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default=None, help="Output directory (defaults to <paper-ready-dir>/submission_pack)")
     parser.add_argument("--suite-dir", default=None, help="Benchmark suite root containing manifest/ and ledger/")
     parser.add_argument("--significance-dir", default=None, help="Optional significance output directory")
+    parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
+    parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional freeze output directory")
     parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
     parser.add_argument("--prompt-lock", default=None, help="Optional prompt lock JSON path")
     return parser.parse_args()
@@ -54,11 +56,14 @@ def main() -> int:
     missing: list[str] = []
 
     pack_paper_ready = out_dir / "paper_ready"
+    pack_compare = out_dir / "compare"
     pack_manifest = out_dir / "manifest"
     pack_significance = out_dir / "significance"
+    pack_result_health = out_dir / "result_health"
+    pack_freeze = out_dir / "freeze"
     pack_prompts = out_dir / "prompts"
     pack_provenance = out_dir / "provenance"
-    for path in (pack_paper_ready, pack_manifest, pack_significance, pack_prompts, pack_provenance):
+    for path in (pack_paper_ready, pack_compare, pack_manifest, pack_significance, pack_result_health, pack_freeze, pack_prompts, pack_provenance):
         path.mkdir(parents=True, exist_ok=True)
 
     _copy_dir_if_exists(paper_ready_dir / "tables", pack_paper_ready / "tables", copied, missing)
@@ -71,11 +76,14 @@ def main() -> int:
         _copy_file_if_exists(suite_dir / "manifest" / "experiment_manifest.yaml", pack_manifest / "experiment_manifest.yaml", copied, missing)
         _copy_file_if_exists(suite_dir / "manifest" / "manifest_resolved.json", pack_manifest / "manifest_resolved.json", copied, missing)
         _copy_file_if_exists(suite_dir / "manifest" / "prompt_lock.json", pack_manifest / "prompt_lock.json", copied, missing)
+        _copy_file_if_exists(suite_dir / "manifest" / "query_bank_lock.json", pack_manifest / "query_bank_lock.json", copied, missing)
+        _copy_dir_if_exists(suite_dir / "manifest" / "query_banks", pack_manifest / "query_banks", copied, missing)
         _copy_file_if_exists(suite_dir / "ledger" / "results_long.csv", pack_provenance / "results_long.csv", copied, missing)
         _copy_file_if_exists(suite_dir / "ledger" / "runs.jsonl", pack_provenance / "runs.jsonl", copied, missing)
         _copy_file_if_exists(suite_dir / "compare" / "commands.sh", pack_provenance / "commands.sh", copied, missing)
         _copy_file_if_exists(suite_dir / "compare" / "compare_summary.json", pack_provenance / "compare_summary.json", copied, missing)
         _copy_file_if_exists(suite_dir / "compare" / "snapshot.json", pack_provenance / "compare_snapshot.json", copied, missing)
+        _copy_dir_if_exists(suite_dir / "compare", pack_compare, copied, missing)
 
     significance_dir = Path(args.significance_dir) if args.significance_dir else None
     if significance_dir is not None:
@@ -83,6 +91,17 @@ def main() -> int:
         _copy_dir_if_exists(significance_dir / "figures", pack_significance / "figures", copied, missing)
         _copy_file_if_exists(significance_dir / "report.md", pack_significance / "report.md", copied, missing)
         _copy_file_if_exists(significance_dir / "snapshot.json", pack_significance / "snapshot.json", copied, missing)
+
+    result_health_dir = Path(args.result_health_dir) if args.result_health_dir else None
+    if result_health_dir is not None:
+        _copy_dir_if_exists(result_health_dir / "tables", pack_result_health / "tables", copied, missing)
+        _copy_dir_if_exists(result_health_dir / "figures", pack_result_health / "figures", copied, missing)
+        _copy_file_if_exists(result_health_dir / "snapshot.json", pack_result_health / "snapshot.json", copied, missing)
+
+    freeze_dir = Path(args.benchmark_freeze_dir) if args.benchmark_freeze_dir else None
+    if freeze_dir is not None:
+        _copy_file_if_exists(freeze_dir / "freeze_manifest.json", pack_freeze / "freeze_manifest.json", copied, missing)
+        _copy_file_if_exists(freeze_dir / "artifacts_sha256.csv", pack_freeze / "artifacts_sha256.csv", copied, missing)
 
     prompt_lock_path = Path(args.prompt_lock) if args.prompt_lock else None
     if prompt_lock_path is not None:
@@ -109,6 +128,8 @@ def main() -> int:
         f"- paper_ready_dir: `{paper_ready_dir}`",
         f"- suite_dir: `{suite_dir}`",
         f"- significance_dir: `{significance_dir}`",
+        f"- result_health_dir: `{result_health_dir}`",
+        f"- benchmark_freeze_dir: `{freeze_dir}`",
         f"- prompt_registry: `{prompt_registry_path}`",
         f"- copied_items: `{len(copied)}`",
         f"- missing_inputs: `{len(missing)}`",
@@ -116,8 +137,11 @@ def main() -> int:
         "## Sections",
         "",
         "- `manifest/`: manifest copy, resolved manifest, prompt lock",
+        "- `compare/`: frozen compare tables, figures, summary, and snapshot",
         "- `paper_ready/`: tables, figures, report, snapshot",
         "- `significance/`: significance tables, figures, report, snapshot",
+        "- `result_health/`: result-health tables, figures, snapshot",
+        "- `freeze/`: freeze manifest and artifact hashes",
         "- `prompts/`: registry and prompt source files",
         "- `provenance/`: ledger and compare-side provenance files",
     ]
@@ -129,6 +153,8 @@ def main() -> int:
         "paper_ready_dir": str(paper_ready_dir),
         "suite_dir": str(suite_dir) if suite_dir is not None else None,
         "significance_dir": str(significance_dir) if significance_dir is not None else None,
+        "result_health_dir": str(result_health_dir) if result_health_dir is not None else None,
+        "benchmark_freeze_dir": str(freeze_dir) if freeze_dir is not None else None,
         "prompt_registry": str(prompt_registry_path) if prompt_registry_path is not None else None,
         "prompt_lock": str(prompt_lock_path) if prompt_lock_path is not None else None,
         "copied": copied,

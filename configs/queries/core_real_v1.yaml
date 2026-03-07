@@ -1,0 +1,78 @@
+query_bank_id: core_real_v1
+query_bank_version: "1"
+description: Frozen main-result query bank for real runs across decision, chain, lost-object, and summary-first retrieval.
+provenance:
+  strategy: frozen_main_result_bank
+  source: v1.43_design
+  curation_bias: signalful_and_delta_sensitive
+groups:
+  - group_id: decision
+    description: Decision-sensitive main-result queries
+    tags: [decision]
+  - group_id: chain
+    description: Chain and backoff-sensitive queries
+    tags: [chain]
+  - group_id: lost_object
+    description: Lost-object and object-memory-sensitive queries
+    tags: [lost_object, object_memory]
+  - group_id: repo_summary
+    description: Summary-first and repo-summary-sensitive queries
+    tags: [repo_summary, summary_first]
+queries:
+  - query_id: decision_last_pickup
+    group: decision
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "decision=pick_up which=last top_k=6"
+    signal_tags: [decision]
+    sensitive_to: [decision_backend]
+  - query_id: decision_put_down_summary
+    group: decision
+    task: repo
+    mode: summary_first
+    query: "decision=put_down which=last repo_mode=summary_first top_k=6"
+    signal_tags: [decision, repo_summary]
+    sensitive_to: [repo_summary]
+  - query_id: chain_scene_to_object
+    group: chain
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then interaction_object=door top_k=6 chain_derive=time+object"
+    signal_tags: [chain]
+    sensitive_to: [chain_backoff]
+  - query_id: chain_place_backoff
+    group: chain
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "place=kitchen top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+place chain_object_mode=hard"
+    signal_tags: [chain, place]
+    sensitive_to: [chain_backoff, streaming]
+  - query_id: lost_object_last_seen
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "lost_object=door which=last top_k=6"
+    signal_tags: [lost_object]
+    sensitive_to: [object_memory]
+  - query_id: lost_object_chain_followup
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "lost_object=door which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object"
+    signal_tags: [lost_object, chain]
+    sensitive_to: [object_memory, chain_backoff]
+  - query_id: repo_summary_place
+    group: repo_summary
+    task: repo
+    mode: summary_first
+    query: "place=hallway repo_mode=summary_first summary_topk=3 top_k=6"
+    signal_tags: [repo_summary]
+    sensitive_to: [repo_summary]
+  - query_id: repo_summary_decision
+    group: repo_summary
+    task: repo
+    mode: summary_first
+    query: "decision=open which=last repo_mode=summary_first summary_topk=3 top_k=6"
+    signal_tags: [repo_summary, decision]
+    sensitive_to: [repo_summary]
+query_bank_hash: "f988b8c1a12f293bcf90074b46c5390d9c07acb0990e4783a0347c2518216ec6"

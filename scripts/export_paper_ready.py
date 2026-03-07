@@ -135,6 +135,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--suite-dir", default=None, help="Optional benchmark suite root containing manifest/ and ledger/")
     parser.add_argument("--significance-dir", default=None, help="Optional statistical significance output directory")
+    parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
+    parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional benchmark freeze output directory")
     parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
     parser.add_argument("--prompt-lock", default=None, help="Optional prompt lock JSON path")
     parser.add_argument("--submission-pack-dir", default=None, help="Optional explicit submission_pack output directory")
@@ -1644,6 +1646,81 @@ def main() -> int:
                     figure_paths.append(str(cp))
         significance_panel["copied_files"] = copied
 
+    resolved_result_health_dir: Path | None = None
+    if args.result_health_dir:
+        resolved_result_health_dir = Path(args.result_health_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "result_health"
+        if candidate.exists():
+            resolved_result_health_dir = candidate
+    result_health_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    result_health_snapshot: dict[str, Any] = {}
+    if resolved_result_health_dir:
+        result_health_panel["enabled"] = True
+        result_health_panel["source_dir"] = str(resolved_result_health_dir)
+        dst_root = out_dir / "result_health"
+        copied: list[str] = []
+        for src in (
+            resolved_result_health_dir / "tables" / "table_result_health.csv",
+            resolved_result_health_dir / "tables" / "table_result_health.md",
+            resolved_result_health_dir / "figures" / "fig_result_health_breakdown.png",
+            resolved_result_health_dir / "figures" / "fig_result_health_breakdown.pdf",
+            resolved_result_health_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                dst = dst_root / "figures" / src.name
+            elif src.suffix.lower() in {".csv", ".md"}:
+                dst = dst_root / "tables" / src.name
+            else:
+                dst = dst_root / src.name
+            cp = _copy_if_exists(src, dst)
+            if cp:
+                copied.append(cp)
+        result_health_panel["copied_files"] = copied
+        snapshot_src = resolved_result_health_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                result_health_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                result_health_snapshot = {}
+
+    resolved_freeze_dir: Path | None = None
+    if args.benchmark_freeze_dir:
+        resolved_freeze_dir = Path(args.benchmark_freeze_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "freeze"
+        if candidate.exists():
+            resolved_freeze_dir = candidate
+    benchmark_freeze_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    freeze_manifest_payload: dict[str, Any] = {}
+    if resolved_freeze_dir:
+        benchmark_freeze_panel["enabled"] = True
+        benchmark_freeze_panel["source_dir"] = str(resolved_freeze_dir)
+        dst_root = out_dir / "freeze"
+        copied: list[str] = []
+        for src in (
+            resolved_freeze_dir / "freeze_manifest.json",
+            resolved_freeze_dir / "artifacts_sha256.csv",
+        ):
+            cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        benchmark_freeze_panel["copied_files"] = copied
+        freeze_src = resolved_freeze_dir / "freeze_manifest.json"
+        if freeze_src.exists():
+            try:
+                freeze_manifest_payload = json.loads(freeze_src.read_text(encoding="utf-8"))
+            except Exception:
+                freeze_manifest_payload = {}
+
     suite_provenance_panel: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1664,10 +1741,21 @@ def main() -> int:
             suite_dir / "manifest" / "experiment_manifest.yaml",
             suite_dir / "manifest" / "manifest_resolved.json",
             suite_dir / "manifest" / "prompt_lock.json",
+            suite_dir / "manifest" / "query_bank_lock.json",
         ):
             cp = _copy_if_exists(src, manifest_dst / src.name)
             if cp:
                 manifest_copied.append(cp)
+        query_banks_src = suite_dir / "manifest" / "query_banks"
+        if query_banks_src.exists():
+            target = manifest_dst / "query_banks"
+            target.mkdir(parents=True, exist_ok=True)
+            for src in query_banks_src.glob("*"):
+                if not src.is_file():
+                    continue
+                cp = _copy_if_exists(src, target / src.name)
+                if cp:
+                    manifest_copied.append(cp)
         for src in (
             suite_dir / "ledger" / "results_long.csv",
             suite_dir / "ledger" / "runs.jsonl",
@@ -1980,6 +2068,32 @@ def main() -> int:
             )
         else:
             report_lines.append("- significance: source provided but artifacts missing.")
+    if resolved_result_health_dir:
+        if result_health_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Result Health",
+                    "",
+                    f"- result_health_dir: `{result_health_panel.get('source_dir')}`",
+                    f"- result_health_files: `{result_health_panel.get('copied_files')}`",
+                    f"- current_run_not_empty_reason: `{json.dumps(result_health_snapshot.get('overall_no_data_reason_counts', {}), ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- result_health: source provided but artifacts missing.")
+    if resolved_freeze_dir:
+        if benchmark_freeze_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Benchmark Freeze",
+                    "",
+                    f"- benchmark_freeze_dir: `{benchmark_freeze_panel.get('source_dir')}`",
+                    f"- benchmark_freeze_files: `{benchmark_freeze_panel.get('copied_files')}`",
+                    f"- current_run_frozen: `{json.dumps(freeze_manifest_payload, ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- benchmark_freeze: source provided but artifacts missing.")
     if args.suite_dir:
         if suite_provenance_panel.get("manifest_files") or suite_provenance_panel.get("provenance_files"):
             report_lines.extend(
@@ -2073,6 +2187,8 @@ def main() -> int:
             "signal_selection_dir": str(resolved_signal_selection_dir) if resolved_signal_selection_dir else None,
             "suite_dir": str(args.suite_dir) if args.suite_dir else None,
             "significance_dir": str(args.significance_dir) if args.significance_dir else None,
+            "result_health_dir": str(resolved_result_health_dir) if resolved_result_health_dir else None,
+            "benchmark_freeze_dir": str(resolved_freeze_dir) if resolved_freeze_dir else None,
             "prompt_registry": str(args.prompt_registry) if args.prompt_registry else None,
             "prompt_lock": str(args.prompt_lock) if args.prompt_lock else None,
             "export_submission_pack": bool(args.export_submission_pack),
@@ -2113,6 +2229,8 @@ def main() -> int:
             "chain_attribution_panel": chain_attribution_panel,
             "signal_selection_panel": signal_selection_panel,
             "significance_panel": significance_panel,
+            "result_health_panel": result_health_panel,
+            "benchmark_freeze_panel": benchmark_freeze_panel,
             "suite_provenance_panel": suite_provenance_panel,
             "prompt_panel": prompt_panel,
             "report_md": str(report_path),
@@ -2134,6 +2252,10 @@ def main() -> int:
             cmd.extend(["--suite-dir", str(args.suite_dir)])
         if args.significance_dir:
             cmd.extend(["--significance-dir", str(args.significance_dir)])
+        if resolved_result_health_dir:
+            cmd.extend(["--result-health-dir", str(resolved_result_health_dir)])
+        if resolved_freeze_dir:
+            cmd.extend(["--benchmark-freeze-dir", str(resolved_freeze_dir)])
         if args.prompt_registry:
             cmd.extend(["--prompt-registry", str(args.prompt_registry)])
         if args.prompt_lock:

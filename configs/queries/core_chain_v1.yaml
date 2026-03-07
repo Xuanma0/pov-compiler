@@ -1,0 +1,39 @@
+query_bank_id: core_chain_v1
+query_bank_version: "1"
+description: Frozen chain-only benchmark bank covering direct chain, backoff-sensitive, and object-memory-sensitive chain queries.
+provenance:
+  strategy: frozen_chain_bank
+  source: v1.43_design
+groups:
+  - group_id: direct_chain
+    description: Direct chain queries without expected backoff
+    tags: [chain]
+  - group_id: backoff_sensitive
+    description: Chain queries expected to trigger backoff
+    tags: [chain, backoff]
+  - group_id: object_memory_sensitive
+    description: Chain queries that depend on lost-object/object-memory evidence
+    tags: [chain, lost_object]
+queries:
+  - query_id: chain_direct_turn_then_scene
+    group: direct_chain
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "anchor=turn_head which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time"
+    signal_tags: [chain]
+    sensitive_to: [chain]
+  - query_id: chain_backoff_place_then_object
+    group: backoff_sensitive
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "place=kitchen top_k=6 then interaction_object=door top_k=6 chain_derive=time+place chain_object_mode=hard"
+    signal_tags: [chain, place]
+    sensitive_to: [chain_backoff, streaming]
+  - query_id: chain_object_memory_last_seen
+    group: object_memory_sensitive
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "lost_object=door which=last top_k=6 then place=hallway top_k=6 chain_derive=time+object"
+    signal_tags: [chain, lost_object]
+    sensitive_to: [object_memory, chain_backoff]
+query_bank_hash: "250754d0df5410ad34bf42ad7ec8046933f4eed48145f81f005f6f36f19a29c9"

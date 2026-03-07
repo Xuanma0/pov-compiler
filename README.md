@@ -946,6 +946,37 @@ New key artifacts:
 - `significance/tables/table_significance_main.csv`
 - `paper_ready/submission_pack/`
 
+### v1.43 Frozen Query Bank + Result Health + Benchmark Freeze
+
+`v1.43` tightens the benchmark suite into a real main-result production line without changing the core runtime stack:
+
+- frozen query banks live under `configs/queries/`
+- `run_benchmark_suite.py` now records query-bank provenance into `compare/compare_summary.json`, `compare/snapshot.json`, and `manifest/query_bank_lock.json`
+- `scripts/report_result_health.py` explains empty plots / zero deltas instead of leaving silent gaps
+- `scripts/freeze_benchmark_run.py` hashes compare + manifest + query-bank artifacts for reproducible main-result freeze
+- `scripts/export_paper_ready.py` and `scripts/export_submission_pack.py` now carry `result_health/` and `freeze/`
+
+Minimal fake smoke:
+
+```text
+python scripts/run_benchmark_suite.py --manifest configs/benchmarks/v1.43_main_fake.yaml --mode collect-only --out_dir data/outputs/v143_smoke
+python scripts/run_statistical_significance.py --suite_dir data/outputs/v143_smoke --out_dir data/outputs/v143_smoke/significance
+python scripts/report_result_health.py --suite_dir data/outputs/v143_smoke --out_dir data/outputs/v143_smoke/result_health
+python scripts/freeze_benchmark_run.py --suite_dir data/outputs/v143_smoke --out_dir data/outputs/v143_smoke/freeze
+python scripts/export_paper_ready.py --compare_dir data/outputs/v143_smoke/compare --suite-dir data/outputs/v143_smoke --significance-dir data/outputs/v143_smoke/significance --result-health-dir data/outputs/v143_smoke/result_health --benchmark-freeze-dir data/outputs/v143_smoke/freeze --out_dir data/outputs/v143_smoke/paper_ready --export-submission-pack
+```
+
+New key artifacts:
+
+- `manifest/query_bank_lock.json`
+- `manifest/query_banks/*.yaml`
+- `compare/compare_summary.json`
+- `result_health/tables/table_result_health.csv`
+- `freeze/freeze_manifest.json`
+- `paper_ready/result_health/`
+- `paper_ready/freeze/`
+- `paper_ready/submission_pack/`
+
 ### Local Fast Tests (xdist)
 
 Use the helper script for local parallel pytest:

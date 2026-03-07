@@ -1,0 +1,36 @@
+query_bank_id: core_lost_object_v1
+query_bank_version: "1"
+description: Frozen lost-object and object-memory benchmark bank.
+provenance:
+  strategy: frozen_lost_object_bank
+  source: v1.43_design
+groups:
+  - group_id: lost_object
+    description: Direct lost-object lookups
+    tags: [lost_object]
+  - group_id: object_memory
+    description: Object-memory-sensitive queries
+    tags: [object_memory]
+queries:
+  - query_id: lost_object_last_door
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "lost_object=door which=last top_k=6"
+    signal_tags: [lost_object]
+    sensitive_to: [object_memory]
+  - query_id: object_memory_last_contact
+    group: object_memory
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "object_last_seen=door which=last top_k=6"
+    signal_tags: [object_memory]
+    sensitive_to: [object_memory]
+  - query_id: lost_object_summary_first
+    group: object_memory
+    task: repo
+    mode: summary_first
+    query: "lost_object=door repo_mode=summary_first summary_topk=3 top_k=6"
+    signal_tags: [lost_object, repo_summary]
+    sensitive_to: [object_memory, repo_summary]
+query_bank_hash: "9d07cbe9da825a6fddfed749b99cd931704ae44186093f91682a2fb7cd925759"
