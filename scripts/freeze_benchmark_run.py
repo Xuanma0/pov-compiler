@@ -104,6 +104,7 @@ def main() -> int:
 
     query_bank_lock = _load_json(suite_dir / "manifest" / "query_bank_lock.json")
     primary_bank = query_bank_lock.get("primary") if isinstance(query_bank_lock, dict) else {}
+    compare_summary = _load_json(suite_dir / "compare" / "compare_summary.json")
     manifest_hash = ""
     manifest_path = suite_dir / "manifest" / "experiment_manifest.yaml"
     if manifest_path.exists():
@@ -114,10 +115,12 @@ def main() -> int:
     ]
     freeze_hash = hashlib.sha256(json.dumps(canonical_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     freeze_manifest = {
-        "suite_id": str(_load_json(suite_dir / "compare" / "compare_summary.json").get("suite_id", "")),
+        "suite_id": str(compare_summary.get("suite_id", "")),
         "query_bank_id": str(primary_bank.get("query_bank_id", "")),
         "query_bank_hash": str(primary_bank.get("query_bank_hash", "")),
         "manifest_hash": manifest_hash,
+        "health_gate_profile": str(compare_summary.get("health_gate_profile", "")),
+        "paper_map": str(compare_summary.get("paper_map", "")),
         "artifact_count": len(rows),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "freeze_sha256": freeze_hash,

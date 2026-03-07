@@ -1,0 +1,40 @@
+paper_map_id: main_result_map_v1
+paper_map_version: "1"
+description: Canonical paper table and figure mapping for the benchmark main-result bundle.
+entries:
+  - canonical_id: Table 1
+    kind: table
+    title: Main Results
+    sources:
+      - compare/tables/table_main_results.csv
+      - compare/tables/table_main_results.md
+  - canonical_id: Table 2
+    kind: table
+    title: Statistical Significance
+    sources:
+      - compare/tables/table_significance.csv
+      - compare/tables/table_significance.md
+  - canonical_id: Table 3
+    kind: table
+    title: Failure Attribution
+    sources:
+      - compare/tables/table_failure_attribution.csv
+      - compare/tables/table_failure_attribution.md
+  - canonical_id: Figure 2
+    kind: figure
+    title: Main Budget Frontier
+    sources:
+      - compare/figures/fig_main_budget_frontier.png
+      - compare/figures/fig_main_budget_frontier.pdf
+  - canonical_id: Figure 3
+    kind: figure
+    title: Main Variant Delta
+    sources:
+      - compare/figures/fig_main_variant_delta.png
+      - compare/figures/fig_main_variant_delta.pdf
+  - canonical_id: Figure 4
+    kind: figure
+    title: Result Health Breakdown
+    sources:
+      - result_health/figures/fig_result_health_breakdown.png
+      - result_health/figures/fig_result_health_breakdown.pdf

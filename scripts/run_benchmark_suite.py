@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -37,6 +38,14 @@ def _read_json(path: Path) -> dict:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,9 +99,17 @@ def main() -> int:
 
     compare_summary = _read_json(summary_path)
     primary_bank = bank_info.get("primary") or {}
+    manifest_hash = _sha256_path(manifest_path)
+    health_gate_profile = str(raw_manifest.get("health_gate_profile", "")).strip()
+    paper_map = str(raw_manifest.get("paper_map", "")).strip()
+    output_root = str(raw_manifest.get("output_root", raw_manifest.get("output", {}).get("root", ""))).strip()
     compare_summary["query_bank_id"] = str(primary_bank.get("query_bank_id", ""))
     compare_summary["query_bank_version"] = str(primary_bank.get("query_bank_version", ""))
     compare_summary["query_bank_hash"] = str(primary_bank.get("query_bank_hash", ""))
+    compare_summary["manifest_hash"] = manifest_hash
+    compare_summary["health_gate_profile"] = health_gate_profile
+    compare_summary["paper_map"] = paper_map
+    compare_summary["output_root"] = output_root
     compare_summary["selection_mode"] = str(selection_info.get("selection_mode", ""))
     compare_summary["selected_uids_count"] = int(selection_info.get("selected_uids_count", 0) or 0)
     compare_summary["coverage_score_stats"] = selection_info.get("coverage_score_stats", {})
@@ -110,6 +127,10 @@ def main() -> int:
         "banks": bank_info.get("banks", []),
     }
     snapshot["selection"] = selection_info
+    snapshot["manifest_hash"] = manifest_hash
+    snapshot["health_gate_profile"] = health_gate_profile
+    snapshot["paper_map"] = paper_map
+    snapshot["output_root"] = output_root
     _write_json(snapshot_path, snapshot)
 
     print(f"saved_results_long={outputs['results_long_csv']}")

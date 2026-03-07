@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--suite-dir", required=True, help="Benchmark suite root")
     parser.add_argument("--out_dir", required=True, help="Output directory for result-health artifacts")
     parser.add_argument("--epsilon", type=float, default=1e-9, help="Absolute threshold for zero-delta checks")
+    parser.add_argument("--gate-profile", default=None, help="Optional health-gate profile name")
     return parser.parse_args()
 
 
@@ -26,12 +27,15 @@ def main() -> int:
         suite_dir=args.suite_dir,
         out_dir=args.out_dir,
         epsilon=float(args.epsilon),
+        gate_profile=args.gate_profile,
     )
     print(f"rows_total={outputs['rows_total']}")
     print(f"saved_table={outputs['table_csv']}")
     print(f"saved_snapshot={outputs['snapshot_json']}")
     print(f"no_data_reason_counts={outputs['no_data_reason_counts']}")
-    return 0
+    print(f"gate_status={outputs['gate_status']}")
+    print(f"gate_fail_reasons={outputs['gate_fail_reasons']}")
+    return 0 if str(outputs["gate_status"]) != "fail" else 1
 
 
 if __name__ == "__main__":

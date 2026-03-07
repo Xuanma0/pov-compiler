@@ -32,6 +32,16 @@ def _copy_dir_if_exists(src: Path, dst: Path, copied: list[str], missing: list[s
     copied.append(str(dst))
 
 
+def _load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export a submission-ready archive from paper-ready and suite artifacts.")
     parser.add_argument("--paper-ready-dir", required=True, help="Existing paper_ready output directory")
@@ -40,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--significance-dir", default=None, help="Optional significance output directory")
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional freeze output directory")
+    parser.add_argument("--paper-freeze-dir", default=None, help="Optional canonical paper freeze directory")
+    parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML")
     parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
     parser.add_argument("--prompt-lock", default=None, help="Optional prompt lock JSON path")
     return parser.parse_args()
@@ -61,13 +73,25 @@ def main() -> int:
     pack_significance = out_dir / "significance"
     pack_result_health = out_dir / "result_health"
     pack_freeze = out_dir / "freeze"
+    pack_paper_freeze = out_dir / "paper_freeze"
     pack_prompts = out_dir / "prompts"
     pack_provenance = out_dir / "provenance"
-    for path in (pack_paper_ready, pack_compare, pack_manifest, pack_significance, pack_result_health, pack_freeze, pack_prompts, pack_provenance):
+    for path in (
+        pack_paper_ready,
+        pack_compare,
+        pack_manifest,
+        pack_significance,
+        pack_result_health,
+        pack_freeze,
+        pack_paper_freeze,
+        pack_prompts,
+        pack_provenance,
+    ):
         path.mkdir(parents=True, exist_ok=True)
 
     _copy_dir_if_exists(paper_ready_dir / "tables", pack_paper_ready / "tables", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "figures", pack_paper_ready / "figures", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "canonical", pack_paper_ready / "canonical", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "report.md", pack_paper_ready / "report.md", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "snapshot.json", pack_paper_ready / "snapshot.json", copied, missing)
 
@@ -103,6 +127,15 @@ def main() -> int:
         _copy_file_if_exists(freeze_dir / "freeze_manifest.json", pack_freeze / "freeze_manifest.json", copied, missing)
         _copy_file_if_exists(freeze_dir / "artifacts_sha256.csv", pack_freeze / "artifacts_sha256.csv", copied, missing)
 
+    paper_freeze_dir = Path(args.paper_freeze_dir) if args.paper_freeze_dir else None
+    if paper_freeze_dir is not None:
+        _copy_file_if_exists(paper_freeze_dir / "freeze_manifest.json", pack_paper_freeze / "freeze_manifest.json", copied, missing)
+        _copy_file_if_exists(paper_freeze_dir / "paper_artifacts_sha256.csv", pack_paper_freeze / "paper_artifacts_sha256.csv", copied, missing)
+
+    paper_map_path = Path(args.paper_map) if args.paper_map else None
+    if paper_map_path is not None:
+        _copy_file_if_exists(paper_map_path, pack_manifest / paper_map_path.name, copied, missing)
+
     prompt_lock_path = Path(args.prompt_lock) if args.prompt_lock else None
     if prompt_lock_path is not None:
         _copy_file_if_exists(prompt_lock_path, pack_manifest / "prompt_lock.json", copied, missing)
@@ -121,6 +154,8 @@ def main() -> int:
                     target_path = pack_prompts / entry.task / source_path.name
                 _copy_file_if_exists(source_path, target_path, copied, missing)
 
+    canonical_map_payload = _load_json(paper_ready_dir / "canonical" / "paper_map_resolved.json")
+    canonical_rows = canonical_map_payload.get("rows", []) if isinstance(canonical_map_payload.get("rows"), list) else []
     readme_lines = [
         "# Submission Pack",
         "",
@@ -130,6 +165,8 @@ def main() -> int:
         f"- significance_dir: `{significance_dir}`",
         f"- result_health_dir: `{result_health_dir}`",
         f"- benchmark_freeze_dir: `{freeze_dir}`",
+        f"- paper_freeze_dir: `{paper_freeze_dir}`",
+        f"- paper_map: `{paper_map_path}`",
         f"- prompt_registry: `{prompt_registry_path}`",
         f"- copied_items: `{len(copied)}`",
         f"- missing_inputs: `{len(missing)}`",
@@ -142,9 +179,23 @@ def main() -> int:
         "- `significance/`: significance tables, figures, report, snapshot",
         "- `result_health/`: result-health tables, figures, snapshot",
         "- `freeze/`: freeze manifest and artifact hashes",
+        "- `paper_freeze/`: canonical paper-artifact freeze manifest and hashes",
         "- `prompts/`: registry and prompt source files",
         "- `provenance/`: ledger and compare-side provenance files",
     ]
+    if canonical_rows:
+        readme_lines.extend(
+            [
+                "",
+                "## Paper Numbering",
+                "",
+                "- Use the canonical copies under `paper_ready/canonical/` when writing the paper.",
+            ]
+        )
+        for row in canonical_rows:
+            readme_lines.append(
+                f"- `{row.get('canonical_id')}` -> `{Path('paper_ready') / row.get('canonical_relpath', '')}`"
+            )
     readme_path = out_dir / "README.md"
     readme_path.write_text("\n".join(readme_lines), encoding="utf-8")
 
@@ -155,6 +206,8 @@ def main() -> int:
         "significance_dir": str(significance_dir) if significance_dir is not None else None,
         "result_health_dir": str(result_health_dir) if result_health_dir is not None else None,
         "benchmark_freeze_dir": str(freeze_dir) if freeze_dir is not None else None,
+        "paper_freeze_dir": str(paper_freeze_dir) if paper_freeze_dir is not None else None,
+        "paper_map": str(paper_map_path) if paper_map_path is not None else None,
         "prompt_registry": str(prompt_registry_path) if prompt_registry_path is not None else None,
         "prompt_lock": str(prompt_lock_path) if prompt_lock_path is not None else None,
         "copied": copied,

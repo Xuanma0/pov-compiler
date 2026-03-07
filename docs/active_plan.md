@@ -2,30 +2,32 @@
 
 ## Current milestone
 
-- `v1.43`: Frozen Query Bank + Result Health + Benchmark Freeze
+- `v1.44`: Main Real Runner + Health Gate + Canonical Paper Map + Paper Freeze
 
 ## Single goal
 
-- Converge the benchmark suite into a real main-result production line with fixed query inputs, explicit health reporting, artifact freeze, and one-click paper-ready/submission-pack export.
+- Promote the benchmark suite into a real main-result execution layer with one canonical runner, gate-checked outputs, canonical paper numbering, and paper-level freeze.
 
 ## Status
 
-- [x] `v1.43` query banks frozen as versioned YAML configs with stable hashes.
-- [x] `v1.43` real/fake manifests added and wired into `run_benchmark_suite.py`.
-- [x] Result-health report added with explicit no-data / zero-delta accounting.
-- [x] Benchmark freeze added with SHA256 artifact ledger and freeze manifest.
-- [x] `paper_ready/` and `submission_pack/` extended to include health/freeze/query-bank provenance.
-- [x] Fake smoke path validated end-to-end under `data/outputs/v143_smoke`.
+- [x] `v1.44` main real/fake manifests added as the canonical entry contracts.
+- [x] `scripts/run_main_real_benchmark.py` added as the single result-layer orchestrator.
+- [x] Result-health gate added with explicit fail reasons and non-zero exit on gate failure.
+- [x] Canonical paper map export added with stable `Table N` / `Figure N` copies.
+- [x] Paper-level freeze added for canonical paper artifacts.
+- [x] `paper_ready/` and `submission_pack/` now carry canonical paper assets and paper freeze.
+- [x] Dry collect validated at `data/outputs/v144_main_real_dry`.
+- [x] Fake smoke path validated end-to-end under `data/outputs/v144_fake_smoke`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
-- [x] `v1.43` milestone marked done.
+- [x] `v1.44` milestone marked done.
 
-## v1.44 Candidate Tasks
+## v1.45 Candidate Tasks
 
-- Query-bank-aware producer execution lanes
-- Per-UID paired significance contract
-- CI benchmark freeze verification
-- Default submission-pack export path
-- Real main-result run/resume orchestration
+- Real compare producer execution lanes
+- Provider cost and parse-fail health gates
+- Canonical caption metadata and paper metadata pack
+- CI paper-freeze verification
+- Partial rerun and resume for main-result bundles
 
 ## Frozen constraints
 
@@ -33,8 +35,10 @@
 - Keep work on the benchmark, reporting, export, and provenance layers.
 - Prefer modifying only these existing non-doc files for the next milestone:
   - `scripts/run_benchmark_suite.py`
+  - `scripts/report_result_health.py`
   - `scripts/export_paper_ready.py`
   - `scripts/export_submission_pack.py`
+  - `scripts/freeze_benchmark_run.py`
   - `tests/test_benchmark_suite_runner_smoke.py`
   - `tests/test_export_paper_ready_smoke.py`
 - Only escalate beyond that when blocked by producer/runtime integration, and then prefer minimal script-layer overlays first.

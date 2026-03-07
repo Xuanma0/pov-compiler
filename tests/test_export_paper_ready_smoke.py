@@ -560,6 +560,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (suite_dir / "compare" / "tables").mkdir(parents=True, exist_ok=True)
     (suite_dir / "compare" / "figures").mkdir(parents=True, exist_ok=True)
     (suite_dir / "compare" / "tables" / "table_main_results.csv").write_text("task,budget_key\nnlq,20/50/4\n", encoding="utf-8")
+    (suite_dir / "compare" / "tables" / "table_main_results.md").write_text("# main results\n", encoding="utf-8")
     (suite_dir / "compare" / "figures" / "fig_main_budget_frontier.png").write_bytes(b"PNG")
 
     result_health_dir = tmp_path / "result_health"
@@ -585,6 +586,35 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     )
     (freeze_dir / "artifacts_sha256.csv").write_text(
         "artifact_group,relpath,sha256,size_bytes\ncompare_meta,compare/compare_summary.json,abc,10\n",
+        encoding="utf-8",
+    )
+
+    paper_map = tmp_path / "main_result_map_v1.yaml"
+    paper_map.write_text(
+        "\n".join(
+            [
+                "paper_map_id: main_result_map_v1",
+                'paper_map_version: "1"',
+                "description: smoke map",
+                "entries:",
+                "  - canonical_id: Table 1",
+                "    kind: table",
+                "    title: Main Results",
+                "    sources:",
+                "      - compare/tables/table_main_results.csv",
+                "      - compare/tables/table_main_results.md",
+                "  - canonical_id: Figure 2",
+                "    kind: figure",
+                "    title: Budget Frontier",
+                "    sources:",
+                "      - compare/figures/fig_main_budget_frontier.png",
+                "  - canonical_id: Figure 4",
+                "    kind: figure",
+                "    title: Result Health",
+                "    sources:",
+                "      - result_health/figures/fig_result_health_breakdown.png",
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -685,6 +715,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(result_health_dir),
         "--benchmark-freeze-dir",
         str(freeze_dir),
+        "--paper-map",
+        str(paper_map),
         "--prompt-registry",
         str(prompt_registry),
         "--prompt-lock",
@@ -710,8 +742,15 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert report_md.exists()
     assert snapshot_json.exists()
     report_text = report_md.read_text(encoding="utf-8")
+    assert "## Main Result Contract" in report_text
+    assert "## Canonical Paper Map" in report_text
     assert "## Result Health" in report_text
     assert "## Benchmark Freeze" in report_text
+    assert (out_dir / "canonical" / "tables" / "Table_1.csv").exists()
+    assert (out_dir / "canonical" / "tables" / "Table_1.md").exists()
+    assert (out_dir / "canonical" / "figures" / "Figure_2.png").exists()
+    assert (out_dir / "canonical" / "figures" / "Figure_4.png").exists()
+    assert (out_dir / "canonical" / "table_paper_artifact_map.csv").exists()
     assert (out_dir / "figures" / "fig_budget_primary_vs_seconds_panel.png").exists()
     assert (out_dir / "figures" / "fig_budget_primary_delta_vs_seconds_panel.png").exists()
     assert (out_dir / "figures" / "fig_budget_latency_vs_seconds_streaming.png").exists()
@@ -846,6 +885,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "manifest" / "prompt_lock.json").exists()
     assert (submission_pack / "manifest" / "query_bank_lock.json").exists()
     assert (submission_pack / "manifest" / "query_banks" / "core_real_v1.yaml").exists()
+    assert (submission_pack / "manifest" / "main_result_map_v1.yaml").exists()
     assert (submission_pack / "compare" / "tables" / "table_main_results.csv").exists()
     assert (submission_pack / "provenance" / "results_long.csv").exists()
     assert (submission_pack / "provenance" / "commands.sh").exists()
@@ -853,3 +893,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "prompts" / "decisions" / "model_decision_v1.txt").exists()
     assert (submission_pack / "prompts" / "planner" / "model_planner_v1.txt").exists()
     assert (submission_pack / "prompts" / "repository" / "repo_summary_v1.txt").exists()
+    assert (submission_pack / "paper_ready" / "canonical" / "tables" / "Table_1.csv").exists()
+    submission_readme = (submission_pack / "README.md").read_text(encoding="utf-8")
+    assert "Table 1" in submission_readme
+    assert "Figure 2" in submission_readme

@@ -977,6 +977,33 @@ New key artifacts:
 - `paper_ready/freeze/`
 - `paper_ready/submission_pack/`
 
+### v1.44 Main Real Runner + Health Gate + Canonical Paper Map
+
+`v1.44` turns the benchmark suite into a single main-result execution flow instead of a set of frozen pieces:
+
+- `configs/benchmarks/v1.44_main_real.yaml` and `v1.44_main_fake.yaml` are the canonical main-result contracts
+- `scripts/run_main_real_benchmark.py` chains suite collect, significance, health gate, benchmark freeze, paper-ready export, paper freeze, and submission pack
+- `scripts/report_result_health.py --gate-profile main_real` fails loudly when UID coverage, significance coverage, or nonzero effect size are too weak
+- `configs/paper/main_result_map_v1.yaml` maps engineering artifacts onto stable paper numbering
+- `scripts/freeze_paper_figures.py` freezes only the canonical paper subset
+
+Minimal usage:
+
+```text
+python scripts/run_main_real_benchmark.py --manifest configs/benchmarks/v1.44_main_real.yaml --dry-collect --out_dir data/outputs/v144_main_real_dry
+python scripts/run_main_real_benchmark.py --manifest configs/benchmarks/v1.44_main_fake.yaml --mode smoke --out_dir data/outputs/v144_fake_smoke
+```
+
+New key artifacts:
+
+- `manifest/dry_collect_snapshot.json`
+- `result_health/snapshot.json` with `gate`
+- `paper_ready/canonical/table_paper_artifact_map.csv`
+- `paper_ready/canonical/tables/Table_1.csv`
+- `paper_ready/canonical/figures/Figure_2.png`
+- `paper_freeze/freeze_manifest.json`
+- `submission_pack/README.md`
+
 ### Local Fast Tests (xdist)
 
 Use the helper script for local parallel pytest:

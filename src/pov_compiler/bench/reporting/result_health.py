@@ -11,6 +11,7 @@ except Exception:  # pragma: no cover - dependency should exist in runtime env.
     pd = None
 
 from pov_compiler.bench.query_bank import selection_stats
+from pov_compiler.bench.reporting.health_gate import evaluate_health_gate
 from pov_compiler.bench.reporting.latex import df_to_markdown_table
 
 
@@ -35,6 +36,20 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        import yaml  # type: ignore
+    except Exception:  # pragma: no cover - dependency should exist in runtime env.
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -221,6 +236,7 @@ def write_result_health_outputs(
     out_dir: str | Path,
     epsilon: float = 1e-9,
     figure_formats: list[str] | None = None,
+    gate_profile: str | None = None,
 ) -> dict[str, Any]:
     import matplotlib.pyplot as plt
 
@@ -231,6 +247,9 @@ def write_result_health_outputs(
     figures_dir = out_root / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
     out_df, snapshot = build_result_health_table(suite_dir=suite_dir, epsilon=epsilon)
+    suite_root = Path(suite_dir).resolve()
+    manifest_payload = _load_yaml(suite_root / "manifest" / "experiment_manifest.yaml")
+    resolved_gate_profile = str(gate_profile or manifest_payload.get("health_gate_profile", "")).strip() or None
 
     table_csv = tables_dir / "table_result_health.csv"
     table_md = tables_dir / "table_result_health.md"
@@ -275,12 +294,14 @@ def write_result_health_outputs(
             figure_paths.append(str(target))
         plt.close()
 
+    gate = evaluate_health_gate(out_df, snapshot, resolved_gate_profile)
     snapshot["outputs"] = {
         "table_csv": str(table_csv),
         "table_md": str(table_md),
         "figures": figure_paths,
         "snapshot_json": str(snapshot_path),
     }
+    snapshot["gate"] = gate
     _write_text(snapshot_path, json.dumps(snapshot, ensure_ascii=False, indent=2))
     return {
         "table_csv": table_csv,
@@ -289,4 +310,7 @@ def write_result_health_outputs(
         "snapshot_json": snapshot_path,
         "rows_total": int(len(out_df)),
         "no_data_reason_counts": snapshot.get("overall_no_data_reason_counts", {}),
+        "gate_status": gate.get("gate_status", "skipped"),
+        "gate_fail_reasons": gate.get("gate_fail_reasons", []),
+        "gate_profile": gate.get("profile", ""),
     }

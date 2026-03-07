@@ -117,6 +117,9 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
                 "suite_id: suite_smoke",
                 'suite_version: "1.42"',
                 "seed: 5",
+                "health_gate_profile: main_real",
+                "paper_map: configs/paper/main_result_map_v1.yaml",
+                f"output_root: {tmp_path / 'main_result_root'}",
                 "selection:",
                 f"  compare_dir: {compare_dir}",
                 "  tasks: [nlq, streaming, bye]",
@@ -202,5 +205,9 @@ def test_benchmark_suite_runner_smoke(tmp_path: Path) -> None:
     assert "query_bank_id" in compare_summary
     assert "query_bank_hash" in compare_summary
     assert "selection_mode" in compare_summary
+    assert "manifest_hash" in compare_summary
+    assert "paper_map" in compare_summary
+    assert "health_gate_profile" in compare_summary
     compare_snapshot = (out_dir / "compare" / "snapshot.json").read_text(encoding="utf-8")
     assert "query_bank_hash" in compare_snapshot
+    assert "manifest_hash" in compare_snapshot

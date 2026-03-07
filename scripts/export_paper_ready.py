@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from pov_compiler.bench.reporting.paper_map import export_canonical_artifacts
 
 
 def _parse_bool_with_neg(parser: argparse.ArgumentParser, name: str, default: bool) -> None:
@@ -137,6 +142,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--significance-dir", default=None, help="Optional statistical significance output directory")
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional benchmark freeze output directory")
+    parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML path")
     parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
     parser.add_argument("--prompt-lock", default=None, help="Optional prompt lock JSON path")
     parser.add_argument("--submission-pack-dir", default=None, help="Optional explicit submission_pack output directory")
@@ -194,6 +200,33 @@ def _parse_json_arg(raw: str | None) -> dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_optional_path(raw_value: str | None, base_dir: Path) -> Path | None:
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+    path = Path(text)
+    if path.is_absolute():
+        return path.resolve()
+    base_candidate = (base_dir / path).resolve()
+    if base_candidate.exists():
+        return base_candidate
+    return (ROOT / path).resolve()
 
 
 def _budget_key(row: dict[str, Any]) -> str:
@@ -1721,6 +1754,64 @@ def main() -> int:
             except Exception:
                 freeze_manifest_payload = {}
 
+    suite_dir = Path(args.suite_dir) if args.suite_dir else None
+    suite_manifest_payload: dict[str, Any] = {}
+    manifest_source_path: Path | None = None
+    suite_compare_summary: dict[str, Any] = {}
+    if suite_dir is not None:
+        manifest_source_path = suite_dir / "manifest" / "experiment_manifest.yaml"
+        suite_manifest_payload = _load_yaml(manifest_source_path)
+        compare_summary_src = suite_dir / "compare" / "compare_summary.json"
+        if compare_summary_src.exists():
+            try:
+                suite_compare_summary = json.loads(compare_summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                suite_compare_summary = {}
+
+    resolved_paper_map: Path | None = None
+    if args.paper_map:
+        resolved_paper_map = Path(args.paper_map).resolve()
+    elif suite_manifest_payload:
+        resolved_paper_map = _resolve_optional_path(
+            str(suite_manifest_payload.get("paper_map", "")).strip(),
+            manifest_source_path.parent if manifest_source_path is not None else ROOT,
+        )
+
+    paper_map_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_path": None,
+        "mapping_csv": None,
+        "mapping_md": None,
+        "resolved_json": None,
+        "canonical_files": [],
+        "paper_map_id": None,
+        "paper_map_hash": None,
+    }
+    if resolved_paper_map is not None:
+        roots = {
+            "compare": (suite_dir / "compare") if suite_dir is not None else (compare_dir if args.compare_dir else None),
+            "result_health": resolved_result_health_dir,
+            "significance": Path(args.significance_dir) if args.significance_dir else None,
+            "freeze": resolved_freeze_dir,
+            "paper_ready": out_dir,
+        }
+        paper_map_export = export_canonical_artifacts(
+            paper_map_path=resolved_paper_map,
+            roots=roots,
+            paper_ready_dir=out_dir,
+        )
+        paper_map_panel = {
+            "enabled": True,
+            "source_path": str(resolved_paper_map),
+            "mapping_csv": paper_map_export.get("mapping_csv"),
+            "mapping_md": paper_map_export.get("mapping_md"),
+            "resolved_json": paper_map_export.get("resolved_json"),
+            "canonical_files": [str(row.get("canonical_relpath", "")) for row in paper_map_export.get("rows", [])],
+            "paper_map_id": paper_map_export.get("paper_map_id"),
+            "paper_map_hash": paper_map_export.get("paper_map_hash"),
+            "map_copy": paper_map_export.get("map_copy"),
+        }
+
     suite_provenance_panel: dict[str, Any] = {
         "enabled": False,
         "source_dir": None,
@@ -1728,7 +1819,6 @@ def main() -> int:
         "provenance_files": [],
     }
     if args.suite_dir:
-        suite_dir = Path(args.suite_dir)
         suite_provenance_panel["enabled"] = True
         suite_provenance_panel["source_dir"] = str(suite_dir)
         manifest_dst = out_dir / "manifest"
@@ -1819,6 +1909,33 @@ def main() -> int:
         f"- recommend_points: `{json.dumps(recommend_points, ensure_ascii=False, sort_keys=True)}`",
         safety_line,
     ]
+    if suite_manifest_payload or suite_compare_summary:
+        report_lines.extend(
+            [
+                "",
+                "## Main Result Contract",
+                "",
+                f"- manifest_path: `{manifest_source_path}`",
+                f"- manifest_suite_id: `{suite_manifest_payload.get('suite_id', '')}`",
+                f"- query_bank_id: `{suite_compare_summary.get('query_bank_id', '')}`",
+                f"- query_bank_hash: `{suite_compare_summary.get('query_bank_hash', '')}`",
+                f"- health_gate_status: `{result_health_snapshot.get('gate', {}).get('gate_status', 'skipped')}`",
+                f"- freeze_manifest_path: `{resolved_freeze_dir / 'freeze_manifest.json' if resolved_freeze_dir else None}`",
+            ]
+        )
+    if paper_map_panel.get("enabled"):
+        report_lines.extend(
+            [
+                "",
+                "## Canonical Paper Map",
+                "",
+                f"- paper_map: `{paper_map_panel.get('source_path')}`",
+                f"- paper_map_id: `{paper_map_panel.get('paper_map_id')}`",
+                f"- paper_map_hash: `{paper_map_panel.get('paper_map_hash')}`",
+                f"- canonical_mapping_csv: `{paper_map_panel.get('mapping_csv')}`",
+                f"- canonical_files: `{paper_map_panel.get('canonical_files')}`",
+            ]
+        )
     if args.streaming_policy_compare_dir:
         if streaming_policy_compare.get("copied_tables") or streaming_policy_compare.get("copied_figures"):
             report_lines.extend(
@@ -2077,6 +2194,8 @@ def main() -> int:
                     f"- result_health_dir: `{result_health_panel.get('source_dir')}`",
                     f"- result_health_files: `{result_health_panel.get('copied_files')}`",
                     f"- current_run_not_empty_reason: `{json.dumps(result_health_snapshot.get('overall_no_data_reason_counts', {}), ensure_ascii=False, sort_keys=True)}`",
+                    f"- gate_status: `{result_health_snapshot.get('gate', {}).get('gate_status', 'skipped')}`",
+                    f"- gate_fail_reasons: `{result_health_snapshot.get('gate', {}).get('gate_fail_reasons', [])}`",
                 ]
             )
         else:
@@ -2189,6 +2308,7 @@ def main() -> int:
             "significance_dir": str(args.significance_dir) if args.significance_dir else None,
             "result_health_dir": str(resolved_result_health_dir) if resolved_result_health_dir else None,
             "benchmark_freeze_dir": str(resolved_freeze_dir) if resolved_freeze_dir else None,
+            "paper_map": str(resolved_paper_map) if resolved_paper_map else None,
             "prompt_registry": str(args.prompt_registry) if args.prompt_registry else None,
             "prompt_lock": str(args.prompt_lock) if args.prompt_lock else None,
             "export_submission_pack": bool(args.export_submission_pack),
@@ -2231,6 +2351,7 @@ def main() -> int:
             "significance_panel": significance_panel,
             "result_health_panel": result_health_panel,
             "benchmark_freeze_panel": benchmark_freeze_panel,
+            "paper_map_panel": paper_map_panel,
             "suite_provenance_panel": suite_provenance_panel,
             "prompt_panel": prompt_panel,
             "report_md": str(report_path),
@@ -2256,6 +2377,8 @@ def main() -> int:
             cmd.extend(["--result-health-dir", str(resolved_result_health_dir)])
         if resolved_freeze_dir:
             cmd.extend(["--benchmark-freeze-dir", str(resolved_freeze_dir)])
+        if resolved_paper_map:
+            cmd.extend(["--paper-map", str(resolved_paper_map)])
         if args.prompt_registry:
             cmd.extend(["--prompt-registry", str(args.prompt_registry)])
         if args.prompt_lock:
