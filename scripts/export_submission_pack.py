@@ -53,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--signal-uplift-dir", default=None, help="Optional signal uplift output directory")
+    parser.add_argument("--query-bank-compare-dir", default=None, help="Optional query-bank compare output directory")
+    parser.add_argument(
+        "--query-bank-promotion-decision-dir",
+        default=None,
+        help="Optional query-bank promotion decision output directory",
+    )
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
@@ -90,6 +96,8 @@ def main() -> int:
     pack_result_diagnosis = out_dir / "result_diagnosis"
     pack_delta_audit = out_dir / "delta_audit"
     pack_signal_uplift = out_dir / "signal_uplift"
+    pack_query_bank_compare = out_dir / "query_bank_compare"
+    pack_query_bank_promotion_decision = out_dir / "query_bank_promotion_decision"
     pack_query_strength_audit = out_dir / "query_strength_audit"
     pack_provider_telemetry = out_dir / "provider_telemetry"
     pack_provider_reachability = out_dir / "provider_reachability"
@@ -114,6 +122,8 @@ def main() -> int:
         pack_result_diagnosis,
         pack_delta_audit,
         pack_signal_uplift,
+        pack_query_bank_compare,
+        pack_query_bank_promotion_decision,
         pack_query_strength_audit,
         pack_provider_telemetry,
         pack_provider_reachability,
@@ -138,6 +148,13 @@ def main() -> int:
     _copy_dir_if_exists(paper_ready_dir / "result_diagnosis", pack_paper_ready / "result_diagnosis", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "delta_audit", pack_paper_ready / "delta_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "signal_uplift", pack_paper_ready / "signal_uplift", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "query_bank_compare", pack_paper_ready / "query_bank_compare", copied, missing)
+    _copy_dir_if_exists(
+        paper_ready_dir / "query_bank_promotion_decision",
+        pack_paper_ready / "query_bank_promotion_decision",
+        copied,
+        missing,
+    )
     _copy_dir_if_exists(paper_ready_dir / "query_strength_audit", pack_paper_ready / "query_strength_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_telemetry", pack_paper_ready / "provider_telemetry", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_reachability", pack_paper_ready / "provider_reachability", copied, missing)
@@ -208,6 +225,38 @@ def main() -> int:
         _copy_dir_if_exists(signal_uplift_dir / "figures", pack_signal_uplift / "figures", copied, missing)
         _copy_file_if_exists(signal_uplift_dir / "report.md", pack_signal_uplift / "report.md", copied, missing)
         _copy_file_if_exists(signal_uplift_dir / "snapshot.json", pack_signal_uplift / "snapshot.json", copied, missing)
+
+    query_bank_compare_dir = Path(args.query_bank_compare_dir) if args.query_bank_compare_dir else None
+    if query_bank_compare_dir is not None:
+        _copy_dir_if_exists(query_bank_compare_dir / "tables", pack_query_bank_compare / "tables", copied, missing)
+        _copy_dir_if_exists(query_bank_compare_dir / "figures", pack_query_bank_compare / "figures", copied, missing)
+        _copy_file_if_exists(query_bank_compare_dir / "compare_summary.json", pack_query_bank_compare / "compare_summary.json", copied, missing)
+        _copy_file_if_exists(query_bank_compare_dir / "snapshot.json", pack_query_bank_compare / "snapshot.json", copied, missing)
+        _copy_file_if_exists(query_bank_compare_dir / "commands.sh", pack_query_bank_compare / "commands.sh", copied, missing)
+        _copy_file_if_exists(query_bank_compare_dir / "README.md", pack_query_bank_compare / "README.md", copied, missing)
+
+    query_bank_promotion_decision_dir = (
+        Path(args.query_bank_promotion_decision_dir) if args.query_bank_promotion_decision_dir else None
+    )
+    if query_bank_promotion_decision_dir is not None:
+        _copy_dir_if_exists(
+            query_bank_promotion_decision_dir / "tables",
+            pack_query_bank_promotion_decision / "tables",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            query_bank_promotion_decision_dir / "report.md",
+            pack_query_bank_promotion_decision / "report.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            query_bank_promotion_decision_dir / "snapshot.json",
+            pack_query_bank_promotion_decision / "snapshot.json",
+            copied,
+            missing,
+        )
 
     query_strength_audit_dir = Path(args.query_strength_audit_dir) if args.query_strength_audit_dir else None
     if query_strength_audit_dir is not None:
@@ -365,6 +414,8 @@ def main() -> int:
         "- `result_diagnosis/`: diagnosis tables, figures, report, snapshot",
         "- `delta_audit/`: per-budget delta audit and next-step action suggestions",
         "- `signal_uplift/`: before/after perception signal gain summary for local YOLO26n pilots",
+        "- `query_bank_compare/`: aligned v1-vs-v2 main-result compare tables, figures, and provenance",
+        "- `query_bank_promotion_decision/`: formal recommendation on whether v2 should replace v1",
         "- `query_strength_audit/`: query-group strength audit for main-paper inclusion decisions",
         "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
         "- `provider_reachability/`: live-call reachability proof for the chosen provider/server",
@@ -405,6 +456,8 @@ def main() -> int:
             "- Then read `result_health/` and `result_diagnosis/`.",
             "- Then read `delta_audit/`.",
             "- Then read `signal_uplift/` to decide whether weak results are really perception-signal limited.",
+            "- Then read `query_bank_compare/` before deciding whether v2 is actually better than v1.",
+            "- Then read `query_bank_promotion_decision/` before widening the next real main run on v2.",
             "- Then read `provider_normalization/` before interpreting cross-provider cost or usage.",
             "- If main figures still look weak, read `query_strength_audit/` before interpreting them.",
             "- Then read `query_uplift_candidates/` before deciding whether weak queries deserve more signal or sample.",
@@ -555,6 +608,10 @@ def main() -> int:
         "result_diagnosis_dir": str(result_diagnosis_dir) if result_diagnosis_dir is not None else None,
         "delta_audit_dir": str(delta_audit_dir) if delta_audit_dir is not None else None,
         "signal_uplift_dir": str(signal_uplift_dir) if signal_uplift_dir is not None else None,
+        "query_bank_compare_dir": str(query_bank_compare_dir) if query_bank_compare_dir is not None else None,
+        "query_bank_promotion_decision_dir": str(query_bank_promotion_decision_dir)
+        if query_bank_promotion_decision_dir is not None
+        else None,
         "query_strength_audit_dir": str(query_strength_audit_dir) if query_strength_audit_dir is not None else None,
         "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,
         "provider_reachability_dir": str(provider_reachability_dir) if provider_reachability_dir is not None else None,

@@ -82,6 +82,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _canonical_json(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _stable_hash(payload: Any) -> str:
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
 def _to_float(value: Any) -> float | None:
     try:
         out = float(value)
@@ -95,6 +103,96 @@ def _to_float(value: Any) -> float | None:
 def _copy_file(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dst)
+
+
+def _run_signature_context(manifest_payload: dict[str, Any], manifest_path: Path) -> dict[str, Any]:
+    selection = manifest_payload.get("selection", {})
+    if not isinstance(selection, dict):
+        selection = {}
+    budgets = manifest_payload.get("budgets", {})
+    if not isinstance(budgets, dict):
+        budgets = {}
+    points = budgets.get("points", [])
+    if not isinstance(points, list):
+        points = []
+    telemetry = manifest_payload.get("telemetry", {})
+    if not isinstance(telemetry, dict):
+        telemetry = {}
+    provider_health_config = _resolve_optional_path(
+        str(manifest_payload.get("provider_health_config", "")).strip(),
+        manifest_path.parent,
+    )
+    return {
+        "compare_pair_id": str(manifest_payload.get("compare_pair_id", "")).strip(),
+        "selection": {
+            "compare_dir": str(selection.get("compare_dir", "")).strip(),
+            "mode": str(selection.get("mode", "")).strip(),
+            "signal_min_score": selection.get("signal_min_score"),
+            "top_k_uids": selection.get("top_k_uids"),
+            "signal_selection_dir": str(selection.get("signal_selection_dir", "")).strip(),
+            "tasks": selection.get("tasks", []),
+            "labels": selection.get("labels", {}),
+            "task_sources": selection.get("task_sources", {}),
+            "pair_sources": selection.get("pair_sources", {}),
+        },
+        "budgets": [str(point.get("key", "")).strip() for point in points if isinstance(point, dict)],
+        "health_gate_profile": str(manifest_payload.get("health_gate_profile", "")).strip(),
+        "admission_profile": str(manifest_payload.get("admission_profile", "")).strip(),
+        "provider": {
+            "provider_health_enabled": bool(manifest_payload.get("provider_health_enabled", False)),
+            "provider_health_config": str(provider_health_config) if provider_health_config else "",
+            "require_real_calls": bool(manifest_payload.get("require_real_calls", False)),
+            "provider_normalization_enabled": bool(manifest_payload.get("provider_normalization_enabled", False)),
+            "telemetry_enabled": bool(
+                manifest_payload.get("telemetry_enabled", telemetry.get("enabled", False))
+            ),
+            "telemetry_require_usage": bool(
+                manifest_payload.get("telemetry_require_usage", telemetry.get("require_usage", False))
+            ),
+            "telemetry_require_latency": bool(
+                manifest_payload.get("telemetry_require_latency", telemetry.get("require_latency", False))
+            ),
+        },
+        "perception_signature": manifest_payload.get("perception_signature", {}),
+    }
+
+
+def _annotate_compare_outputs(
+    *,
+    compare_summary_path: Path,
+    compare_snapshot_path: Path,
+    manifest_payload: dict[str, Any],
+    manifest_path: Path,
+    manifest_hash: str,
+    query_banks: dict[str, Any],
+) -> dict[str, Any]:
+    compare_summary = _read_json(compare_summary_path)
+    primary_bank = query_banks.get("primary", {}) if isinstance(query_banks, dict) else {}
+    run_signature_context = _run_signature_context(manifest_payload, manifest_path)
+    run_signature_hash = _stable_hash(run_signature_context)
+    compare_summary["compare_pair_id"] = str(manifest_payload.get("compare_pair_id", "")).strip()
+    compare_summary["source_query_bank_id"] = str(manifest_payload.get("source_query_bank_id", "")).strip()
+    compare_summary["source_query_bank_hash"] = str(manifest_payload.get("source_query_bank_hash", "")).strip()
+    compare_summary["query_bank_id"] = str(compare_summary.get("query_bank_id", primary_bank.get("query_bank_id", "")))
+    compare_summary["query_bank_hash"] = str(compare_summary.get("query_bank_hash", primary_bank.get("query_bank_hash", "")))
+    compare_summary["query_bank_version"] = str(compare_summary.get("query_bank_version", primary_bank.get("query_bank_version", "")))
+    compare_summary["manifest_hash"] = manifest_hash
+    compare_summary["perception_signature"] = manifest_payload.get("perception_signature", {})
+    compare_summary["run_signature_hash"] = run_signature_hash
+    _write_json(compare_summary_path, compare_summary)
+
+    snapshot = _read_json(compare_snapshot_path)
+    snapshot["compare_pair_id"] = compare_summary["compare_pair_id"]
+    snapshot["source_query_bank_id"] = compare_summary["source_query_bank_id"]
+    snapshot["source_query_bank_hash"] = compare_summary["source_query_bank_hash"]
+    snapshot["query_bank_id"] = compare_summary["query_bank_id"]
+    snapshot["query_bank_hash"] = compare_summary["query_bank_hash"]
+    snapshot["query_bank_version"] = compare_summary["query_bank_version"]
+    snapshot["manifest_hash"] = manifest_hash
+    snapshot["perception_signature"] = manifest_payload.get("perception_signature", {})
+    snapshot["run_signature_hash"] = run_signature_hash
+    _write_json(compare_snapshot_path, snapshot)
+    return compare_summary
 
 
 def _mutate_repeat_compare_table(src: Path, dst: Path, *, repeat_index: int, real_mode: bool) -> None:
@@ -635,9 +733,17 @@ def main() -> int:
     _run_cmd(suite_cmd)
 
     compare_summary_path = out_dir / "compare" / "compare_summary.json"
+    compare_snapshot_path = out_dir / "compare" / "snapshot.json"
     compare_summary = {}
-    if compare_summary_path.exists():
-        compare_summary = json.loads(compare_summary_path.read_text(encoding="utf-8"))
+    if compare_summary_path.exists() and compare_snapshot_path.exists():
+        compare_summary = _annotate_compare_outputs(
+            compare_summary_path=compare_summary_path,
+            compare_snapshot_path=compare_snapshot_path,
+            manifest_payload=manifest_payload,
+            manifest_path=manifest_path,
+            manifest_hash=manifest_hash,
+            query_banks=query_banks,
+        )
     source_compare_dir = Path(str(compare_summary.get("compare_dir", out_dir / "compare"))).resolve()
 
     significance_dir = out_dir / "significance"

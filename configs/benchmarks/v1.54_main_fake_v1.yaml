@@ -1,0 +1,135 @@
+suite_id: v1.54_main_fake_v1
+suite_version: "1.54"
+seed: 0
+description: Medium-scale fake/smoke main-result run using core_real_v1 as the frozen baseline query bank.
+compare_pair_id: v1_vs_v2_medium_fake
+source_query_bank_id: core_real_v1
+source_query_bank_hash: f988b8c1a12f293bcf90074b46c5390d9c07acb0990e4783a0347c2518216ec6
+perception_signature:
+  backend: real
+  model_name: yolo26n
+  config: configs/perception/yolo26n_local.yaml
+selection:
+  compare_dir: tests/fixtures/v154_medium_compare
+  tasks: [nlq, streaming, bye]
+  labels:
+    a: stub
+    b: real
+  task_sources:
+    nlq: nlq_budget/{label}/aggregate/metrics_by_budget.csv
+    streaming: streaming_budget/{label}/aggregate/metrics_by_budget.csv
+    bye: bye_budget/{label}/aggregate/metrics_by_budget.csv
+  pair_sources:
+    nlq: nlq_budget/{label}/pairs/metrics_by_pair.csv
+    streaming: streaming_budget/{label}/pairs/metrics_by_pair.csv
+    bye: bye_budget/{label}/pairs/metrics_by_pair.csv
+  mode: auto_signal_cache
+  signal_min_score: 2.0
+  top_k_uids: 6
+  signal_selection_dir: tests/fixtures/v154_medium_compare/signal_selection
+budgets:
+  points:
+    - key: 20/50/4
+    - key: 40/100/8
+queries:
+  profile: v1.54_main_fake_v1
+  families: [decision, chain, lost_object, repo_summary]
+  top_k: 6
+  query_bank: configs/queries/core_real_v1.yaml
+  auxiliary_banks:
+    - configs/queries/core_chain_v1.yaml
+    - configs/queries/core_lost_object_v1.yaml
+  groups: [decision, chain, lost_object, repo_summary]
+variants:
+  baseline: a
+  treatment: b
+metrics:
+  primary:
+    nlq: nlq_full_hit_at_k_strict
+    streaming: "hit@k_strict"
+    bye: qualityScore
+  failure:
+    nlq:
+      - safety_reason_budget_insufficient_rate
+      - safety_reason_evidence_missing_rate
+      - safety_reason_constraints_over_filtered_rate
+      - safety_reason_retrieval_distractor_rate
+      - safety_reason_other_rate
+prompts:
+  registry: configs/prompts/registry_v1.yaml
+  profile: v1.42_main
+  lock_required: true
+output:
+  root: data/outputs/v154_main_fake_v1
+  figure_formats: [png, pdf]
+  include_paper_ready: true
+  include_submission_pack: true
+significance_pairs:
+  - task: nlq
+    pair_source: nlq
+  - task: streaming
+    pair_source: streaming
+  - task: bye
+    pair_source: bye
+health_gate_profile: main_real
+paper_map: configs/paper/main_result_map_v1.yaml
+output_root: data/outputs/v154_main_fake_v1
+diagnosis_enabled: true
+telemetry_enabled: true
+telemetry_require_usage: false
+telemetry_require_latency: true
+provider_normalization_enabled: true
+query_promotion_enabled: true
+provider_health_enabled: true
+provider_health_config: configs/providers/live_provider_health_v1.yaml
+require_real_calls: false
+admission_calibration_enabled: true
+query_strength_audit_enabled: true
+admission_profile: main_real
+min_selected_uids: 3
+min_coverage_score_mean: 2.5
+min_significance_available_rate: 0.50
+max_no_data_rate: 0.25
+min_effect_size_nonzero_rate: 0.34
+max_provider_noise_parse_fail_rate: 0.10
+max_provider_noise_fallback_rate: 0.10
+min_usage_present_rate: 0.25
+allow_partial: true
+telemetry:
+  variants:
+    stub:
+      provider: fake
+      model: fake-stub-v1
+      api_mode_used: fixture_json
+      usage_present: true
+      prompt_tokens: 0
+      completion_tokens: 0
+      total_tokens: 0
+      cost_known: true
+      model_cost_usd_total: 0.0000
+      model_cost_usd_mean_per_query: 0.0000
+      latency_p50_ms: 8.0
+      latency_p95_ms: 12.0
+      structured_parse_fail_rate: 0.0
+      planner_fallback_rate: 0.0
+      calls_total: 0
+      calls_with_usage: 0
+      calls_with_cost: 0
+    real:
+      provider: openai_compat
+      model: local-openai-proof
+      api_mode_used: responses
+      usage_present: false
+      prompt_tokens:
+      completion_tokens:
+      total_tokens:
+      cost_known: false
+      model_cost_usd_total:
+      model_cost_usd_mean_per_query:
+      latency_p50_ms:
+      latency_p95_ms:
+      structured_parse_fail_rate:
+      planner_fallback_rate:
+      calls_total: 0
+      calls_with_usage: 0
+      calls_with_cost: 0

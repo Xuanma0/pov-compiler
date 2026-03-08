@@ -719,6 +719,63 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    query_bank_compare_dir = tmp_path / "query_bank_compare"
+    (query_bank_compare_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (query_bank_compare_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (query_bank_compare_dir / "tables" / "table_query_bank_compare.csv").write_text(
+        "query_bank_a_id,query_bank_b_id,selected_uids_count,budgets_matched,mrr_strict_a,mrr_strict_b,delta_mrr_strict,distractor_rate_a,distractor_rate_b,critical_fn_rate_a,critical_fn_rate_b,query_strength_coverage_a,query_strength_coverage_b,weak_query_groups_count_a,weak_query_groups_count_b,admission_status_a,admission_status_b,provider_noise_summary_hash_a,provider_noise_summary_hash_b\ncore_real_v1,core_real_v2_candidate,6,True,0.42,0.42,0.00,0.24,0.24,0.21,0.21,0.40,0.80,2,0,partial,partial,hash-a,hash-b\n",
+        encoding="utf-8",
+    )
+    (query_bank_compare_dir / "tables" / "table_query_bank_compare.md").write_text(
+        "# query bank compare\n",
+        encoding="utf-8",
+    )
+    (query_bank_compare_dir / "figures" / "fig_query_bank_delta.png").write_bytes(b"PNG")
+    (query_bank_compare_dir / "figures" / "fig_query_bank_delta.pdf").write_bytes(b"PDF")
+    (query_bank_compare_dir / "figures" / "fig_query_bank_tradeoff.png").write_bytes(b"PNG")
+    (query_bank_compare_dir / "figures" / "fig_query_bank_tradeoff.pdf").write_bytes(b"PDF")
+    (query_bank_compare_dir / "compare_summary.json").write_text(
+        json.dumps(
+            {
+                "alignment_ok": True,
+                "mismatch_reasons": [],
+                "query_bank_a_id": "core_real_v1",
+                "query_bank_b_id": "core_real_v2_candidate",
+                "mean_delta_mrr_strict": 0.0,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (query_bank_compare_dir / "snapshot.json").write_text(
+        json.dumps({"compare_summary": {"alignment_ok": True}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (query_bank_compare_dir / "commands.sh").write_text("python scripts/compare_query_banks.py\n", encoding="utf-8")
+    (query_bank_compare_dir / "README.md").write_text("# query bank compare\n", encoding="utf-8")
+    query_bank_promotion_decision_dir = tmp_path / "query_bank_promotion_decision"
+    (query_bank_promotion_decision_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (query_bank_promotion_decision_dir / "tables" / "table_query_bank_promotion_decision.csv").write_text(
+        "promotion_decision,decision_confidence,primary_basis,secondary_basis,promotion_ready,recommended_next_step\nexpand_sample_first,medium,query_strength_better_but_strict_gain_small,alignment_clean_expand_medium_scale,False,expand_sample_with_v2_candidate\n",
+        encoding="utf-8",
+    )
+    (query_bank_promotion_decision_dir / "tables" / "table_query_bank_promotion_decision.md").write_text(
+        "# query bank promotion decision\n",
+        encoding="utf-8",
+    )
+    (query_bank_promotion_decision_dir / "report.md").write_text("# promotion decision\n", encoding="utf-8")
+    (query_bank_promotion_decision_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "promotion_decision_summary": {
+                    "promotion_decision": "expand_sample_first",
+                    "recommended_next_step": "expand_sample_with_v2_candidate",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (compare_dir / "tables").mkdir(parents=True, exist_ok=True)
     (compare_dir / "figures").mkdir(parents=True, exist_ok=True)
     (compare_dir / "tables" / "table_signal_uplift.csv").write_text(
@@ -1134,6 +1191,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(query_bank_rewrite_dir),
         "--query-bank-selection-dir",
         str(query_bank_selection_dir),
+        "--query-bank-compare-dir",
+        str(query_bank_compare_dir),
+        "--query-bank-promotion-decision-dir",
+        str(query_bank_promotion_decision_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
         "--provider-reachability-dir",
@@ -1193,6 +1254,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Signal Uplift" in report_text
     assert "## Query Bank Rewrite" in report_text
     assert "## Query Bank Selection" in report_text
+    assert "## Query Bank Compare" in report_text
+    assert "## Query Bank Promotion Decision" in report_text
     assert "## Query Strength Audit" in report_text
     assert "## Repeatability Audit" in report_text
     assert "## Sample Size Recommendation" in report_text
@@ -1245,6 +1308,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "query_bank_rewrite" / "query_bank_rewrite" / "core_real_v2_candidate.yaml").exists()
     assert (out_dir / "query_bank_selection" / "tables" / "table_query_bank_selection.csv").exists()
     assert (out_dir / "query_bank_selection" / "report.md").exists()
+    assert (out_dir / "query_bank_compare" / "tables" / "table_query_bank_compare.csv").exists()
+    assert (out_dir / "query_bank_compare" / "compare_summary.json").exists()
+    assert (out_dir / "query_bank_promotion_decision" / "tables" / "table_query_bank_promotion_decision.csv").exists()
+    assert (out_dir / "query_bank_promotion_decision" / "report.md").exists()
     assert (out_dir / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (out_dir / "query_strength_audit" / "report.md").exists()
     assert (out_dir / "provider_reachability" / "summary.json").exists()
@@ -1264,6 +1331,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_signal_uplift_delta.png").exists()
     assert (out_dir / "figures" / "fig_signal_uplift_object_memory.png").exists()
     assert (out_dir / "figures" / "fig_signal_uplift_query_strength.png").exists()
+    assert (out_dir / "figures" / "fig_query_bank_delta.png").exists()
+    assert (out_dir / "figures" / "fig_query_bank_tradeoff.png").exists()
     assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()
     assert (out_dir / "provider_telemetry" / "summary.json").exists()
     assert (out_dir / "provider_telemetry" / "by_variant.csv").exists()
@@ -1376,6 +1445,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
     assert (submission_pack / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
     assert (submission_pack / "signal_uplift" / "snapshot.json").exists()
+    assert (submission_pack / "query_bank_compare" / "compare_summary.json").exists()
+    assert (submission_pack / "query_bank_promotion_decision" / "snapshot.json").exists()
     assert (submission_pack / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (submission_pack / "provider_telemetry" / "summary.json").exists()
     assert (submission_pack / "provider_reachability" / "summary.json").exists()
@@ -1400,6 +1471,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "prompts" / "repository" / "repo_summary_v1.txt").exists()
     assert (submission_pack / "paper_ready" / "canonical" / "tables" / "Table_1.csv").exists()
     assert (submission_pack / "paper_ready" / "signal_uplift" / "report.md").exists()
+    assert (submission_pack / "paper_ready" / "query_bank_compare" / "compare_summary.json").exists()
+    assert (submission_pack / "paper_ready" / "query_bank_promotion_decision" / "report.md").exists()
     submission_readme = (submission_pack / "README.md").read_text(encoding="utf-8")
     assert "Table 1" in submission_readme
     assert "Figure 2" in submission_readme
@@ -1408,6 +1481,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Diagnosis First" in submission_readme
     assert "Delta Audit" in submission_readme
     assert "Signal Uplift" in submission_readme
+    assert "query_bank_compare/" in submission_readme or "query bank compare" in submission_readme.lower()
+    assert "query_bank_promotion_decision/" in submission_readme or "promotion decision" in submission_readme.lower()
     assert "Query Strength Audit" in submission_readme
     assert "Provider Reachability" in submission_readme
     assert "Provider Noise" in submission_readme
@@ -1420,3 +1495,5 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     submission_report_text = (submission_pack / "paper_ready" / "report.md").read_text(encoding="utf-8")
     assert "## Query Bank Rewrite" in submission_report_text
     assert "## Query Bank Selection" in submission_report_text
+    assert "## Query Bank Compare" in submission_report_text
+    assert "## Query Bank Promotion Decision" in submission_report_text

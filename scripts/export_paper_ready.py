@@ -146,6 +146,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--signal-uplift-dir", default=None, help="Optional signal uplift output directory")
     parser.add_argument("--query-bank-rewrite-dir", default=None, help="Optional query-bank rewrite output directory")
     parser.add_argument("--query-bank-selection-dir", default=None, help="Optional query-bank selection output directory")
+    parser.add_argument("--query-bank-compare-dir", default=None, help="Optional query-bank compare output directory")
+    parser.add_argument(
+        "--query-bank-promotion-decision-dir",
+        default=None,
+        help="Optional query-bank promotion decision output directory",
+    )
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
     parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
@@ -2025,6 +2031,93 @@ def main() -> int:
                 query_bank_selection_payload = {}
             query_bank_selection_summary = dict(query_bank_selection_payload.get("selection_summary", {})) if isinstance(query_bank_selection_payload, dict) else {}
 
+    resolved_query_bank_compare_dir: Path | None = None
+    if args.query_bank_compare_dir:
+        resolved_query_bank_compare_dir = Path(args.query_bank_compare_dir)
+    query_bank_compare_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    query_bank_compare_summary: dict[str, Any] = {}
+    if resolved_query_bank_compare_dir:
+        query_bank_compare_panel["enabled"] = True
+        query_bank_compare_panel["source_dir"] = str(resolved_query_bank_compare_dir)
+        dst_root = out_dir / "query_bank_compare"
+        copied = []
+        figures = []
+        for src in (
+            resolved_query_bank_compare_dir / "tables" / "table_query_bank_compare.csv",
+            resolved_query_bank_compare_dir / "tables" / "table_query_bank_compare.md",
+            resolved_query_bank_compare_dir / "figures" / "fig_query_bank_delta.png",
+            resolved_query_bank_compare_dir / "figures" / "fig_query_bank_delta.pdf",
+            resolved_query_bank_compare_dir / "figures" / "fig_query_bank_tradeoff.png",
+            resolved_query_bank_compare_dir / "figures" / "fig_query_bank_tradeoff.pdf",
+            resolved_query_bank_compare_dir / "compare_summary.json",
+            resolved_query_bank_compare_dir / "snapshot.json",
+            resolved_query_bank_compare_dir / "commands.sh",
+            resolved_query_bank_compare_dir / "README.md",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            elif src.suffix.lower() in {".png", ".pdf"} and src.parent.name == "figures":
+                cp = _copy_if_exists(src, dst_root / "figures" / src.name)
+                if cp:
+                    figures.append(cp)
+                    direct = _copy_if_exists(src, out_dir / "figures" / src.name)
+                    if direct:
+                        figure_paths.append(str(direct))
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        query_bank_compare_panel["copied_files"] = copied
+        query_bank_compare_panel["figure_files"] = figures
+        summary_src = resolved_query_bank_compare_dir / "compare_summary.json"
+        if summary_src.exists():
+            try:
+                query_bank_compare_summary = json.loads(summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                query_bank_compare_summary = {}
+
+    resolved_query_bank_promotion_decision_dir: Path | None = None
+    if args.query_bank_promotion_decision_dir:
+        resolved_query_bank_promotion_decision_dir = Path(args.query_bank_promotion_decision_dir)
+    query_bank_promotion_decision_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    query_bank_promotion_decision_summary: dict[str, Any] = {}
+    if resolved_query_bank_promotion_decision_dir:
+        query_bank_promotion_decision_panel["enabled"] = True
+        query_bank_promotion_decision_panel["source_dir"] = str(resolved_query_bank_promotion_decision_dir)
+        dst_root = out_dir / "query_bank_promotion_decision"
+        copied = []
+        for src in (
+            resolved_query_bank_promotion_decision_dir / "tables" / "table_query_bank_promotion_decision.csv",
+            resolved_query_bank_promotion_decision_dir / "tables" / "table_query_bank_promotion_decision.md",
+            resolved_query_bank_promotion_decision_dir / "report.md",
+            resolved_query_bank_promotion_decision_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        query_bank_promotion_decision_panel["copied_files"] = copied
+        snapshot_src = resolved_query_bank_promotion_decision_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                query_bank_promotion_payload = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                query_bank_promotion_payload = {}
+            summary_payload = query_bank_promotion_payload.get("promotion_decision_summary", {})
+            query_bank_promotion_decision_summary = (
+                dict(summary_payload) if isinstance(summary_payload, dict) else {}
+            )
+
     resolved_query_strength_audit_dir: Path | None = None
     if args.query_strength_audit_dir:
         resolved_query_strength_audit_dir = Path(args.query_strength_audit_dir)
@@ -2995,6 +3088,37 @@ def main() -> int:
             )
         else:
             report_lines.append("- query_bank_selection: source provided but artifacts missing.")
+    if resolved_query_bank_compare_dir:
+        if query_bank_compare_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Query Bank Compare",
+                    "",
+                    f"- query_bank_compare_dir: `{query_bank_compare_panel.get('source_dir')}`",
+                    f"- query_bank_compare_files: `{query_bank_compare_panel.get('copied_files')}`",
+                    f"- query_bank_compare_summary: `{json.dumps(query_bank_compare_summary, ensure_ascii=False, sort_keys=True)}`",
+                    f"- alignment_ok: `{query_bank_compare_summary.get('alignment_ok', False)}`",
+                    f"- mismatch_reasons: `{query_bank_compare_summary.get('mismatch_reasons', [])}`",
+                    f"- query_bank_a_id: `{query_bank_compare_summary.get('query_bank_a_id', '')}`",
+                    f"- query_bank_b_id: `{query_bank_compare_summary.get('query_bank_b_id', '')}`",
+                ]
+            )
+        else:
+            report_lines.append("- query_bank_compare: source provided but artifacts missing.")
+    if resolved_query_bank_promotion_decision_dir:
+        if query_bank_promotion_decision_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Query Bank Promotion Decision",
+                    "",
+                    f"- query_bank_promotion_decision_dir: `{query_bank_promotion_decision_panel.get('source_dir')}`",
+                    f"- query_bank_promotion_decision_files: `{query_bank_promotion_decision_panel.get('copied_files')}`",
+                    f"- query_bank_promotion_decision_summary: `{json.dumps(query_bank_promotion_decision_summary, ensure_ascii=False, sort_keys=True)}`",
+                    f"- recommend_use_v2_next: `{bool(query_bank_promotion_decision_summary.get('promotion_decision') == 'promote_v2')}`",
+                ]
+            )
+        else:
+            report_lines.append("- query_bank_promotion_decision: source provided but artifacts missing.")
     if resolved_query_strength_audit_dir:
         if query_strength_audit_panel.get("copied_files"):
             report_lines.extend(
@@ -3241,6 +3365,10 @@ def main() -> int:
             "signal_uplift_dir": str(resolved_signal_uplift_dir) if resolved_signal_uplift_dir else None,
             "query_bank_rewrite_dir": str(resolved_query_bank_rewrite_dir) if resolved_query_bank_rewrite_dir else None,
             "query_bank_selection_dir": str(resolved_query_bank_selection_dir) if resolved_query_bank_selection_dir else None,
+            "query_bank_compare_dir": str(resolved_query_bank_compare_dir) if resolved_query_bank_compare_dir else None,
+            "query_bank_promotion_decision_dir": str(resolved_query_bank_promotion_decision_dir)
+            if resolved_query_bank_promotion_decision_dir
+            else None,
             "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
             "provider_reachability_dir": str(resolved_provider_reachability_dir) if resolved_provider_reachability_dir else None,
@@ -3300,6 +3428,8 @@ def main() -> int:
             "signal_uplift_panel": signal_uplift_panel,
             "query_bank_rewrite_panel": query_bank_rewrite_panel,
             "query_bank_selection_panel": query_bank_selection_panel,
+            "query_bank_compare_panel": query_bank_compare_panel,
+            "query_bank_promotion_decision_panel": query_bank_promotion_decision_panel,
             "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
             "provider_reachability_panel": provider_reachability_panel,
@@ -3342,6 +3472,12 @@ def main() -> int:
             cmd.extend(["--delta-audit-dir", str(resolved_delta_audit_dir)])
         if resolved_signal_uplift_dir:
             cmd.extend(["--signal-uplift-dir", str(resolved_signal_uplift_dir)])
+        if resolved_query_bank_compare_dir:
+            cmd.extend(["--query-bank-compare-dir", str(resolved_query_bank_compare_dir)])
+        if resolved_query_bank_promotion_decision_dir:
+            cmd.extend(
+                ["--query-bank-promotion-decision-dir", str(resolved_query_bank_promotion_decision_dir)]
+            )
         if resolved_query_strength_audit_dir:
             cmd.extend(["--query-strength-audit-dir", str(resolved_query_strength_audit_dir)])
         if resolved_provider_telemetry_dir:

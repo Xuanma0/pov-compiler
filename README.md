@@ -344,6 +344,37 @@ What to read first after a weak stronger-bank run:
 - `signal_uplift/report.md`
 - `compare/compare_summary.json`
 
+## v1.54 Medium-Scale v1 vs v2 Query-Bank Compare
+
+`v1.54` keeps the runtime fixed and moves the next decision into a medium-scale real compare: run `core_real_v1` and `core_real_v2_candidate` on the same UID set, with the same budgets, provider proof, and perception signature, then decide whether `v2` is ready to replace `v1`.
+
+- `configs\benchmarks\v1.54_main_real_v1.yaml` and `v1.54_main_real_v2.yaml` are aligned medium-scale real manifests that differ only in the query bank.
+- `configs\benchmarks\v1.54_main_fake_v1.yaml` and `v1.54_main_fake_v2.yaml` keep the same contract for smoke and CI.
+- `scripts\compare_query_banks.py` fails fast if UID selection, budgets, provider signature, or perception signature do not match.
+- `scripts\report_query_bank_promotion_decision.py` converts the aligned compare into `promote_v2 | keep_v1 | expand_sample_first | consider_sam3_next`.
+- `paper_ready\query_bank_compare\` and `paper_ready\query_bank_promotion_decision\` become the canonical export roots for this promotion gate.
+
+Run the aligned pair:
+
+```text
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.54_main_real_v1.yaml --mode pilot --out_dir data\outputs\v154_main_real_v1
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.54_main_real_v2.yaml --mode pilot --out_dir data\outputs\v154_main_real_v2
+```
+
+Compare v1 vs v2:
+
+```text
+python scripts\compare_query_banks.py --run_a data\outputs\v154_main_real_v1 --run_b data\outputs\v154_main_real_v2 --out_dir data\outputs\v154_query_bank_compare
+python scripts\report_query_bank_promotion_decision.py --compare_dir data\outputs\v154_query_bank_compare --out_dir data\outputs\v154_query_bank_compare\promotion_decision
+```
+
+What to read first after a weak medium-scale compare:
+
+- `compare/compare_summary.json`
+- `compare/tables/table_query_bank_compare.csv`
+- `promotion_decision/tables/table_query_bank_promotion_decision.csv`
+- `paper_ready/query_bank_compare/README.md`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion
