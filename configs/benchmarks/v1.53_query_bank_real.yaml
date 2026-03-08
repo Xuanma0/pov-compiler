@@ -1,0 +1,34 @@
+suite_id: v1.53_query_bank_real
+suite_version: "1.53"
+description: Small real stronger query-bank pilot comparing stub baseline vs local YOLO26n uplift under the signal-aware v2 candidate bank.
+query_bank: configs/queries/core_real_v2_candidate.yaml
+video: D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4
+rewrite:
+  source_query_bank: configs/queries/core_real_v1.yaml
+  signal_seed_query_bank: configs/queries/signal_uplift_core_v1.yaml
+  evidence_dirs:
+    query_strength_suite: data/outputs/v151_main_real_repeat
+    signal_uplift_suite: data/outputs/v152_signal_uplift_real
+report:
+  thresholds:
+    object_memory_items_delta_min: 1
+    lost_object_support_delta_min: 0.10
+    query_strength_delta_min: 0.10
+baseline:
+  label: baseline
+  source: offline
+  config: configs/default.yaml
+  perception_backend: stub
+  sample_fps: 4.0
+  perception_fps: 4.0
+  perception_max_frames: 32
+  fallback_to_stub: false
+uplift:
+  label: uplift
+  source: offline
+  config: configs/perception/yolo26n_local.yaml
+  perception_backend: real
+  sample_fps: 4.0
+  perception_fps: 4.0
+  perception_max_frames: 32
+  fallback_to_stub: true

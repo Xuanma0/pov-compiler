@@ -622,6 +622,7 @@ def build_signal_uplift_report(
     suite_uplift = suite_summary.get("uplift", {}) if isinstance(suite_summary.get("uplift"), dict) else {}
     suite_baseline = suite_summary.get("baseline", {}) if isinstance(suite_summary.get("baseline"), dict) else {}
     baseline_uplift = baseline_summary.get("uplift", {}) if isinstance(baseline_summary.get("uplift"), dict) else {}
+    baseline_baseline = baseline_summary.get("baseline", {}) if isinstance(baseline_summary.get("baseline"), dict) else {}
 
     object_coverage_improved = bool(
         int(suite_uplift.get("object_detections_total", 0)) > int(suite_baseline.get("object_detections_total", 0))
@@ -640,25 +641,48 @@ def build_signal_uplift_report(
         or int(suite_uplift.get("weak_query_groups_count", 0))
         < int(suite_baseline.get("weak_query_groups_count", 0))
     )
+    query_strength_vs_previous_bank = round(
+        float(suite_uplift.get("query_strength_coverage_rate", 0.0))
+        - float(baseline_uplift.get("query_strength_coverage_rate", 0.0)),
+        6,
+    )
+    weak_groups_vs_previous_bank = int(suite_uplift.get("weak_query_groups_count", 0)) - int(
+        baseline_uplift.get("weak_query_groups_count", 0)
+    )
+    has_bank_comparison = bool(
+        str(baseline_summary.get("query_bank_id", "")).strip()
+        and str(suite_summary.get("query_bank_id", "")).strip()
+    )
+    stronger_bank_effective = bool(
+        has_bank_comparison and (query_strength_vs_previous_bank > 0.0 or weak_groups_vs_previous_bank < 0)
+    )
 
-    next_action = str(suite_summary.get("next_action_recommendation", "")).strip()
-    if not next_action:
-        next_action = _next_action_recommendation(
-            baseline_metrics=suite_baseline,
-            uplift_metrics=suite_uplift,
-            signal_uplift_status=str(suite_summary.get("signal_uplift_status", "no_change")),
-        )
-    sam3_next = bool(next_action == "need_segmentation_support")
+    next_action = str(suite_summary.get("next_action_recommendation", "")).strip() or "keep_v1_and_expand_sample"
+    if has_bank_comparison and str(suite_summary.get("signal_uplift_status", "no_change")) == "improved" and stronger_bank_effective:
+        next_action = "promote_v2_candidate"
+    elif has_bank_comparison and str(suite_summary.get("signal_uplift_status", "no_change")) == "improved" and not stronger_bank_effective:
+        next_action = "signal_improved_but_query_still_weak"
+    sam3_next = bool(
+        not stronger_bank_effective
+        and str(suite_summary.get("next_action_recommendation", "")).strip() == "need_segmentation_support"
+    )
 
     rows = [
         {
             "suite_id": str(suite_summary.get("suite_id", suite_root.name)),
             "baseline_suite_id": str(baseline_summary.get("suite_id", baseline_root.name)),
+            "baseline_query_bank_id": str(baseline_summary.get("query_bank_id", "")),
+            "baseline_query_bank_hash": str(baseline_summary.get("query_bank_hash", "")),
+            "candidate_query_bank_id": str(suite_summary.get("query_bank_id", "")),
+            "candidate_query_bank_hash": str(suite_summary.get("query_bank_hash", "")),
             "signal_uplift_status": str(suite_summary.get("signal_uplift_status", "no_change")),
             "object_coverage_improved": object_coverage_improved,
             "object_memory_improved": object_memory_improved,
             "lost_object_support_improved": lost_object_improved,
             "query_strength_improved": query_strength_improved,
+            "query_strength_vs_previous_bank": query_strength_vs_previous_bank,
+            "weak_groups_vs_previous_bank": weak_groups_vs_previous_bank,
+            "stronger_bank_effective": stronger_bank_effective,
             "baseline_vs_fake_query_strength_gap": round(
                 float(suite_uplift.get("query_strength_coverage_rate", 0.0))
                 - float(baseline_uplift.get("query_strength_coverage_rate", 0.0)),
@@ -674,15 +698,23 @@ def build_signal_uplift_report(
         "baseline_dir": str(baseline_root),
         "suite_id": str(suite_summary.get("suite_id", suite_root.name)),
         "baseline_suite_id": str(baseline_summary.get("suite_id", baseline_root.name)),
+        "baseline_query_bank_id": str(baseline_summary.get("query_bank_id", "")),
+        "baseline_query_bank_hash": str(baseline_summary.get("query_bank_hash", "")),
+        "candidate_query_bank_id": str(suite_summary.get("query_bank_id", "")),
+        "candidate_query_bank_hash": str(suite_summary.get("query_bank_hash", "")),
         "signal_uplift_status": str(suite_summary.get("signal_uplift_status", "no_change")),
         "object_coverage_improved": object_coverage_improved,
         "object_memory_improved": object_memory_improved,
         "lost_object_support_improved": lost_object_improved,
         "query_strength_improved": query_strength_improved,
+        "query_strength_vs_previous_bank": query_strength_vs_previous_bank,
+        "weak_groups_vs_previous_bank": weak_groups_vs_previous_bank,
+        "stronger_bank_effective": stronger_bank_effective,
         "next_action_recommendation": next_action,
         "should_try_sam3_next": sam3_next,
         "suite_compare_summary": suite_summary,
         "baseline_compare_summary": baseline_summary,
+        "previous_bank_baseline_summary": baseline_baseline,
     }
     return lib.DataFrame(rows), snapshot
 
@@ -740,11 +772,18 @@ def write_signal_uplift_report_outputs(
         "",
         f"- suite_dir: `{Path(suite_dir).resolve()}`",
         f"- baseline_dir: `{Path(baseline_dir).resolve()}`",
+        f"- baseline_query_bank_id: `{snapshot.get('baseline_query_bank_id', '')}`",
+        f"- baseline_query_bank_hash: `{snapshot.get('baseline_query_bank_hash', '')}`",
+        f"- candidate_query_bank_id: `{snapshot.get('candidate_query_bank_id', '')}`",
+        f"- candidate_query_bank_hash: `{snapshot.get('candidate_query_bank_hash', '')}`",
         f"- signal_uplift_status: `{snapshot.get('signal_uplift_status', 'no_change')}`",
         f"- object_coverage_improved: `{snapshot.get('object_coverage_improved', False)}`",
         f"- object_memory_improved: `{snapshot.get('object_memory_improved', False)}`",
         f"- lost_object_support_improved: `{snapshot.get('lost_object_support_improved', False)}`",
         f"- query_strength_improved: `{snapshot.get('query_strength_improved', False)}`",
+        f"- query_strength_vs_previous_bank: `{snapshot.get('query_strength_vs_previous_bank', 0.0)}`",
+        f"- weak_groups_vs_previous_bank: `{snapshot.get('weak_groups_vs_previous_bank', 0)}`",
+        f"- stronger_bank_effective: `{snapshot.get('stronger_bank_effective', False)}`",
         f"- next_action_recommendation: `{snapshot.get('next_action_recommendation', '')}`",
         f"- should_try_sam3_next: `{snapshot.get('should_try_sam3_next', False)}`",
         "",

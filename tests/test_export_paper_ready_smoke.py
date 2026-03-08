@@ -657,6 +657,68 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    query_bank_rewrite_dir = tmp_path / "query_bank_rewrite"
+    (query_bank_rewrite_dir / "query_bank_rewrite").mkdir(parents=True, exist_ok=True)
+    (query_bank_rewrite_dir / "query_bank_rewrite" / "rewrite_summary.json").write_text(
+        json.dumps(
+            {
+                "candidate_count": 6,
+                "analysis_only_count": 2,
+                "dropped_count": 0,
+                "source_query_bank_id": "core_real_v1",
+                "source_query_bank_hash": "f988b8c1a12f293bcf90074b46c5390d9c07acb0990e4783a0347c2518216ec6",
+                "rewrite_confidence": "medium",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (query_bank_rewrite_dir / "query_bank_rewrite" / "core_real_v2_candidate.yaml").write_text(
+        "query_bank_id: core_real_v2_candidate\nquery_bank_version: '2-candidate'\nquery_bank_hash: abc123\n",
+        encoding="utf-8",
+    )
+    (query_bank_rewrite_dir / "query_bank_rewrite" / "core_real_v2_analysis_only.yaml").write_text(
+        "query_bank_id: core_real_v2_analysis_only\nquery_bank_version: '2-candidate'\nquery_bank_hash: def456\n",
+        encoding="utf-8",
+    )
+    (query_bank_rewrite_dir / "query_bank_rewrite" / "report.md").write_text("# query bank rewrite\n", encoding="utf-8")
+    (query_bank_rewrite_dir / "query_bank_rewrite" / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "rewrite_summary": {
+                    "candidate_count": 6,
+                    "analysis_only_count": 2,
+                    "dropped_count": 0,
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    query_bank_selection_dir = tmp_path / "query_bank_selection"
+    (query_bank_selection_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (query_bank_selection_dir / "tables" / "table_query_bank_selection.csv").write_text(
+        "query_id,source_group,decision,selection_reason,signal_support,query_strength_flag,delta_support,uplift_support\nv2_decision_pick_up_last,decision,candidate,kept,decision_signal,uplift_candidate_group,increase_sample_size,signal_uplift_improved\nrepo_summary_place,repo_summary,analysis_only,kept_for_analysis_only,repo_summary_weak,analysis_only_group,no_matched_tasks,signal_uplift_not_consumed\n",
+        encoding="utf-8",
+    )
+    (query_bank_selection_dir / "tables" / "table_query_bank_selection.md").write_text(
+        "# query bank selection\n",
+        encoding="utf-8",
+    )
+    (query_bank_selection_dir / "report.md").write_text("# query bank selection report\n", encoding="utf-8")
+    (query_bank_selection_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "selection_summary": {
+                    "candidate_count": 6,
+                    "analysis_only_count": 2,
+                    "drop_count": 0,
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (compare_dir / "tables").mkdir(parents=True, exist_ok=True)
     (compare_dir / "figures").mkdir(parents=True, exist_ok=True)
     (compare_dir / "tables" / "table_signal_uplift.csv").write_text(
@@ -1068,6 +1130,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(delta_audit_dir),
         "--signal-uplift-dir",
         str(signal_uplift_dir),
+        "--query-bank-rewrite-dir",
+        str(query_bank_rewrite_dir),
+        "--query-bank-selection-dir",
+        str(query_bank_selection_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
         "--provider-reachability-dir",
@@ -1125,6 +1191,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Result Diagnosis" in report_text
     assert "## Delta Audit" in report_text
     assert "## Signal Uplift" in report_text
+    assert "## Query Bank Rewrite" in report_text
+    assert "## Query Bank Selection" in report_text
     assert "## Query Strength Audit" in report_text
     assert "## Repeatability Audit" in report_text
     assert "## Sample Size Recommendation" in report_text
@@ -1173,6 +1241,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "delta_audit" / "report.md").exists()
     assert (out_dir / "signal_uplift" / "tables" / "table_signal_uplift_summary.csv").exists()
     assert (out_dir / "signal_uplift" / "report.md").exists()
+    assert (out_dir / "query_bank_rewrite" / "query_bank_rewrite" / "rewrite_summary.json").exists()
+    assert (out_dir / "query_bank_rewrite" / "query_bank_rewrite" / "core_real_v2_candidate.yaml").exists()
+    assert (out_dir / "query_bank_selection" / "tables" / "table_query_bank_selection.csv").exists()
+    assert (out_dir / "query_bank_selection" / "report.md").exists()
     assert (out_dir / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (out_dir / "query_strength_audit" / "report.md").exists()
     assert (out_dir / "provider_reachability" / "summary.json").exists()
@@ -1345,3 +1417,6 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Query Uplift Candidates" in submission_readme
     assert "Query Promotion" in submission_readme
     assert "Golden Real Sample" in submission_readme
+    submission_report_text = (submission_pack / "paper_ready" / "report.md").read_text(encoding="utf-8")
+    assert "## Query Bank Rewrite" in submission_report_text
+    assert "## Query Bank Selection" in submission_report_text

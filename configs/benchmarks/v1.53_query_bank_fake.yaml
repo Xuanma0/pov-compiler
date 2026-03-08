@@ -1,0 +1,47 @@
+suite_id: v1.53_query_bank_fake
+suite_version: "1.53"
+description: Fixture-backed stronger query-bank pilot comparing stub baseline vs local YOLO26n uplift under the signal-aware v2 candidate bank.
+query_bank: configs/queries/core_real_v2_candidate.yaml
+rewrite:
+  source_query_bank: configs/queries/core_real_v1.yaml
+  signal_seed_query_bank: configs/queries/signal_uplift_core_v1.yaml
+  evidence_dirs:
+    query_strength_suite: data/outputs/v151_main_real_repeat
+    signal_uplift_suite: data/outputs/v152_signal_uplift_fake
+report:
+  thresholds:
+    object_memory_items_delta_min: 1
+    lost_object_support_delta_min: 0.10
+    query_strength_delta_min: 0.10
+baseline:
+  label: baseline
+  source: fixture
+  perception_backend: stub
+  perception_model_name: stub_perception_v0
+  perception_model_path: ""
+  cache_used: false
+  fixture_metrics:
+    object_detections_total: 24
+    object_vocab_size: 2
+    object_memory_items_total: 1
+    lost_object_query_support_rate: 0.18
+    query_strength:
+      coverage_rate: 0.34
+      weak_query_groups_count: 2
+    delta_audit_main_recommendation: increase_sample_size
+uplift:
+  label: uplift
+  source: fixture
+  perception_backend: real
+  perception_model_name: yolo26n
+  perception_model_path: D:\BYES\models\yolo26\yolo26n.pt
+  cache_used: false
+  fixture_metrics:
+    object_detections_total: 68
+    object_vocab_size: 7
+    object_memory_items_total: 6
+    lost_object_query_support_rate: 0.82
+    query_strength:
+      coverage_rate: 0.90
+      weak_query_groups_count: 0
+    delta_audit_main_recommendation: keep_yolo26n_and_scale_real

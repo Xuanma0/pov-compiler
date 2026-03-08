@@ -301,6 +301,49 @@ What to read first when the live provider is fine but the real result is still w
 
 If `signal_uplift_status=improved` but `next_action_recommendation=query_bank_still_too_weak`, keep YOLO26n and defer SAM3 to the next segmentation-focused milestone instead of widening the current provider/result-layer scope.
 
+## v1.53 Signal-Aware Query Bank Rewrite
+
+`v1.53` keeps the `YOLO26n` uplift runtime unchanged and moves the next decision back to the result layer: rewrite the main-result query bank so stronger perception signal is actually consumed by stronger queries.
+
+- `configs\queries\core_real_v2_candidate.yaml` is the stronger-bank candidate. It does not overwrite `core_real_v1`.
+- `configs\queries\core_real_v2_analysis_only.yaml` keeps weak-but-informative queries out of the main candidate bank.
+- `scripts\rewrite_query_bank.py` derives the candidate bank from `query_strength_audit`, `query_uplift_candidates`, `signal_uplift`, `delta_audit`, and `admission_calibration`.
+- `scripts\report_query_bank_selection.py` writes the explicit `candidate | analysis_only | drop` decision table.
+- `scripts\run_signal_uplift_pilot.py` can now run the same uplift compare under the stronger candidate bank, preserving query-bank metadata in `compare_summary.json` and `manifest/query_bank_lock.json`.
+- `paper_ready\query_bank_rewrite\` and `paper_ready\query_bank_selection\` are the canonical export roots for this rewrite step.
+
+Fake stronger-bank pilot:
+
+```text
+python scripts\run_signal_uplift_pilot.py --manifest configs\benchmarks\v1.53_query_bank_fake.yaml --out_dir data\outputs\v153_query_bank_fake
+```
+
+Real stronger-bank pilot:
+
+```text
+python scripts\run_signal_uplift_pilot.py --manifest configs\benchmarks\v1.53_query_bank_real.yaml --out_dir data\outputs\v153_query_bank_real
+```
+
+Rewrite the candidate bank from current evidence:
+
+```text
+python scripts\rewrite_query_bank.py --suite-dir data\outputs\v153_query_bank_real --out_dir data\outputs\v153_query_bank_real\query_bank_rewrite
+python scripts\report_query_bank_selection.py --suite-dir data\outputs\v153_query_bank_real --out_dir data\outputs\v153_query_bank_real\query_bank_selection
+```
+
+Signal-uplift summary against the previous bank:
+
+```text
+python scripts\report_signal_uplift.py --suite_dir data\outputs\v153_query_bank_real --baseline_dir data\outputs\v152_signal_uplift_real --out_dir data\outputs\v153_query_bank_real\signal_uplift
+```
+
+What to read first after a weak stronger-bank run:
+
+- `query_bank_rewrite/rewrite_summary.json`
+- `query_bank_selection/tables/table_query_bank_selection.csv`
+- `signal_uplift/report.md`
+- `compare/compare_summary.json`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

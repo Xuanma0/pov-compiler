@@ -15,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from pov_compiler.bench.query_bank import QueryBank
+from pov_compiler.bench.query_bank import copy_query_bank_files, load_query_banks_from_manifest, write_query_bank_lock
 from pov_compiler.bench.reporting.signal_uplift import (
     compute_variant_signal_metrics,
     write_signal_uplift_compare_outputs,
@@ -121,6 +122,24 @@ def _provider_probe_note() -> dict[str, Any]:
 def _load_query_bank(manifest_payload: dict[str, Any], manifest_path: Path) -> QueryBank:
     query_bank_path = _resolve_path(str(manifest_payload.get("query_bank", "")).strip(), manifest_path.parent)
     return QueryBank.from_path(query_bank_path)
+
+
+def _signal_uplift_query_bank_lock(
+    *,
+    manifest_payload: dict[str, Any],
+    manifest_path: Path,
+    query_bank: QueryBank,
+) -> dict[str, Any]:
+    query_bank_path = _resolve_path(str(manifest_payload.get("query_bank", "")).strip(), manifest_path.parent)
+    lock_payload = load_query_banks_from_manifest(manifest_path)
+    if lock_payload.get("primary"):
+        return lock_payload
+    return {
+        "primary": query_bank.build_lock(query_bank_path, is_primary=True),
+        "banks": [query_bank.build_lock(query_bank_path, is_primary=True)],
+        "groups": [],
+        "top_k": None,
+    }
 
 
 def _run_fixture_variant(
@@ -234,6 +253,13 @@ def main() -> int:
     manifest_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(manifest_path, manifest_dir / "experiment_manifest.yaml")
     query_bank = _load_query_bank(manifest_payload, manifest_path)
+    query_bank_lock_payload = _signal_uplift_query_bank_lock(
+        manifest_payload=manifest_payload,
+        manifest_path=manifest_path,
+        query_bank=query_bank,
+    )
+    write_query_bank_lock(query_bank_lock_payload, manifest_dir / "query_bank_lock.json")
+    copy_query_bank_files(query_bank_lock_payload, manifest_dir / "query_banks")
     _write_json(
         manifest_dir / "manifest_resolved.json",
         {
@@ -242,6 +268,7 @@ def main() -> int:
             "query_bank_id": query_bank.query_bank_id,
             "query_bank_version": query_bank.query_bank_version,
             "query_bank_hash": query_bank.query_bank_hash,
+            "rewrite": manifest_payload.get("rewrite", {}),
         },
     )
 

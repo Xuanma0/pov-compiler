@@ -144,6 +144,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--signal-uplift-dir", default=None, help="Optional signal uplift output directory")
+    parser.add_argument("--query-bank-rewrite-dir", default=None, help="Optional query-bank rewrite output directory")
+    parser.add_argument("--query-bank-selection-dir", default=None, help="Optional query-bank selection output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
     parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
@@ -1947,6 +1949,82 @@ def main() -> int:
             except Exception:
                 signal_uplift_snapshot = {}
 
+    resolved_query_bank_rewrite_dir: Path | None = None
+    if args.query_bank_rewrite_dir:
+        resolved_query_bank_rewrite_dir = Path(args.query_bank_rewrite_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "query_bank_rewrite"
+        if candidate.exists():
+            resolved_query_bank_rewrite_dir = candidate
+    query_bank_rewrite_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    query_bank_rewrite_summary: dict[str, Any] = {}
+    if resolved_query_bank_rewrite_dir:
+        query_bank_rewrite_panel["enabled"] = True
+        query_bank_rewrite_panel["source_dir"] = str(resolved_query_bank_rewrite_dir)
+        dst_root = out_dir / "query_bank_rewrite"
+        copied = []
+        for src in (
+            resolved_query_bank_rewrite_dir / "query_bank_rewrite" / "rewrite_summary.json",
+            resolved_query_bank_rewrite_dir / "query_bank_rewrite" / "core_real_v2_candidate.yaml",
+            resolved_query_bank_rewrite_dir / "query_bank_rewrite" / "core_real_v2_analysis_only.yaml",
+            resolved_query_bank_rewrite_dir / "query_bank_rewrite" / "report.md",
+            resolved_query_bank_rewrite_dir / "query_bank_rewrite" / "snapshot.json",
+        ):
+            relative_name = src.name if src.parent.name != "query_bank_rewrite" else str(Path("query_bank_rewrite") / src.name)
+            cp = _copy_if_exists(src, dst_root / relative_name)
+            if cp:
+                copied.append(cp)
+        query_bank_rewrite_panel["copied_files"] = copied
+        summary_src = resolved_query_bank_rewrite_dir / "query_bank_rewrite" / "rewrite_summary.json"
+        if summary_src.exists():
+            try:
+                query_bank_rewrite_summary = json.loads(summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                query_bank_rewrite_summary = {}
+
+    resolved_query_bank_selection_dir: Path | None = None
+    if args.query_bank_selection_dir:
+        resolved_query_bank_selection_dir = Path(args.query_bank_selection_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "query_bank_selection"
+        if candidate.exists():
+            resolved_query_bank_selection_dir = candidate
+    query_bank_selection_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    query_bank_selection_summary: dict[str, Any] = {}
+    if resolved_query_bank_selection_dir:
+        query_bank_selection_panel["enabled"] = True
+        query_bank_selection_panel["source_dir"] = str(resolved_query_bank_selection_dir)
+        dst_root = out_dir / "query_bank_selection"
+        copied = []
+        for src in (
+            resolved_query_bank_selection_dir / "tables" / "table_query_bank_selection.csv",
+            resolved_query_bank_selection_dir / "tables" / "table_query_bank_selection.md",
+            resolved_query_bank_selection_dir / "report.md",
+            resolved_query_bank_selection_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        query_bank_selection_panel["copied_files"] = copied
+        snapshot_src = resolved_query_bank_selection_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                query_bank_selection_payload = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                query_bank_selection_payload = {}
+            query_bank_selection_summary = dict(query_bank_selection_payload.get("selection_summary", {})) if isinstance(query_bank_selection_payload, dict) else {}
+
     resolved_query_strength_audit_dir: Path | None = None
     if args.query_strength_audit_dir:
         resolved_query_strength_audit_dir = Path(args.query_strength_audit_dir)
@@ -2888,6 +2966,35 @@ def main() -> int:
             )
         else:
             report_lines.append("- signal_uplift: source provided but artifacts missing.")
+    if resolved_query_bank_rewrite_dir:
+        if query_bank_rewrite_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Query Bank Rewrite",
+                    "",
+                    f"- query_bank_rewrite_dir: `{query_bank_rewrite_panel.get('source_dir')}`",
+                    f"- query_bank_rewrite_files: `{query_bank_rewrite_panel.get('copied_files')}`",
+                    f"- query_bank_rewrite_summary: `{json.dumps(query_bank_rewrite_summary, ensure_ascii=False, sort_keys=True)}`",
+                    f"- stronger_bank_source: `{query_bank_rewrite_summary.get('source_query_bank_id', '')}`",
+                    f"- stronger_bank_rewrite_confidence: `{query_bank_rewrite_summary.get('rewrite_confidence', 'low')}`",
+                ]
+            )
+        else:
+            report_lines.append("- query_bank_rewrite: source provided but artifacts missing.")
+    if resolved_query_bank_selection_dir:
+        if query_bank_selection_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Query Bank Selection",
+                    "",
+                    f"- query_bank_selection_dir: `{query_bank_selection_panel.get('source_dir')}`",
+                    f"- query_bank_selection_files: `{query_bank_selection_panel.get('copied_files')}`",
+                    f"- query_bank_selection_summary: `{json.dumps(query_bank_selection_summary, ensure_ascii=False, sort_keys=True)}`",
+                    f"- recommend_replace_v1_with_v2: `{bool(query_bank_selection_summary.get('candidate_count', 0) > 0 and signal_uplift_snapshot.get('next_action_recommendation') in {'promote_v2_candidate', 'query_bank_still_too_weak'})}`",
+                ]
+            )
+        else:
+            report_lines.append("- query_bank_selection: source provided but artifacts missing.")
     if resolved_query_strength_audit_dir:
         if query_strength_audit_panel.get("copied_files"):
             report_lines.extend(
@@ -3132,6 +3239,8 @@ def main() -> int:
             "result_diagnosis_dir": str(resolved_result_diagnosis_dir) if resolved_result_diagnosis_dir else None,
             "delta_audit_dir": str(resolved_delta_audit_dir) if resolved_delta_audit_dir else None,
             "signal_uplift_dir": str(resolved_signal_uplift_dir) if resolved_signal_uplift_dir else None,
+            "query_bank_rewrite_dir": str(resolved_query_bank_rewrite_dir) if resolved_query_bank_rewrite_dir else None,
+            "query_bank_selection_dir": str(resolved_query_bank_selection_dir) if resolved_query_bank_selection_dir else None,
             "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
             "provider_reachability_dir": str(resolved_provider_reachability_dir) if resolved_provider_reachability_dir else None,
@@ -3189,6 +3298,8 @@ def main() -> int:
             "result_diagnosis_panel": result_diagnosis_panel,
             "delta_audit_panel": delta_audit_panel,
             "signal_uplift_panel": signal_uplift_panel,
+            "query_bank_rewrite_panel": query_bank_rewrite_panel,
+            "query_bank_selection_panel": query_bank_selection_panel,
             "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
             "provider_reachability_panel": provider_reachability_panel,
