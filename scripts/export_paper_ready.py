@@ -143,6 +143,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
+    parser.add_argument("--signal-uplift-dir", default=None, help="Optional signal uplift output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
     parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
@@ -1867,6 +1868,85 @@ def main() -> int:
             except Exception:
                 admission_calibration_snapshot = {}
 
+    resolved_signal_uplift_dir: Path | None = None
+    if args.signal_uplift_dir:
+        resolved_signal_uplift_dir = Path(args.signal_uplift_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "signal_uplift"
+        if candidate.exists():
+            resolved_signal_uplift_dir = candidate
+    signal_uplift_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    signal_uplift_snapshot: dict[str, Any] = {}
+    if resolved_signal_uplift_dir:
+        signal_uplift_panel["enabled"] = True
+        signal_uplift_panel["source_dir"] = str(resolved_signal_uplift_dir)
+        dst_root = out_dir / "signal_uplift"
+        copied = []
+        for src in (
+            resolved_signal_uplift_dir / "tables" / "table_signal_uplift_summary.csv",
+            resolved_signal_uplift_dir / "tables" / "table_signal_uplift_summary.md",
+            resolved_signal_uplift_dir / "figures" / "fig_signal_uplift_summary.png",
+            resolved_signal_uplift_dir / "figures" / "fig_signal_uplift_summary.pdf",
+            resolved_signal_uplift_dir / "report.md",
+            resolved_signal_uplift_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+                if cp:
+                    copied.append(cp)
+        for src in (
+            compare_dir / "tables" / "table_signal_uplift.csv",
+            compare_dir / "tables" / "table_signal_uplift.md",
+            compare_dir / "figures" / "fig_signal_uplift_delta.png",
+            compare_dir / "figures" / "fig_signal_uplift_delta.pdf",
+            compare_dir / "figures" / "fig_signal_uplift_object_memory.png",
+            compare_dir / "figures" / "fig_signal_uplift_object_memory.pdf",
+            compare_dir / "figures" / "fig_signal_uplift_query_strength.png",
+            compare_dir / "figures" / "fig_signal_uplift_query_strength.pdf",
+            compare_dir / "compare_summary.json",
+            compare_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                stem_name = src.name
+                if src.parent == compare_dir and src.name == "snapshot.json":
+                    stem_name = "compare_snapshot.json"
+                elif src.parent == compare_dir and src.name == "compare_summary.json":
+                    stem_name = "compare_summary.json"
+                cp = _copy_if_exists(src, dst_root / stem_name)
+                if cp:
+                    copied.append(cp)
+        signal_uplift_panel["copied_files"] = copied
+        snapshot_src = resolved_signal_uplift_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                signal_uplift_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                signal_uplift_snapshot = {}
+
     resolved_query_strength_audit_dir: Path | None = None
     if args.query_strength_audit_dir:
         resolved_query_strength_audit_dir = Path(args.query_strength_audit_dir)
@@ -2788,6 +2868,26 @@ def main() -> int:
             )
         else:
             report_lines.append("- delta_audit: source provided but artifacts missing.")
+    if resolved_signal_uplift_dir:
+        if signal_uplift_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Signal Uplift",
+                    "",
+                    f"- signal_uplift_dir: `{signal_uplift_panel.get('source_dir')}`",
+                    f"- signal_uplift_files: `{signal_uplift_panel.get('copied_files')}`",
+                    f"- signal_uplift_status: `{signal_uplift_snapshot.get('signal_uplift_status', 'no_change')}`",
+                    f"- object_coverage_improved: `{signal_uplift_snapshot.get('object_coverage_improved', False)}`",
+                    f"- object_memory_improved: `{signal_uplift_snapshot.get('object_memory_improved', False)}`",
+                    f"- lost_object_support_improved: `{signal_uplift_snapshot.get('lost_object_support_improved', False)}`",
+                    f"- query_strength_improved: `{signal_uplift_snapshot.get('query_strength_improved', False)}`",
+                    f"- signal_uplift_recommendation: `{signal_uplift_snapshot.get('next_action_recommendation', '')}`",
+                    f"- should_try_sam3_next: `{signal_uplift_snapshot.get('should_try_sam3_next', False)}`",
+                    f"- signal_uplift_report: `{Path(signal_uplift_panel.get('source_dir', '')) / 'report.md' if signal_uplift_panel.get('source_dir') else None}`",
+                ]
+            )
+        else:
+            report_lines.append("- signal_uplift: source provided but artifacts missing.")
     if resolved_query_strength_audit_dir:
         if query_strength_audit_panel.get("copied_files"):
             report_lines.extend(
@@ -3031,6 +3131,7 @@ def main() -> int:
             "admission_calibration_dir": str(resolved_admission_calibration_dir) if resolved_admission_calibration_dir else None,
             "result_diagnosis_dir": str(resolved_result_diagnosis_dir) if resolved_result_diagnosis_dir else None,
             "delta_audit_dir": str(resolved_delta_audit_dir) if resolved_delta_audit_dir else None,
+            "signal_uplift_dir": str(resolved_signal_uplift_dir) if resolved_signal_uplift_dir else None,
             "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
             "provider_reachability_dir": str(resolved_provider_reachability_dir) if resolved_provider_reachability_dir else None,
@@ -3087,6 +3188,7 @@ def main() -> int:
             "admission_calibration_panel": admission_calibration_panel,
             "result_diagnosis_panel": result_diagnosis_panel,
             "delta_audit_panel": delta_audit_panel,
+            "signal_uplift_panel": signal_uplift_panel,
             "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
             "provider_reachability_panel": provider_reachability_panel,
@@ -3127,6 +3229,8 @@ def main() -> int:
             cmd.extend(["--result-diagnosis-dir", str(resolved_result_diagnosis_dir)])
         if resolved_delta_audit_dir:
             cmd.extend(["--delta-audit-dir", str(resolved_delta_audit_dir)])
+        if resolved_signal_uplift_dir:
+            cmd.extend(["--signal-uplift-dir", str(resolved_signal_uplift_dir)])
         if resolved_query_strength_audit_dir:
             cmd.extend(["--query-strength-audit-dir", str(resolved_query_strength_audit_dir)])
         if resolved_provider_telemetry_dir:

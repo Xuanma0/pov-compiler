@@ -1,0 +1,41 @@
+suite_id: v1.52_signal_uplift_fake
+suite_version: "1.52"
+description: Fixture-backed signal uplift pilot for comparing baseline vs local-yolo uplift semantics.
+query_bank: configs/queries/signal_uplift_core_v1.yaml
+report:
+  thresholds:
+    object_memory_items_delta_min: 1
+    lost_object_support_delta_min: 0.10
+    query_strength_delta_min: 0.10
+baseline:
+  label: baseline
+  source: fixture
+  perception_backend: stub
+  perception_model_name: stub_perception_v0
+  perception_model_path: ""
+  cache_used: false
+  fixture_metrics:
+    object_detections_total: 24
+    object_vocab_size: 2
+    object_memory_items_total: 1
+    lost_object_query_support_rate: 0.25
+    query_strength:
+      coverage_rate: 0.40
+      weak_query_groups_count: 3
+    delta_audit_main_recommendation: increase_signal_coverage
+uplift:
+  label: uplift
+  source: fixture
+  perception_backend: real
+  perception_model_name: yolo26n
+  perception_model_path: D:\BYES\models\yolo26\yolo26n.pt
+  cache_used: false
+  fixture_metrics:
+    object_detections_total: 68
+    object_vocab_size: 7
+    object_memory_items_total: 4
+    lost_object_query_support_rate: 0.75
+    query_strength:
+      coverage_rate: 0.78
+      weak_query_groups_count: 1
+    delta_audit_main_recommendation: increase_sample_size

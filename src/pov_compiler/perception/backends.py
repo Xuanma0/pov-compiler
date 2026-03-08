@@ -14,6 +14,91 @@ class PerceptionBackend(Protocol):
         """Return frame-level perception result with keys: objects, hands."""
 
 
+def _resolve_existing_path(raw_value: str | None) -> Path | None:
+    text = str(raw_value or "").strip()
+    if not text:
+        return None
+    path = Path(text)
+    if path.exists():
+        return path.resolve()
+    return None
+
+
+def _resolve_hand_task_path(
+    *,
+    hand_task_model_path: str | None = None,
+    hand_task_model_candidates: list[str] | None = None,
+) -> Path | None:
+    candidates: list[str] = []
+    if hand_task_model_path:
+        candidates.append(str(hand_task_model_path))
+    if hand_task_model_candidates:
+        candidates.extend([str(item) for item in hand_task_model_candidates if str(item).strip()])
+    candidates.extend(
+        [
+            "assets/mediapipe/hand_landmarker.task",
+            "models/mediapipe/hand_landmarker.task",
+        ]
+    )
+    for candidate in candidates:
+        resolved = _resolve_existing_path(candidate)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def probe_backend_metadata(name: str, **kwargs: Any) -> dict[str, Any]:
+    normalized = str(name).strip().lower()
+    if normalized == "stub":
+        return {
+            "perception_backend_used": "stub",
+            "perception_model_name": "stub_perception_v0",
+            "perception_model_path": "",
+            "perception_hand_task_model_path": "",
+        }
+    if normalized != "real":
+        return {
+            "perception_backend_used": normalized,
+            "perception_model_name": normalized,
+            "perception_model_path": "",
+            "perception_hand_task_model_path": "",
+        }
+
+    model_candidates = kwargs.get("model_candidates")
+    if not isinstance(model_candidates, list) or not model_candidates:
+        model_candidates = ["yolo26n.pt", "yolov8n.pt"]
+    selected_model = ""
+    for candidate in model_candidates:
+        resolved = _resolve_existing_path(str(candidate))
+        if resolved is not None:
+            selected_model = str(resolved)
+            break
+    if not selected_model:
+        selected_model = str(model_candidates[0]).strip()
+    model_name = Path(selected_model).stem if str(selected_model).strip() else "unknown_model"
+    task_path = _resolve_hand_task_path(
+        hand_task_model_path=kwargs.get("hand_task_model_path"),
+        hand_task_model_candidates=kwargs.get("hand_task_model_candidates"),
+    )
+    return {
+        "perception_backend_used": "real",
+        "perception_model_name": model_name,
+        "perception_model_path": str(selected_model),
+        "perception_hand_task_model_path": str(task_path) if task_path is not None else "",
+    }
+
+
+def backend_metadata(backend: PerceptionBackend, *, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+    meta = dict(fallback or {})
+    meta["perception_backend_used"] = str(getattr(backend, "backend_used", meta.get("perception_backend_used", getattr(backend, "name", ""))) or "")
+    meta["perception_model_name"] = str(getattr(backend, "model_name", meta.get("perception_model_name", "")) or "")
+    meta["perception_model_path"] = str(getattr(backend, "model_path", meta.get("perception_model_path", "")) or "")
+    meta["perception_hand_task_model_path"] = str(
+        getattr(backend, "hand_task_model_path", meta.get("perception_hand_task_model_path", "")) or ""
+    )
+    return meta
+
+
 def _clamp_bbox(x1: float, y1: float, x2: float, y2: float, w: int, h: int) -> list[float]:
     x1 = max(0.0, min(float(w - 1), float(x1)))
     y1 = max(0.0, min(float(h - 1), float(y1)))
@@ -31,6 +116,10 @@ class StubPerceptionBackend:
     name: str = "stub"
     object_label: str = "cup"
     hand_label: str = "right"
+    backend_used: str = "stub"
+    model_name: str = "stub_perception_v0"
+    model_path: str = ""
+    hand_task_model_path: str = ""
 
     def detect(self, frame_bgr: np.ndarray, *, frame_index: int, t: float) -> dict[str, Any]:
         h, w = frame_bgr.shape[:2]
@@ -102,6 +191,7 @@ class RealPerceptionBackend:
         hand_tracking_conf: float = 0.35,
     ):
         self.name = "real"
+        self.backend_used = "real"
         self._yolo_conf = float(yolo_conf)
         self._max_objects = int(max_objects)
         self._max_hands = int(max_hands)
@@ -122,10 +212,15 @@ class RealPerceptionBackend:
         if model_candidates is None:
             model_candidates = ["yolo26n.pt", "yolov8n.pt"]
         self._yolo = None
+        self.model_path = ""
+        self.model_name = ""
         last_exc: Exception | None = None
         for weight in model_candidates:
             try:
                 self._yolo = YOLO(str(weight))
+                resolved_weight = Path(str(weight)).resolve() if Path(str(weight)).exists() else Path(str(weight))
+                self.model_path = str(resolved_weight)
+                self.model_name = resolved_weight.stem if str(resolved_weight).strip() else "unknown_model"
                 break
             except Exception as exc:
                 last_exc = exc
@@ -147,28 +242,16 @@ class RealPerceptionBackend:
         if tasks_mod is None or vision_mod is None or base_options_cls is None:
             raise RuntimeError("mediapipe Tasks API is unavailable; require mediapipe.tasks.vision")
 
-        task_candidates: list[str] = []
-        if hand_task_model_path:
-            task_candidates.append(str(hand_task_model_path))
-        if hand_task_model_candidates:
-            task_candidates.extend([str(x) for x in hand_task_model_candidates if str(x).strip()])
-        task_candidates.extend(
-            [
-                "assets/mediapipe/hand_landmarker.task",
-                "models/mediapipe/hand_landmarker.task",
-            ]
+        task_path = _resolve_hand_task_path(
+            hand_task_model_path=hand_task_model_path,
+            hand_task_model_candidates=hand_task_model_candidates,
         )
-        task_path: Path | None = None
-        for candidate in task_candidates:
-            p = Path(candidate)
-            if p.exists():
-                task_path = p
-                break
         if task_path is None:
             raise RuntimeError(
                 "MediaPipe hand task model not found. Expected one of: "
-                f"{task_candidates}. Download hand_landmarker.task first."
+                f"{[hand_task_model_path, *(hand_task_model_candidates or []), 'assets/mediapipe/hand_landmarker.task', 'models/mediapipe/hand_landmarker.task']}. Download hand_landmarker.task first."
             )
+        self.hand_task_model_path = str(task_path)
 
         try:
             options = vision_mod.HandLandmarkerOptions(

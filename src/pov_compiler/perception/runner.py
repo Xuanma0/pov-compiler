@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from pov_compiler.io.video_reader import VideoReader
-from pov_compiler.perception.backends import PerceptionBackend, create_backend
+from pov_compiler.perception.backends import PerceptionBackend, backend_metadata, create_backend, probe_backend_metadata
 from pov_compiler.perception.contact import select_active_contact
 
 
@@ -41,6 +41,9 @@ def _cache_key(
     max_frames: int,
     backend_name: str,
     contact_min_score: float,
+    model_name: str = "",
+    model_path: str = "",
+    hand_task_model_path: str = "",
 ) -> str:
     stat = video_path.stat()
     payload = {
@@ -51,6 +54,9 @@ def _cache_key(
         "max_frames": int(max_frames),
         "backend": str(backend_name),
         "contact_min_score": float(contact_min_score),
+        "model_name": str(model_name),
+        "model_path": str(model_path),
+        "hand_task_model_path": str(hand_task_model_path),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
@@ -74,6 +80,7 @@ def run_perception(
     reader = VideoReader(path)
     effective_fallback = bool(fallback_to_stub) and not bool(strict)
     requested_backend = str(backend_name).strip().lower()
+    requested_meta = probe_backend_metadata(requested_backend, **(backend_kwargs or {}))
     cache_hit = False
     cache_file: Path | None = None
     if cache_dir is not None:
@@ -85,6 +92,9 @@ def run_perception(
             max_frames=int(max_frames),
             backend_name=requested_backend,
             contact_min_score=float(contact_min_score),
+            model_name=str(requested_meta.get("perception_model_name", "")),
+            model_path=str(requested_meta.get("perception_model_path", "")),
+            hand_task_model_path=str(requested_meta.get("perception_hand_task_model_path", "")),
         )
         cache_file = cache_root / f"{path.stem}_{key}.perception.json"
         if cache_file.exists():
@@ -92,9 +102,25 @@ def run_perception(
                 payload = json.loads(cache_file.read_text(encoding="utf-8"))
                 if isinstance(payload, dict) and isinstance(payload.get("frames", None), list):
                     cache_hit = True
+                    meta = payload.get("meta", {})
+                    if isinstance(meta, dict):
+                        meta.setdefault("perception_backend_used", str(requested_meta.get("perception_backend_used", requested_backend)))
+                        meta.setdefault("perception_model_name", str(requested_meta.get("perception_model_name", "")))
+                        meta.setdefault("perception_model_path", str(requested_meta.get("perception_model_path", "")))
+                        meta.setdefault(
+                            "perception_hand_task_model_path",
+                            str(requested_meta.get("perception_hand_task_model_path", "")),
+                        )
+                        payload["meta"] = meta
                     summary = payload.get("summary", {})
                     if isinstance(summary, dict):
                         summary["cache_hit"] = True
+                        summary.setdefault(
+                            "perception_backend_used",
+                            str(requested_meta.get("perception_backend_used", requested_backend)),
+                        )
+                        summary.setdefault("perception_model_name", str(requested_meta.get("perception_model_name", "")))
+                        summary.setdefault("perception_model_path", str(requested_meta.get("perception_model_path", "")))
                         payload["summary"] = summary
                     return payload
             except Exception:
@@ -117,6 +143,7 @@ def run_perception(
                     f"Failed to initialize perception backend={requested_backend}. "
                     f"Set --perception-fallback-stub to allow fallback."
                 ) from exc
+    effective_meta = backend_metadata(backend, fallback=requested_meta)
     started = time.perf_counter()
 
     frames_out: list[dict[str, Any]] = []
@@ -202,6 +229,10 @@ def run_perception(
             "sample_fps": float(sample_fps),
             "max_frames": int(max_frames),
             "backend": str(getattr(backend, "name", backend_name)),
+            "perception_backend_used": str(effective_meta.get("perception_backend_used", getattr(backend, "name", backend_name))),
+            "perception_model_name": str(effective_meta.get("perception_model_name", "")),
+            "perception_model_path": str(effective_meta.get("perception_model_path", "")),
+            "perception_hand_task_model_path": str(effective_meta.get("perception_hand_task_model_path", "")),
             "processed_frames": int(processed),
             "elapsed_s": float(elapsed_s),
             "throughput_fps": float(processed / elapsed_s) if elapsed_s > 0 else 0.0,
@@ -221,6 +252,9 @@ def run_perception(
             "fallback_used": bool(fallback_used),
             "fallback_reason": str(fallback_reason),
             "cache_hit": bool(cache_hit),
+            "perception_backend_used": str(effective_meta.get("perception_backend_used", getattr(backend, "name", requested_backend))),
+            "perception_model_name": str(effective_meta.get("perception_model_name", "")),
+            "perception_model_path": str(effective_meta.get("perception_model_path", "")),
             "objects_topk": _topk_labels(label_counts, k=int(objects_topk)),
             "hand_presence_rate": float(hand_frames / processed) if processed > 0 else 0.0,
             "contact_events_count": int(contact_events),

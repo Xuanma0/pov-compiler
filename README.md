@@ -257,6 +257,50 @@ What to read first after a weak or partial real pilot:
 - `query_promotion_pack/report.md`
 - `golden_real_sample/report.md`
 
+## v1.52 Local YOLO26n Signal Uplift
+
+`v1.52` keeps the result-layer workflow intact and adds the smallest runtime hook needed to test whether stronger local perception improves weak real-pilot signal:
+
+- `configs\perception\yolo26n_local.yaml` points at the inventoried local checkpoint `D:\BYES\models\yolo26\yolo26n.pt`.
+- `src\pov_compiler\perception\backends.py` and `src\pov_compiler\perception\runner.py` now preserve `perception_backend_used`, `perception_model_name`, and `perception_model_path`, and include them in the cache key to avoid stub/YOLO cache collisions.
+- `scripts\run_signal_uplift_pilot.py` compares a baseline perception variant against a local YOLO26n uplift variant without reimplementing evaluator logic.
+- `scripts\report_signal_uplift.py` summarizes whether object coverage, object memory, lost-object support, and query strength actually improved and whether SAM3 should be the next candidate.
+- `paper_ready\signal_uplift\` is the canonical export root for this before/after signal report.
+
+Small local YOLO26n perception smoke:
+
+```text
+python scripts\run_offline.py --video D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4 --out data\outputs\v152_yolo26n_smoke.json --config configs\perception\yolo26n_local.yaml --run-perception --perception-backend real --perception-max-frames 32
+```
+
+Fixture-backed signal uplift pilot:
+
+```text
+python scripts\run_signal_uplift_pilot.py --manifest configs\benchmarks\v1.52_signal_uplift_fake.yaml --out_dir data\outputs\v152_signal_uplift_fake
+```
+
+Real local signal uplift pilot:
+
+```text
+python scripts\run_signal_uplift_pilot.py --manifest configs\benchmarks\v1.52_signal_uplift_real.yaml --out_dir data\outputs\v152_signal_uplift_real
+```
+
+Signal uplift summary report:
+
+```text
+python scripts\report_signal_uplift.py --suite_dir data\outputs\v152_signal_uplift_real --baseline_dir data\outputs\v152_signal_uplift_fake --out_dir data\outputs\v152_signal_uplift_real\signal_uplift
+```
+
+What to read first when the live provider is fine but the real result is still weak:
+
+- `provider_reachability/summary.json`
+- `provider_normalization/snapshot.json`
+- `paper_ready/signal_uplift/report.md`
+- `query_strength_audit/report.md`
+- `delta_audit/report.md`
+
+If `signal_uplift_status=improved` but `next_action_recommendation=query_bank_still_too_weak`, keep YOLO26n and defer SAM3 to the next segmentation-focused milestone instead of widening the current provider/result-layer scope.
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

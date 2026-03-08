@@ -632,6 +632,45 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    signal_uplift_dir = tmp_path / "signal_uplift"
+    (signal_uplift_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (signal_uplift_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (signal_uplift_dir / "tables" / "table_signal_uplift_summary.csv").write_text(
+        "suite_id,signal_uplift_status,object_coverage_improved,object_memory_improved,lost_object_support_improved,query_strength_improved,next_action_recommendation,should_try_sam3_next\nv152_signal_uplift_real,improved,True,True,True,True,keep_yolo26n_and_scale_real,False\n",
+        encoding="utf-8",
+    )
+    (signal_uplift_dir / "tables" / "table_signal_uplift_summary.md").write_text("# signal uplift\n", encoding="utf-8")
+    (signal_uplift_dir / "figures" / "fig_signal_uplift_summary.png").write_bytes(b"PNG")
+    (signal_uplift_dir / "figures" / "fig_signal_uplift_summary.pdf").write_bytes(b"PDF")
+    (signal_uplift_dir / "report.md").write_text("# signal uplift report\n", encoding="utf-8")
+    (signal_uplift_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "signal_uplift_status": "improved",
+                "object_coverage_improved": True,
+                "object_memory_improved": True,
+                "lost_object_support_improved": True,
+                "query_strength_improved": True,
+                "next_action_recommendation": "keep_yolo26n_and_scale_real",
+                "should_try_sam3_next": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (compare_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (compare_dir / "tables" / "table_signal_uplift.csv").write_text(
+        "variant_label,object_detections_total,object_memory_items_total,signal_uplift_status\nbaseline,24,1,improved\nuplift,68,4,improved\ndelta,44,3,improved\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "tables" / "table_signal_uplift.md").write_text("# signal uplift compare\n", encoding="utf-8")
+    (compare_dir / "figures" / "fig_signal_uplift_delta.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_signal_uplift_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "figures" / "fig_signal_uplift_object_memory.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_signal_uplift_object_memory.pdf").write_bytes(b"PDF")
+    (compare_dir / "figures" / "fig_signal_uplift_query_strength.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_signal_uplift_query_strength.pdf").write_bytes(b"PDF")
+
     admission_calibration_dir = tmp_path / "admission_calibration"
     (admission_calibration_dir / "tables").mkdir(parents=True, exist_ok=True)
     (admission_calibration_dir / "tables" / "table_admission_calibration.csv").write_text(
@@ -1027,6 +1066,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(result_diagnosis_dir),
         "--delta-audit-dir",
         str(delta_audit_dir),
+        "--signal-uplift-dir",
+        str(signal_uplift_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
         "--provider-reachability-dir",
@@ -1083,6 +1124,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Admission Calibration" in report_text
     assert "## Result Diagnosis" in report_text
     assert "## Delta Audit" in report_text
+    assert "## Signal Uplift" in report_text
     assert "## Query Strength Audit" in report_text
     assert "## Repeatability Audit" in report_text
     assert "## Sample Size Recommendation" in report_text
@@ -1129,6 +1171,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "result_diagnosis" / "report.md").exists()
     assert (out_dir / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
     assert (out_dir / "delta_audit" / "report.md").exists()
+    assert (out_dir / "signal_uplift" / "tables" / "table_signal_uplift_summary.csv").exists()
+    assert (out_dir / "signal_uplift" / "report.md").exists()
     assert (out_dir / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (out_dir / "query_strength_audit" / "report.md").exists()
     assert (out_dir / "provider_reachability" / "summary.json").exists()
@@ -1144,6 +1188,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "golden_real_sample" / "query_set.yaml").exists()
     assert (out_dir / "figures" / "fig_result_diagnosis_breakdown.png").exists()
     assert (out_dir / "figures" / "fig_delta_audit_breakdown.png").exists()
+    assert (out_dir / "figures" / "fig_signal_uplift_summary.png").exists()
+    assert (out_dir / "figures" / "fig_signal_uplift_delta.png").exists()
+    assert (out_dir / "figures" / "fig_signal_uplift_object_memory.png").exists()
+    assert (out_dir / "figures" / "fig_signal_uplift_query_strength.png").exists()
     assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()
     assert (out_dir / "provider_telemetry" / "summary.json").exists()
     assert (out_dir / "provider_telemetry" / "by_variant.csv").exists()
@@ -1255,6 +1303,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "admission_calibration" / "snapshot.json").exists()
     assert (submission_pack / "result_diagnosis" / "tables" / "table_result_diagnosis.csv").exists()
     assert (submission_pack / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
+    assert (submission_pack / "signal_uplift" / "snapshot.json").exists()
     assert (submission_pack / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (submission_pack / "provider_telemetry" / "summary.json").exists()
     assert (submission_pack / "provider_reachability" / "summary.json").exists()
@@ -1278,6 +1327,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "prompts" / "planner" / "model_planner_v1.txt").exists()
     assert (submission_pack / "prompts" / "repository" / "repo_summary_v1.txt").exists()
     assert (submission_pack / "paper_ready" / "canonical" / "tables" / "Table_1.csv").exists()
+    assert (submission_pack / "paper_ready" / "signal_uplift" / "report.md").exists()
     submission_readme = (submission_pack / "README.md").read_text(encoding="utf-8")
     assert "Table 1" in submission_readme
     assert "Figure 2" in submission_readme
@@ -1285,6 +1335,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Calibration First" in submission_readme
     assert "Diagnosis First" in submission_readme
     assert "Delta Audit" in submission_readme
+    assert "Signal Uplift" in submission_readme
     assert "Query Strength Audit" in submission_readme
     assert "Provider Reachability" in submission_readme
     assert "Provider Noise" in submission_readme
