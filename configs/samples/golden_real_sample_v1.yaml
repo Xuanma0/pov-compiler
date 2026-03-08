@@ -1,0 +1,20 @@
+sample_id: golden_real_sample_v1
+description: Select a small reusable golden live-call sample from the current small-pilot bundle.
+selection:
+  max_query_groups: 3
+  exclude_recommended_actions:
+    - keep_for_analysis_only
+  require_provider_proof_status:
+    - ok
+  require_real_call_status:
+    - ok
+  required_non_empty_artifacts:
+    - provider_reachability
+    - provider_telemetry
+    - provider_normalization
+    - result_diagnosis
+    - delta_audit
+provenance:
+  preserve_query_bank: true
+  preserve_suite_manifest_hash: true
+  preserve_provider_proof: true

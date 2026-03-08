@@ -10,14 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_real_small_pilot_live_plan(tmp_path: Path) -> None:
-    out_dir = tmp_path / "v149_main_real_dry"
+    out_dir = tmp_path / "v150_main_real_golden"
     proc = subprocess.run(
         [
             sys.executable,
             str(ROOT / "scripts" / "run_main_real_benchmark.py"),
             "--manifest",
-            str(ROOT / "configs" / "benchmarks" / "v1.49_main_real_pilot.yaml"),
-            "--dry-collect",
+            str(ROOT / "configs" / "benchmarks" / "v1.50_main_real_golden.yaml"),
+            "--mode",
+            "pilot",
             "--out_dir",
             str(out_dir),
         ],
@@ -27,13 +28,11 @@ def test_real_small_pilot_live_plan(tmp_path: Path) -> None:
         check=False,
     )
     assert proc.returncode == 0, proc.stderr or proc.stdout
-    assert "saved_provider_normalization=skipped" in proc.stdout
-    assert "saved_query_promotion_pack=skipped" in proc.stdout
-    payload = json.loads((out_dir / "manifest" / "dry_collect_snapshot.json").read_text(encoding="utf-8"))
-    assert payload.get("suite_id") == "v1.49_main_real_pilot"
-    assert payload.get("provider_normalization_enabled") is True
-    assert payload.get("query_promotion_enabled") is True
-    assert payload.get("require_real_calls") is True
-    telemetry = payload.get("telemetry", {})
-    assert telemetry.get("variants", {}).get("real", {}).get("provider") == "openai"
-
+    assert "saved_provider_reachability=" in proc.stdout
+    assert "saved_golden_real_sample=" in proc.stdout
+    assert "proof_status=ok" in proc.stdout
+    reachability = json.loads((out_dir / "provider_reachability" / "summary.json").read_text(encoding="utf-8"))
+    assert reachability.get("proof_status") == "ok"
+    assert reachability.get("real_call_status") == "ok"
+    golden = json.loads((out_dir / "golden_real_sample" / "snapshot.json").read_text(encoding="utf-8"))
+    assert golden.get("golden_sample_status") in {"ok", "partial"}

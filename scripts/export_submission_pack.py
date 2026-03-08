@@ -54,8 +54,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
+    parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
     parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
     parser.add_argument("--query-promotion-pack-dir", default=None, help="Optional query promotion pack output directory")
+    parser.add_argument("--repeatability-audit-dir", default=None, help="Optional repeatability audit output directory")
+    parser.add_argument("--sample-size-recommendation-dir", default=None, help="Optional sample-size recommendation output directory")
+    parser.add_argument("--query-uplift-candidates-dir", default=None, help="Optional query uplift candidates output directory")
+    parser.add_argument("--golden-real-sample-dir", default=None, help="Optional golden real sample output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional freeze output directory")
     parser.add_argument("--paper-freeze-dir", default=None, help="Optional canonical paper freeze directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML")
@@ -85,8 +90,13 @@ def main() -> int:
     pack_delta_audit = out_dir / "delta_audit"
     pack_query_strength_audit = out_dir / "query_strength_audit"
     pack_provider_telemetry = out_dir / "provider_telemetry"
+    pack_provider_reachability = out_dir / "provider_reachability"
     pack_provider_normalization = out_dir / "provider_normalization"
     pack_query_promotion_pack = out_dir / "query_promotion_pack"
+    pack_repeatability_audit = out_dir / "repeatability_audit"
+    pack_sample_size_recommendation = out_dir / "sample_size_recommendation"
+    pack_query_uplift_candidates = out_dir / "query_uplift_candidates"
+    pack_golden_real_sample = out_dir / "golden_real_sample"
     pack_freeze = out_dir / "freeze"
     pack_paper_freeze = out_dir / "paper_freeze"
     pack_prompts = out_dir / "prompts"
@@ -103,8 +113,13 @@ def main() -> int:
         pack_delta_audit,
         pack_query_strength_audit,
         pack_provider_telemetry,
+        pack_provider_reachability,
         pack_provider_normalization,
         pack_query_promotion_pack,
+        pack_repeatability_audit,
+        pack_sample_size_recommendation,
+        pack_query_uplift_candidates,
+        pack_golden_real_sample,
         pack_freeze,
         pack_paper_freeze,
         pack_prompts,
@@ -121,8 +136,13 @@ def main() -> int:
     _copy_dir_if_exists(paper_ready_dir / "delta_audit", pack_paper_ready / "delta_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "query_strength_audit", pack_paper_ready / "query_strength_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_telemetry", pack_paper_ready / "provider_telemetry", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "provider_reachability", pack_paper_ready / "provider_reachability", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_normalization", pack_paper_ready / "provider_normalization", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "query_promotion_pack", pack_paper_ready / "query_promotion_pack", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "repeatability_audit", pack_paper_ready / "repeatability_audit", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "sample_size_recommendation", pack_paper_ready / "sample_size_recommendation", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "query_uplift_candidates", pack_paper_ready / "query_uplift_candidates", copied, missing)
+    _copy_dir_if_exists(paper_ready_dir / "golden_real_sample", pack_paper_ready / "golden_real_sample", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "report.md", pack_paper_ready / "report.md", copied, missing)
     _copy_file_if_exists(paper_ready_dir / "snapshot.json", pack_paper_ready / "snapshot.json", copied, missing)
 
@@ -190,6 +210,12 @@ def main() -> int:
         _copy_file_if_exists(provider_telemetry_dir / "by_variant.csv", pack_provider_telemetry / "by_variant.csv", copied, missing)
         _copy_file_if_exists(provider_telemetry_dir / "summary.json", pack_provider_telemetry / "summary.json", copied, missing)
 
+    provider_reachability_dir = Path(args.provider_reachability_dir) if args.provider_reachability_dir else None
+    if provider_reachability_dir is not None:
+        _copy_file_if_exists(provider_reachability_dir / "summary.json", pack_provider_reachability / "summary.json", copied, missing)
+        _copy_file_if_exists(provider_reachability_dir / "report.md", pack_provider_reachability / "report.md", copied, missing)
+        _copy_file_if_exists(provider_reachability_dir / "snapshot.json", pack_provider_reachability / "snapshot.json", copied, missing)
+
     provider_normalization_dir = Path(args.provider_normalization_dir) if args.provider_normalization_dir else None
     if provider_normalization_dir is not None:
         _copy_dir_if_exists(provider_normalization_dir / "tables", pack_provider_normalization / "tables", copied, missing)
@@ -200,6 +226,59 @@ def main() -> int:
     if query_promotion_pack_dir is not None:
         _copy_dir_if_exists(query_promotion_pack_dir / "query_pack", pack_query_promotion_pack / "query_pack", copied, missing)
         _copy_file_if_exists(query_promotion_pack_dir / "report.md", pack_query_promotion_pack / "report.md", copied, missing)
+
+    repeatability_audit_dir = Path(args.repeatability_audit_dir) if args.repeatability_audit_dir else None
+    if repeatability_audit_dir is not None:
+        _copy_dir_if_exists(repeatability_audit_dir / "tables", pack_repeatability_audit / "tables", copied, missing)
+        _copy_dir_if_exists(repeatability_audit_dir / "figures", pack_repeatability_audit / "figures", copied, missing)
+        _copy_file_if_exists(repeatability_audit_dir / "report.md", pack_repeatability_audit / "report.md", copied, missing)
+        _copy_file_if_exists(repeatability_audit_dir / "snapshot.json", pack_repeatability_audit / "snapshot.json", copied, missing)
+
+    sample_size_recommendation_dir = (
+        Path(args.sample_size_recommendation_dir) if args.sample_size_recommendation_dir else None
+    )
+    if sample_size_recommendation_dir is not None:
+        _copy_dir_if_exists(
+            sample_size_recommendation_dir / "tables",
+            pack_sample_size_recommendation / "tables",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            sample_size_recommendation_dir / "report.md",
+            pack_sample_size_recommendation / "report.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            sample_size_recommendation_dir / "snapshot.json",
+            pack_sample_size_recommendation / "snapshot.json",
+            copied,
+            missing,
+        )
+
+    query_uplift_candidates_dir = Path(args.query_uplift_candidates_dir) if args.query_uplift_candidates_dir else None
+    if query_uplift_candidates_dir is not None:
+        _copy_dir_if_exists(
+            query_uplift_candidates_dir / "query_uplift_candidates",
+            pack_query_uplift_candidates / "query_uplift_candidates",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            query_uplift_candidates_dir / "report.md",
+            pack_query_uplift_candidates / "report.md",
+            copied,
+            missing,
+        )
+
+    golden_real_sample_dir = Path(args.golden_real_sample_dir) if args.golden_real_sample_dir else None
+    if golden_real_sample_dir is not None:
+        _copy_file_if_exists(golden_real_sample_dir / "sample_manifest.json", pack_golden_real_sample / "sample_manifest.json", copied, missing)
+        _copy_file_if_exists(golden_real_sample_dir / "query_set.yaml", pack_golden_real_sample / "query_set.yaml", copied, missing)
+        _copy_file_if_exists(golden_real_sample_dir / "expected_outputs.json", pack_golden_real_sample / "expected_outputs.json", copied, missing)
+        _copy_file_if_exists(golden_real_sample_dir / "report.md", pack_golden_real_sample / "report.md", copied, missing)
+        _copy_file_if_exists(golden_real_sample_dir / "snapshot.json", pack_golden_real_sample / "snapshot.json", copied, missing)
 
     freeze_dir = Path(args.benchmark_freeze_dir) if args.benchmark_freeze_dir else None
     if freeze_dir is not None:
@@ -249,8 +328,13 @@ def main() -> int:
         f"- delta_audit_dir: `{delta_audit_dir}`",
         f"- query_strength_audit_dir: `{query_strength_audit_dir}`",
         f"- provider_telemetry_dir: `{provider_telemetry_dir}`",
+        f"- provider_reachability_dir: `{provider_reachability_dir}`",
         f"- provider_normalization_dir: `{provider_normalization_dir}`",
         f"- query_promotion_pack_dir: `{query_promotion_pack_dir}`",
+        f"- repeatability_audit_dir: `{repeatability_audit_dir}`",
+        f"- sample_size_recommendation_dir: `{sample_size_recommendation_dir}`",
+        f"- query_uplift_candidates_dir: `{query_uplift_candidates_dir}`",
+        f"- golden_real_sample_dir: `{golden_real_sample_dir}`",
         f"- benchmark_freeze_dir: `{freeze_dir}`",
         f"- paper_freeze_dir: `{paper_freeze_dir}`",
         f"- paper_map: `{paper_map_path}`",
@@ -271,8 +355,13 @@ def main() -> int:
         "- `delta_audit/`: per-budget delta audit and next-step action suggestions",
         "- `query_strength_audit/`: query-group strength audit for main-paper inclusion decisions",
         "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
+        "- `provider_reachability/`: live-call reachability proof for the chosen provider/server",
         "- `provider_normalization/`: normalized provider telemetry with explicit missing-field semantics",
         "- `query_promotion_pack/`: candidate packs for promoting or keeping queries outside the main bank",
+        "- `repeatability_audit/`: repeated-run variance audit for provider/sample stability",
+        "- `sample_size_recommendation/`: next-round minimum sample-size guidance",
+        "- `query_uplift_candidates/`: queries worth strengthening before any promotion decision",
+        "- `golden_real_sample/`: reusable live-smoke sample contract with expected non-empty outputs",
         "- `freeze/`: freeze manifest and artifact hashes",
         "- `paper_freeze/`: canonical paper-artifact freeze manifest and hashes",
         "- `prompts/`: registry and prompt source files",
@@ -296,13 +385,18 @@ def main() -> int:
             "",
             "## Reading Order",
             "",
-            "- Read `admission_control/` first.",
+            "- Read `provider_reachability/` first.",
+            "- Then read `repeatability_audit/`.",
+            "- Then read `sample_size_recommendation/`.",
+            "- Then read `admission_control/`.",
             "- If admission is blocked, read `admission_calibration/` next.",
-            "- Then read `provider_normalization/`.",
-            "- Then read `result_diagnosis/`.",
+            "- Then read `result_health/` and `result_diagnosis/`.",
             "- Then read `delta_audit/`.",
+            "- Then read `provider_normalization/` before interpreting cross-provider cost or usage.",
             "- If main figures still look weak, read `query_strength_audit/` before interpreting them.",
+            "- Then read `query_uplift_candidates/` before deciding whether weak queries deserve more signal or sample.",
             "- Then read `query_promotion_pack/` before changing the frozen main query bank.",
+            "- Then read `golden_real_sample/` to confirm the reusable live-smoke contract.",
             "- Only then cite the canonical main tables and figures under `paper_ready/canonical/`.",
         ]
     )
@@ -312,6 +406,7 @@ def main() -> int:
                 "",
                 "## Admission First",
                 "",
+                "- Read `admission_control/` first.",
                 "- Read `admission_control/snapshot.json` first to decide whether this pilot is worth expanding.",
             ]
         )
@@ -360,6 +455,15 @@ def main() -> int:
                 "- If main results look noisy, read `provider_telemetry/summary.json` before trusting weak deltas.",
             ]
         )
+    if provider_reachability_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Provider Reachability",
+                "",
+                "- Read `provider_reachability/report.md` first to confirm that a real or local OpenAI-compatible live call actually happened.",
+            ]
+        )
     if provider_normalization_dir is not None:
         readme_lines.extend(
             [
@@ -369,13 +473,49 @@ def main() -> int:
                 "- Read `provider_normalization/snapshot.json` before comparing provider cost, usage, or latency across backends.",
             ]
         )
+    if repeatability_audit_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Repeatability Audit",
+                "",
+                "- Read `repeatability_audit/report.md` immediately after provider reachability to tell provider drift from sample drift.",
+            ]
+        )
+    if sample_size_recommendation_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Sample Size Recommendation",
+                "",
+                "- Read `sample_size_recommendation/report.md` before widening the next real main pilot.",
+            ]
+        )
+    if query_uplift_candidates_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Query Uplift Candidates",
+                "",
+                "- Read `query_uplift_candidates/report.md` before deciding whether a weak query needs more signal/sample or should stay out of the main bank.",
+            ]
+        )
     if query_promotion_pack_dir is not None:
         readme_lines.extend(
             [
                 "",
                 "## Query Promotion",
                 "",
-                "- Read `query_promotion_pack/report.md` before promoting any query into the frozen main-result bank.",
+                "- Only read `query_promotion_pack/report.md` after reviewing repeatability, sample size, and uplift evidence.",
+            ]
+        )
+    if golden_real_sample_dir is not None:
+        readme_lines.extend(
+            [
+                "",
+                "## Golden Real Sample",
+                "",
+                "- Read `golden_real_sample/report.md` after promotion decisions to find the reusable non-empty live sample contract.",
             ]
         )
     readme_path = out_dir / "README.md"
@@ -393,8 +533,13 @@ def main() -> int:
         "delta_audit_dir": str(delta_audit_dir) if delta_audit_dir is not None else None,
         "query_strength_audit_dir": str(query_strength_audit_dir) if query_strength_audit_dir is not None else None,
         "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,
+        "provider_reachability_dir": str(provider_reachability_dir) if provider_reachability_dir is not None else None,
         "provider_normalization_dir": str(provider_normalization_dir) if provider_normalization_dir is not None else None,
         "query_promotion_pack_dir": str(query_promotion_pack_dir) if query_promotion_pack_dir is not None else None,
+        "repeatability_audit_dir": str(repeatability_audit_dir) if repeatability_audit_dir is not None else None,
+        "sample_size_recommendation_dir": str(sample_size_recommendation_dir) if sample_size_recommendation_dir is not None else None,
+        "query_uplift_candidates_dir": str(query_uplift_candidates_dir) if query_uplift_candidates_dir is not None else None,
+        "golden_real_sample_dir": str(golden_real_sample_dir) if golden_real_sample_dir is not None else None,
         "benchmark_freeze_dir": str(freeze_dir) if freeze_dir is not None else None,
         "paper_freeze_dir": str(paper_freeze_dir) if paper_freeze_dir is not None else None,
         "paper_map": str(paper_map_path) if paper_map_path is not None else None,

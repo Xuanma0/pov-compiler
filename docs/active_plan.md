@@ -2,33 +2,36 @@
 
 ## Current milestone
 
-- `v1.49`: Real Small Pilot + Provider Normalization + Query Promotion Pack
+- `v1.51`: Repeatability Audit + Sample-Size Recommendation + Query Uplift Candidates
 
 ## Single goal
 
-- Promote the fake small-pilot stack into a real-provider small pilot that can normalize provider telemetry, preserve explicit missing-field semantics, and export a promotion-ready query pack without touching runtime core modules.
+- Explain weak real-pilot outcomes with repeated-run evidence, produce conservative next-run sample-size guidance, and export query uplift candidates without promoting weak queries into the main bank.
 
 ## Status
 
-- [x] `v1.49` real/fake pilot manifests added with `provider_normalization_enabled`, `query_promotion_enabled`, and `require_real_calls`.
-- [x] `scripts/run_main_real_benchmark.py --mode pilot` now chains suite, significance, result health, provider telemetry, provider normalization, diagnosis, delta audit, admission control, admission calibration, query strength audit, query promotion pack, freeze, paper-ready, paper freeze, and submission pack.
-- [x] Standalone `provider_normalization/` artifact layer added with unified schema, explicit missing semantics, and `normalization_status`.
-- [x] Standalone `query_promotion_pack/` artifact layer added with `promoted_queries.yaml`, `analysis_only_queries.yaml`, and provenance-bearing `promotion_summary.json`.
-- [x] `result_diagnosis` now prefers normalized telemetry and records fallback state when normalization is absent.
-- [x] `paper_ready/` now carries `provider_normalization/` and `query_promotion_pack/`, and `report.md` includes normalization plus promotion summaries.
-- [x] `submission_pack/` now carries normalized telemetry and promotion packs, and its README enforces the read order normalized telemetry -> query promotion -> main-figure interpretation.
-- [x] Real small pilot validated end to end under `data/outputs/v149_main_real_pilot`, with explicit `gate_status=partial`, `admission_status=fail`, `calibration_status=weak`, and `normalization_status=partial` when real calls are unavailable.
+- [x] `v1.51` real/fake repeat manifests added with `repeat_enabled`, `repeat_count`, `repeat_seed_strategy`, and `repeat_profile`.
+- [x] `scripts/run_main_real_benchmark.py --mode pilot` now materializes repeated sidecar roots and chains repeatability audit, sample-size recommendation, and query uplift candidate export after the existing result-layer pipeline.
+- [x] `provider_telemetry/summary.json` now carries repeated-run latency and availability aggregates for repeatability interpretation.
+- [x] Standalone `repeatability_audit/` added with per-metric variance, coefficient of variation, `stability_flag`, and provider-noise interpretation.
+- [x] Standalone `sample_size_recommendation/` added with conservative `ok|range_only|weak` status and UID/pair recommendations derived from repeatability and effect-size evidence.
+- [x] Standalone `query_uplift_candidates/` added to separate “may improve with more signal/sample” from direct promotion.
+- [x] `result_diagnosis` now consumes repeatability results and explicitly explains provider instability vs small-sample weakness vs stable no-effect.
+- [x] `paper_ready/` now carries `repeatability_audit/`, `sample_size_recommendation/`, and `query_uplift_candidates/`, and `report.md` summarizes stability and recommended next sample size.
+- [x] `submission_pack/` now carries the new audit layers and updates README reading order to proof -> repeatability -> sample size -> diagnosis/delta -> uplift/promotion -> figures.
+- [x] Fake repeat pilot validated under `data/outputs/v151_fake_repeat` with `gate_status=ok`, `admission_status=partial`, `calibration_status=ok`, `repeatability_status=partial`, and `sample_size_recommendation_status=ok`.
+- [x] Real repeat pilot validated under `data/outputs/v151_main_real_repeat` with live-call proof preserved, `admission_status=partial`, `calibration_status=partial`, `repeatability_status=partial`, and `sample_size_recommendation_status=range_only`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
 - [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
-- [x] `v1.49` milestone marked done.
+- [x] `v1.51` milestone marked done.
 
-## v1.50 Candidate Tasks
+## v1.52 Candidate Tasks
 
-- Live provider call observation and retry-safe real pilot admission
-- Result-health no-data hardening without placeholder fallbacks
-- Promotion-pack merge workflow for frozen query banks
-- Cross-provider normalization history and drift tracking
-- Canonical paper export without missing-task placeholders
+- Live compare-root ingestion without fixture-backed compare tables
+- Repeatability-aware admission threshold tuning
+- Query uplift to revised bank draft with human-review checkpoints
+- Cost-aware repeated-pilot budget planner
+- Canonical paper export with zero `missing_tasks`
 
 ## Frozen constraints
 

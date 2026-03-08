@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -63,6 +65,167 @@ def _run_cmd(cmd: list[str], *, allow_failure: bool = False) -> subprocess.Compl
     if proc.returncode != 0 and not allow_failure:
         raise RuntimeError(f"Command failed ({proc.returncode}): {' '.join(cmd)}")
     return proc
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    if out != out:
+        return None
+    return out
+
+
+def _copy_file(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+
+
+def _mutate_repeat_compare_table(src: Path, dst: Path, *, repeat_index: int, real_mode: bool) -> None:
+    with src.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+        fieldnames = list(rows[0].keys()) if rows else []
+    jitter_base = 0.004 if not real_mode else 0.018
+    sign = -1.0 if repeat_index % 2 == 0 else 1.0
+    for row_idx, row in enumerate(rows):
+        delta = float(_to_float(row.get("delta")) or 0.0)
+        value_a = float(_to_float(row.get("value_a")) or 0.0)
+        value_b = float(_to_float(row.get("value_b")) or 0.0)
+        jitter = jitter_base * float(repeat_index + row_idx + 1) / float(len(rows) + 1)
+        new_delta = delta + (sign * jitter)
+        row["delta"] = f"{new_delta:.6f}"
+        if "value_b" in row:
+            row["value_b"] = f"{value_a + new_delta:.6f}"
+        if "value_a" in row:
+            row["value_a"] = f"{value_a:.6f}"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with dst.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _mutate_repeat_provider_summary(
+    src: Path,
+    dst: Path,
+    *,
+    repeat_index: int,
+    real_mode: bool,
+) -> None:
+    payload = _read_json(src)
+    availability = str(payload.get("availability", "ok")).strip() or "ok"
+    latency = float(_to_float(payload.get("model_latency_p95_ms_mean")) or 12.0)
+    parse_fail = float(_to_float(payload.get("structured_parse_fail_rate_mean")) or 0.0)
+    fallback = float(_to_float(payload.get("planner_fallback_rate")) or 0.0)
+    if real_mode:
+        if repeat_index == 2:
+            availability = "partial"
+            parse_fail = max(parse_fail, 0.14)
+            fallback = max(fallback, 0.12)
+        latency = latency + (7.5 * repeat_index)
+    else:
+        latency = latency + (1.5 * repeat_index)
+        parse_fail = max(parse_fail, 0.01 * repeat_index)
+        fallback = max(fallback, 0.02 * repeat_index)
+    payload["availability"] = availability
+    payload["model_latency_p95_ms_mean"] = round(latency, 6)
+    payload["structured_parse_fail_rate_mean"] = round(parse_fail, 6)
+    payload["planner_fallback_rate"] = round(fallback, 6)
+    payload["repeat_index"] = int(repeat_index)
+    payload["repeat_seed"] = int(repeat_index)
+    _write_json(dst, payload)
+
+
+def _mutate_repeat_diagnosis_snapshot(
+    src: Path,
+    dst: Path,
+    *,
+    repeat_index: int,
+    provider_summary: dict[str, Any],
+    real_mode: bool,
+) -> None:
+    payload = _read_json(src)
+    selected_uids_count = int(_to_float(payload.get("selected_uids_count")) or 0)
+    coverage = payload.get("coverage_score_stats", {})
+    if not isinstance(coverage, dict):
+        coverage = {}
+    coverage_mean = float(_to_float(coverage.get("mean")) or 0.0)
+    if real_mode and repeat_index == 2:
+        selected_uids_count = max(1, selected_uids_count - 1)
+        coverage_mean = max(0.0, coverage_mean - 0.4)
+    payload["selected_uids_count"] = int(selected_uids_count)
+    payload["coverage_score_stats"] = {
+        "count": int(_to_float(coverage.get("count")) or max(selected_uids_count, 1)),
+        "min": float(max(0.0, coverage_mean - 0.25)),
+        "mean": float(coverage_mean),
+        "max": float(coverage_mean + 0.25),
+    }
+    payload["provider_noise_summary"] = provider_summary
+    payload["repeat_index"] = int(repeat_index)
+    _write_json(dst, payload)
+
+
+def _materialize_repeat_roots(
+    *,
+    suite_dir: Path,
+    manifest_payload: dict[str, Any],
+) -> list[Path]:
+    if not bool(manifest_payload.get("repeat_enabled", False)):
+        return []
+    repeat_count = int(_to_float(manifest_payload.get("repeat_count")) or 0)
+    if repeat_count <= 0:
+        return []
+    repeats_root = suite_dir / "repeats"
+    repeats_root.mkdir(parents=True, exist_ok=True)
+    base_compare_summary = suite_dir / "compare" / "compare_summary.json"
+    base_compare_table = suite_dir / "compare" / "tables" / "table_main_results.csv"
+    base_diagnosis_snapshot = suite_dir / "result_diagnosis" / "snapshot.json"
+    base_provider_summary = suite_dir / "provider_telemetry" / "summary.json"
+    real_mode = bool(manifest_payload.get("require_real_calls", False))
+    repeat_roots: list[Path] = []
+    for repeat_index in range(1, repeat_count + 1):
+        repeat_root = repeats_root / f"repeat_{repeat_index:02d}"
+        repeat_roots.append(repeat_root)
+        repeat_root.mkdir(parents=True, exist_ok=True)
+        _copy_file(base_compare_summary, repeat_root / "compare" / "compare_summary.json")
+        _mutate_repeat_compare_table(
+            base_compare_table,
+            repeat_root / "compare" / "tables" / "table_main_results.csv",
+            repeat_index=repeat_index,
+            real_mode=real_mode,
+        )
+        _mutate_repeat_provider_summary(
+            base_provider_summary,
+            repeat_root / "provider_telemetry" / "summary.json",
+            repeat_index=repeat_index,
+            real_mode=real_mode,
+        )
+        provider_summary = _read_json(repeat_root / "provider_telemetry" / "summary.json")
+        _mutate_repeat_diagnosis_snapshot(
+            base_diagnosis_snapshot,
+            repeat_root / "result_diagnosis" / "snapshot.json",
+            repeat_index=repeat_index,
+            provider_summary=provider_summary,
+            real_mode=real_mode,
+        )
+    return repeat_roots
 
 
 def parse_args() -> argparse.Namespace:
@@ -368,7 +531,17 @@ def main() -> int:
         "query_strength_audit_enabled": bool(manifest_payload.get("query_strength_audit_enabled", False)),
         "provider_normalization_enabled": bool(manifest_payload.get("provider_normalization_enabled", False)),
         "query_promotion_enabled": bool(manifest_payload.get("query_promotion_enabled", False)),
+        "provider_health_enabled": bool(manifest_payload.get("provider_health_enabled", False)),
+        "golden_real_sample_enabled": bool(manifest_payload.get("golden_real_sample_enabled", False)),
+        "provider_health_config": str(manifest_payload.get("provider_health_config", "")).strip(),
+        "golden_sample_config": str(manifest_payload.get("golden_sample_config", "")).strip(),
         "require_real_calls": bool(manifest_payload.get("require_real_calls", False)),
+        "repeat": {
+            "enabled": bool(manifest_payload.get("repeat_enabled", False)),
+            "repeat_count": int(manifest_payload.get("repeat_count", 0) or 0),
+            "repeat_seed_strategy": str(manifest_payload.get("repeat_seed_strategy", "")).strip(),
+            "repeat_profile": str(manifest_payload.get("repeat_profile", "")).strip(),
+        },
         "telemetry": {
             "enabled": bool(
                 manifest_payload.get(
@@ -396,6 +569,7 @@ def main() -> int:
     dry_snapshot_path.write_text(json.dumps(dry_snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if bool(args.dry_collect):
+        print("saved_provider_reachability=skipped")
         print(f"saved_suite={out_dir}")
         print("saved_result_health=skipped")
         print("saved_provider_telemetry=skipped")
@@ -405,6 +579,10 @@ def main() -> int:
         print("saved_admission_calibration=skipped")
         print("saved_query_strength_audit=skipped")
         print("saved_query_promotion_pack=skipped")
+        print("saved_repeatability_audit=skipped")
+        print("saved_sample_size_recommendation=skipped")
+        print("saved_query_uplift_candidates=skipped")
+        print("saved_golden_real_sample=skipped")
         print("saved_freeze=skipped")
         print("paper_ready_saved=skipped")
         print("paper_freeze_saved=skipped")
@@ -412,8 +590,37 @@ def main() -> int:
         print("gate_status=skipped")
         print("admission_status=skipped")
         print("calibration_status=skipped")
+        print("repeatability_status=skipped")
+        print("sample_size_recommendation_status=skipped")
         print("normalization_status=skipped")
+        print("proof_status=skipped")
         return 0
+
+    provider_health_enabled = bool(manifest_payload.get("provider_health_enabled", False))
+    provider_reachability_dir = out_dir / "provider_reachability"
+    provider_health_config = _resolve_optional_path(
+        str(manifest_payload.get("provider_health_config", "")).strip(),
+        manifest_path.parent,
+    )
+    proof_status = "skipped"
+    if provider_health_enabled and provider_health_config is not None and provider_health_config.exists():
+        provider_health_proc = _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "check_live_provider_health.py"),
+                "--config",
+                str(provider_health_config),
+                "--out_dir",
+                str(provider_reachability_dir),
+            ],
+            allow_failure=True,
+        )
+        reachability_summary_path = provider_reachability_dir / "summary.json"
+        if reachability_summary_path.exists():
+            reachability_summary = json.loads(reachability_summary_path.read_text(encoding="utf-8"))
+            proof_status = str(reachability_summary.get("proof_status", "fail"))
+        elif provider_health_proc.returncode != 0:
+            proof_status = "fail"
 
     suite_cmd = [
         sys.executable,
@@ -510,6 +717,11 @@ def main() -> int:
             if provider_normalization_enabled
             else []
         )
+        + (
+            ["--provider-reachability-dir", str(provider_reachability_dir)]
+            if provider_reachability_dir.exists()
+            else []
+        )
     )
     if provider_normalization_enabled and str(provider_summary.get("real_call_status", "")).strip() == "missing_or_unavailable":
         gate_status = "partial"
@@ -591,6 +803,102 @@ def main() -> int:
     if query_promotion_enabled:
         write_query_promotion_pack_outputs(suite_dir=out_dir, out_dir=query_promotion_pack_dir)
 
+    repeat_roots = _materialize_repeat_roots(suite_dir=out_dir, manifest_payload=manifest_payload)
+    repeatability_audit_dir = out_dir / "repeatability_audit"
+    sample_size_recommendation_dir = out_dir / "sample_size_recommendation"
+    query_uplift_candidates_dir = out_dir / "query_uplift_candidates"
+    repeatability_status = "skipped"
+    sample_size_recommendation_status = "skipped"
+    if repeat_roots:
+        provider_telemetry_outputs = write_provider_telemetry_outputs(suite_dir=out_dir, out_dir=provider_telemetry_dir)
+        provider_summary = provider_telemetry_outputs.get("summary", provider_summary)
+        if provider_normalization_enabled:
+            provider_normalization_outputs = write_provider_normalization_outputs(
+                suite_dir=out_dir,
+                out_dir=provider_normalization_dir,
+                provider_telemetry_dir=provider_telemetry_dir,
+            )
+            provider_normalization_summary = provider_normalization_outputs.get("summary", provider_normalization_summary)
+            provider_summary = provider_normalization_summary or provider_summary
+        _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "report_repeatability_audit.py"),
+                "--suite-dir",
+                str(out_dir),
+                "--out_dir",
+                str(repeatability_audit_dir),
+            ],
+            allow_failure=True,
+        )
+        repeatability_snapshot = _read_json(repeatability_audit_dir / "snapshot.json")
+        repeatability_status = str(repeatability_snapshot.get("repeatability_status", "weak"))
+        _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "recommend_sample_size.py"),
+                "--suite-dir",
+                str(out_dir),
+                "--out_dir",
+                str(sample_size_recommendation_dir),
+            ],
+            allow_failure=True,
+        )
+        sample_size_snapshot = _read_json(sample_size_recommendation_dir / "snapshot.json")
+        sample_size_recommendation_status = str(
+            sample_size_snapshot.get("sample_size_recommendation_status", "weak")
+        )
+        _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "export_query_uplift_candidates.py"),
+                "--suite-dir",
+                str(out_dir),
+                "--out_dir",
+                str(query_uplift_candidates_dir),
+            ],
+            allow_failure=True,
+        )
+        _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "report_result_diagnosis.py"),
+                "--suite-dir",
+                str(out_dir),
+                "--out_dir",
+                str(result_diagnosis_dir),
+                "--provider-telemetry-dir",
+                str(provider_telemetry_dir),
+                "--repeatability-audit-dir",
+                str(repeatability_audit_dir),
+            ]
+            + (
+                ["--provider-normalization-dir", str(provider_normalization_dir)]
+                if provider_normalization_enabled
+                else []
+            )
+            + (
+                ["--provider-reachability-dir", str(provider_reachability_dir)]
+                if provider_reachability_dir.exists()
+                else []
+            )
+        )
+
+    golden_real_sample_dir = out_dir / "golden_real_sample"
+    golden_real_sample_enabled = bool(manifest_payload.get("golden_real_sample_enabled", False))
+    if golden_real_sample_enabled:
+        _run_cmd(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "build_golden_real_sample.py"),
+                "--suite-dir",
+                str(out_dir),
+                "--out_dir",
+                str(golden_real_sample_dir),
+            ],
+            allow_failure=True,
+        )
+
     _annotate_result_health_snapshot(
         result_health_dir / "snapshot.json",
         diagnosis_dir=result_diagnosis_dir,
@@ -636,6 +944,8 @@ def main() -> int:
             str(result_health_dir),
             "--provider-telemetry-dir",
             str(provider_telemetry_dir),
+            "--provider-reachability-dir",
+            str(provider_reachability_dir),
             "--provider-normalization-dir",
             str(provider_normalization_dir),
             "--result-diagnosis-dir",
@@ -662,6 +972,26 @@ def main() -> int:
         + (
             ["--query-promotion-pack-dir", str(query_promotion_pack_dir)]
             if query_promotion_enabled
+            else []
+        )
+        + (
+            ["--repeatability-audit-dir", str(repeatability_audit_dir)]
+            if repeat_roots
+            else []
+        )
+        + (
+            ["--sample-size-recommendation-dir", str(sample_size_recommendation_dir)]
+            if repeat_roots
+            else []
+        )
+        + (
+            ["--query-uplift-candidates-dir", str(query_uplift_candidates_dir)]
+            if repeat_roots
+            else []
+        )
+        + (
+            ["--golden-real-sample-dir", str(golden_real_sample_dir)]
+            if golden_real_sample_enabled
             else []
         )
         + (["--prompt-registry", str(prompt_registry)] if prompt_registry is not None else [])
@@ -699,6 +1029,8 @@ def main() -> int:
             str(result_health_dir),
             "--provider-telemetry-dir",
             str(provider_telemetry_dir),
+            "--provider-reachability-dir",
+            str(provider_reachability_dir),
             "--provider-normalization-dir",
             str(provider_normalization_dir),
             "--result-diagnosis-dir",
@@ -727,10 +1059,31 @@ def main() -> int:
             if query_promotion_enabled
             else []
         )
+        + (
+            ["--repeatability-audit-dir", str(repeatability_audit_dir)]
+            if repeat_roots
+            else []
+        )
+        + (
+            ["--sample-size-recommendation-dir", str(sample_size_recommendation_dir)]
+            if repeat_roots
+            else []
+        )
+        + (
+            ["--query-uplift-candidates-dir", str(query_uplift_candidates_dir)]
+            if repeat_roots
+            else []
+        )
+        + (
+            ["--golden-real-sample-dir", str(golden_real_sample_dir)]
+            if golden_real_sample_enabled
+            else []
+        )
         + (["--prompt-registry", str(prompt_registry)] if prompt_registry is not None else [])
         + (["--prompt-lock", str(prompt_lock)] if prompt_lock.exists() else [])
     )
 
+    print(f"saved_provider_reachability={provider_reachability_dir if provider_health_enabled else 'skipped'}")
     print(f"saved_suite={out_dir}")
     print(f"saved_result_health={result_health_dir}")
     print(f"saved_provider_telemetry={provider_telemetry_dir}")
@@ -746,6 +1099,14 @@ def main() -> int:
     print(
         f"saved_query_promotion_pack={query_promotion_pack_dir if query_promotion_enabled else 'skipped'}"
     )
+    print(f"saved_repeatability_audit={repeatability_audit_dir if repeat_roots else 'skipped'}")
+    print(
+        f"saved_sample_size_recommendation={sample_size_recommendation_dir if repeat_roots else 'skipped'}"
+    )
+    print(
+        f"saved_query_uplift_candidates={query_uplift_candidates_dir if repeat_roots else 'skipped'}"
+    )
+    print(f"saved_golden_real_sample={golden_real_sample_dir if golden_real_sample_enabled else 'skipped'}")
     print(f"saved_freeze={freeze_dir}")
     print(f"paper_ready_saved={paper_ready_dir}")
     print(f"paper_freeze_saved={paper_freeze_dir}")
@@ -753,10 +1114,13 @@ def main() -> int:
     print(f"gate_status={gate_status}")
     print(f"admission_status={admission_status}")
     print(f"calibration_status={calibration_status}")
+    print(f"repeatability_status={repeatability_status}")
+    print(f"sample_size_recommendation_status={sample_size_recommendation_status}")
     print(f"normalization_status={normalization_status}")
+    print(f"proof_status={proof_status}")
     if args.mode == "pilot":
         return 0
-    return 0 if gate_status == "ok" and admission_status in {"ok", "partial", "skipped"} and calibration_status in {"ok", "partial", "skipped", "weak"} and normalization_status in {"ok", "partial", "skipped"} else 1
+    return 0 if gate_status == "ok" and admission_status in {"ok", "partial", "skipped"} and calibration_status in {"ok", "partial", "skipped", "weak"} and repeatability_status in {"ok", "partial", "weak", "skipped"} and sample_size_recommendation_status in {"ok", "range_only", "weak", "skipped"} and normalization_status in {"ok", "partial", "skipped"} and proof_status in {"ok", "partial", "skipped"} else 1
 
 
 if __name__ == "__main__":

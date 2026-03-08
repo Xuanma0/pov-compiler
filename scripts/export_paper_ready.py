@@ -144,10 +144,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-diagnosis-dir", default=None, help="Optional result diagnosis output directory")
     parser.add_argument("--delta-audit-dir", default=None, help="Optional delta audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
+    parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
     parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
     parser.add_argument("--admission-calibration-dir", default=None, help="Optional admission calibration output directory")
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--query-promotion-pack-dir", default=None, help="Optional query promotion pack output directory")
+    parser.add_argument("--repeatability-audit-dir", default=None, help="Optional repeatability audit output directory")
+    parser.add_argument("--sample-size-recommendation-dir", default=None, help="Optional sample-size recommendation output directory")
+    parser.add_argument("--query-uplift-candidates-dir", default=None, help="Optional query uplift candidates output directory")
+    parser.add_argument("--golden-real-sample-dir", default=None, help="Optional golden real sample output directory")
     parser.add_argument("--benchmark-freeze-dir", default=None, help="Optional benchmark freeze output directory")
     parser.add_argument("--paper-map", default=None, help="Optional canonical paper-map YAML path")
     parser.add_argument("--prompt-registry", default=None, help="Optional prompt registry YAML path")
@@ -1946,6 +1951,165 @@ def main() -> int:
             except Exception:
                 query_promotion_summary = {}
 
+    resolved_repeatability_audit_dir: Path | None = None
+    if args.repeatability_audit_dir:
+        resolved_repeatability_audit_dir = Path(args.repeatability_audit_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "repeatability_audit"
+        if candidate.exists():
+            resolved_repeatability_audit_dir = candidate
+    repeatability_audit_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    repeatability_audit_snapshot: dict[str, Any] = {}
+    if resolved_repeatability_audit_dir:
+        repeatability_audit_panel["enabled"] = True
+        repeatability_audit_panel["source_dir"] = str(resolved_repeatability_audit_dir)
+        dst_root = out_dir / "repeatability_audit"
+        copied = []
+        for src in (
+            resolved_repeatability_audit_dir / "tables" / "table_repeatability_audit.csv",
+            resolved_repeatability_audit_dir / "tables" / "table_repeatability_audit.md",
+            resolved_repeatability_audit_dir / "figures" / "fig_repeatability_variance.png",
+            resolved_repeatability_audit_dir / "figures" / "fig_repeatability_variance.pdf",
+            resolved_repeatability_audit_dir / "report.md",
+            resolved_repeatability_audit_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+                if cp:
+                    copied.append(cp)
+        repeatability_audit_panel["copied_files"] = copied
+        snapshot_src = resolved_repeatability_audit_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                repeatability_audit_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                repeatability_audit_snapshot = {}
+
+    resolved_sample_size_recommendation_dir: Path | None = None
+    if args.sample_size_recommendation_dir:
+        resolved_sample_size_recommendation_dir = Path(args.sample_size_recommendation_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "sample_size_recommendation"
+        if candidate.exists():
+            resolved_sample_size_recommendation_dir = candidate
+    sample_size_recommendation_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    sample_size_recommendation_snapshot: dict[str, Any] = {}
+    if resolved_sample_size_recommendation_dir:
+        sample_size_recommendation_panel["enabled"] = True
+        sample_size_recommendation_panel["source_dir"] = str(resolved_sample_size_recommendation_dir)
+        dst_root = out_dir / "sample_size_recommendation"
+        copied = []
+        for src in (
+            resolved_sample_size_recommendation_dir / "tables" / "table_sample_size_recommendation.csv",
+            resolved_sample_size_recommendation_dir / "tables" / "table_sample_size_recommendation.md",
+            resolved_sample_size_recommendation_dir / "report.md",
+            resolved_sample_size_recommendation_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        sample_size_recommendation_panel["copied_files"] = copied
+        snapshot_src = resolved_sample_size_recommendation_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                sample_size_recommendation_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                sample_size_recommendation_snapshot = {}
+
+    resolved_query_uplift_candidates_dir: Path | None = None
+    if args.query_uplift_candidates_dir:
+        resolved_query_uplift_candidates_dir = Path(args.query_uplift_candidates_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "query_uplift_candidates"
+        if candidate.exists():
+            resolved_query_uplift_candidates_dir = candidate
+    query_uplift_candidates_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    query_uplift_summary: dict[str, Any] = {}
+    if resolved_query_uplift_candidates_dir:
+        query_uplift_candidates_panel["enabled"] = True
+        query_uplift_candidates_panel["source_dir"] = str(resolved_query_uplift_candidates_dir)
+        dst_root = out_dir / "query_uplift_candidates"
+        copied = []
+        for src in (
+            resolved_query_uplift_candidates_dir / "query_uplift_candidates" / "candidate_queries.yaml",
+            resolved_query_uplift_candidates_dir / "query_uplift_candidates" / "analysis_only_queries.yaml",
+            resolved_query_uplift_candidates_dir / "query_uplift_candidates" / "drop_queries.yaml",
+            resolved_query_uplift_candidates_dir / "query_uplift_candidates" / "uplift_summary.json",
+            resolved_query_uplift_candidates_dir / "report.md",
+        ):
+            relative_name = src.name if src.parent.name != "query_uplift_candidates" else str(Path("query_uplift_candidates") / src.name)
+            cp = _copy_if_exists(src, dst_root / relative_name)
+            if cp:
+                copied.append(cp)
+        query_uplift_candidates_panel["copied_files"] = copied
+        summary_src = resolved_query_uplift_candidates_dir / "query_uplift_candidates" / "uplift_summary.json"
+        if summary_src.exists():
+            try:
+                query_uplift_summary = json.loads(summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                query_uplift_summary = {}
+
+    resolved_golden_real_sample_dir: Path | None = None
+    if args.golden_real_sample_dir:
+        resolved_golden_real_sample_dir = Path(args.golden_real_sample_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "golden_real_sample"
+        if candidate.exists():
+            resolved_golden_real_sample_dir = candidate
+    golden_real_sample_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    golden_real_sample_snapshot: dict[str, Any] = {}
+    if resolved_golden_real_sample_dir:
+        golden_real_sample_panel["enabled"] = True
+        golden_real_sample_panel["source_dir"] = str(resolved_golden_real_sample_dir)
+        dst_root = out_dir / "golden_real_sample"
+        copied = []
+        for src in (
+            resolved_golden_real_sample_dir / "sample_manifest.json",
+            resolved_golden_real_sample_dir / "query_set.yaml",
+            resolved_golden_real_sample_dir / "expected_outputs.json",
+            resolved_golden_real_sample_dir / "report.md",
+            resolved_golden_real_sample_dir / "snapshot.json",
+        ):
+            cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        golden_real_sample_panel["copied_files"] = copied
+        snapshot_src = resolved_golden_real_sample_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                golden_real_sample_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                golden_real_sample_snapshot = {}
+
     resolved_provider_telemetry_dir: Path | None = None
     if args.provider_telemetry_dir:
         resolved_provider_telemetry_dir = Path(args.provider_telemetry_dir)
@@ -1978,6 +2142,40 @@ def main() -> int:
                 provider_telemetry_summary = json.loads(summary_src.read_text(encoding="utf-8"))
             except Exception:
                 provider_telemetry_summary = {}
+
+    resolved_provider_reachability_dir: Path | None = None
+    if args.provider_reachability_dir:
+        resolved_provider_reachability_dir = Path(args.provider_reachability_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "provider_reachability"
+        if candidate.exists():
+            resolved_provider_reachability_dir = candidate
+    provider_reachability_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    provider_reachability_summary: dict[str, Any] = {}
+    if resolved_provider_reachability_dir:
+        provider_reachability_panel["enabled"] = True
+        provider_reachability_panel["source_dir"] = str(resolved_provider_reachability_dir)
+        dst_root = out_dir / "provider_reachability"
+        copied = []
+        for src in (
+            resolved_provider_reachability_dir / "summary.json",
+            resolved_provider_reachability_dir / "report.md",
+            resolved_provider_reachability_dir / "snapshot.json",
+        ):
+            cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        provider_reachability_panel["copied_files"] = copied
+        summary_src = resolved_provider_reachability_dir / "summary.json"
+        if summary_src.exists():
+            try:
+                provider_reachability_summary = json.loads(summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                provider_reachability_summary = {}
 
     resolved_provider_normalization_dir: Path | None = None
     if args.provider_normalization_dir:
@@ -2618,6 +2816,64 @@ def main() -> int:
             )
         else:
             report_lines.append("- query_promotion_pack: source provided but artifacts missing.")
+    if resolved_repeatability_audit_dir:
+        if repeatability_audit_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Repeatability Audit",
+                    "",
+                    f"- repeatability_audit_dir: `{repeatability_audit_panel.get('source_dir')}`",
+                    f"- repeatability_audit_files: `{repeatability_audit_panel.get('copied_files')}`",
+                    f"- repeatability_status: `{repeatability_audit_snapshot.get('repeatability_status', 'weak')}`",
+                    f"- stability_flag_counts: `{repeatability_audit_snapshot.get('stability_flag_counts', {})}`",
+                    f"- provider_noise_rate_mean: `{repeatability_audit_snapshot.get('provider_noise_rate_mean', 0.0)}`",
+                ]
+            )
+        else:
+            report_lines.append("- repeatability_audit: source provided but artifacts missing.")
+    if resolved_sample_size_recommendation_dir:
+        if sample_size_recommendation_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Sample Size Recommendation",
+                    "",
+                    f"- sample_size_recommendation_dir: `{sample_size_recommendation_panel.get('source_dir')}`",
+                    f"- sample_size_recommendation_files: `{sample_size_recommendation_panel.get('copied_files')}`",
+                    f"- sample_size_recommendation_status: `{sample_size_recommendation_snapshot.get('sample_size_recommendation_status', 'weak')}`",
+                    f"- recommendation_status_counts: `{sample_size_recommendation_snapshot.get('recommendation_status_counts', {})}`",
+                ]
+            )
+        else:
+            report_lines.append("- sample_size_recommendation: source provided but artifacts missing.")
+    if resolved_query_uplift_candidates_dir:
+        if query_uplift_candidates_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Query Uplift Candidates",
+                    "",
+                    f"- query_uplift_candidates_dir: `{query_uplift_candidates_panel.get('source_dir')}`",
+                    f"- query_uplift_candidates_files: `{query_uplift_candidates_panel.get('copied_files')}`",
+                    f"- query_uplift_summary: `{json.dumps(query_uplift_summary, ensure_ascii=False, sort_keys=True)}`",
+                ]
+            )
+        else:
+            report_lines.append("- query_uplift_candidates: source provided but artifacts missing.")
+    if resolved_provider_reachability_dir:
+        if provider_reachability_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Provider Reachability",
+                    "",
+                    f"- provider_reachability_dir: `{provider_reachability_panel.get('source_dir')}`",
+                    f"- provider_reachability_files: `{provider_reachability_panel.get('copied_files')}`",
+                    f"- proof_status: `{provider_reachability_summary.get('proof_status', 'fail')}`",
+                    f"- real_call_status: `{provider_reachability_summary.get('real_call_status', 'missing_or_unavailable')}`",
+                    f"- structured_output_supported: `{provider_reachability_summary.get('structured_output_supported', 'unknown')}`",
+                    f"- usage_present: `{provider_reachability_summary.get('usage_present', False)}`",
+                ]
+            )
+        else:
+            report_lines.append("- provider_reachability: source provided but artifacts missing.")
     if resolved_provider_telemetry_dir:
         if provider_telemetry_panel.get("copied_files"):
             report_lines.extend(
@@ -2662,6 +2918,21 @@ def main() -> int:
             )
         else:
             report_lines.append("- benchmark_freeze: source provided but artifacts missing.")
+    if resolved_golden_real_sample_dir:
+        if golden_real_sample_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Golden Real Sample",
+                    "",
+                    f"- golden_real_sample_dir: `{golden_real_sample_panel.get('source_dir')}`",
+                    f"- golden_real_sample_files: `{golden_real_sample_panel.get('copied_files')}`",
+                    f"- golden_sample_status: `{golden_real_sample_snapshot.get('golden_sample_status', 'empty')}`",
+                    f"- selected_query_groups: `{golden_real_sample_snapshot.get('selected_query_groups', [])}`",
+                    f"- selected_query_ids: `{golden_real_sample_snapshot.get('selected_query_ids', [])}`",
+                ]
+            )
+        else:
+            report_lines.append("- golden_real_sample: source provided but artifacts missing.")
     if args.suite_dir:
         if suite_provenance_panel.get("manifest_files") or suite_provenance_panel.get("provenance_files"):
             report_lines.extend(
@@ -2762,8 +3033,13 @@ def main() -> int:
             "delta_audit_dir": str(resolved_delta_audit_dir) if resolved_delta_audit_dir else None,
             "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
+            "provider_reachability_dir": str(resolved_provider_reachability_dir) if resolved_provider_reachability_dir else None,
             "provider_normalization_dir": str(resolved_provider_normalization_dir) if resolved_provider_normalization_dir else None,
             "query_promotion_pack_dir": str(resolved_query_promotion_pack_dir) if resolved_query_promotion_pack_dir else None,
+            "repeatability_audit_dir": str(resolved_repeatability_audit_dir) if resolved_repeatability_audit_dir else None,
+            "sample_size_recommendation_dir": str(resolved_sample_size_recommendation_dir) if resolved_sample_size_recommendation_dir else None,
+            "query_uplift_candidates_dir": str(resolved_query_uplift_candidates_dir) if resolved_query_uplift_candidates_dir else None,
+            "golden_real_sample_dir": str(resolved_golden_real_sample_dir) if resolved_golden_real_sample_dir else None,
             "benchmark_freeze_dir": str(resolved_freeze_dir) if resolved_freeze_dir else None,
             "paper_map": str(resolved_paper_map) if resolved_paper_map else None,
             "prompt_registry": str(args.prompt_registry) if args.prompt_registry else None,
@@ -2813,8 +3089,13 @@ def main() -> int:
             "delta_audit_panel": delta_audit_panel,
             "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
+            "provider_reachability_panel": provider_reachability_panel,
             "provider_normalization_panel": provider_normalization_panel,
             "query_promotion_pack_panel": query_promotion_pack_panel,
+            "repeatability_audit_panel": repeatability_audit_panel,
+            "sample_size_recommendation_panel": sample_size_recommendation_panel,
+            "query_uplift_candidates_panel": query_uplift_candidates_panel,
+            "golden_real_sample_panel": golden_real_sample_panel,
             "benchmark_freeze_panel": benchmark_freeze_panel,
             "paper_map_panel": paper_map_panel,
             "suite_provenance_panel": suite_provenance_panel,
@@ -2850,10 +3131,20 @@ def main() -> int:
             cmd.extend(["--query-strength-audit-dir", str(resolved_query_strength_audit_dir)])
         if resolved_provider_telemetry_dir:
             cmd.extend(["--provider-telemetry-dir", str(resolved_provider_telemetry_dir)])
+        if resolved_provider_reachability_dir:
+            cmd.extend(["--provider-reachability-dir", str(resolved_provider_reachability_dir)])
         if resolved_provider_normalization_dir:
             cmd.extend(["--provider-normalization-dir", str(resolved_provider_normalization_dir)])
         if resolved_query_promotion_pack_dir:
             cmd.extend(["--query-promotion-pack-dir", str(resolved_query_promotion_pack_dir)])
+        if resolved_repeatability_audit_dir:
+            cmd.extend(["--repeatability-audit-dir", str(resolved_repeatability_audit_dir)])
+        if resolved_sample_size_recommendation_dir:
+            cmd.extend(["--sample-size-recommendation-dir", str(resolved_sample_size_recommendation_dir)])
+        if resolved_query_uplift_candidates_dir:
+            cmd.extend(["--query-uplift-candidates-dir", str(resolved_query_uplift_candidates_dir)])
+        if resolved_golden_real_sample_dir:
+            cmd.extend(["--golden-real-sample-dir", str(resolved_golden_real_sample_dir)])
         if resolved_freeze_dir:
             cmd.extend(["--benchmark-freeze-dir", str(resolved_freeze_dir)])
         if resolved_paper_map:

@@ -219,41 +219,43 @@ D:\Ego4D_Dataset
   - retrieval/query constraints now support `place=*`, `place_segment_id=*`, `interaction_min=*`, `interaction_object=*`
   - trace includes place-segment hit distribution and interaction top-k diagnostics
 
-## v1.49 Main-Result Pilot
+## v1.50 Live-Call Golden Pilot
 
-`v1.49` keeps the runtime stable and extends only the result layer:
+`v1.50` keeps runtime orchestration stable and closes the live-call loop on the result layer:
 
-- `scripts\run_main_real_benchmark.py` is the single pilot entrypoint.
-- Real/fake pilot manifests live under `configs\benchmarks\v1.49_main_*.yaml`.
-- Provider telemetry is normalized into a single schema under `provider_normalization/`.
-- Query-strength recommendations can be exported as a candidate `query_promotion_pack/`.
+- `scripts\check_live_provider_health.py` proves that at least one OpenAI-compatible provider path is reachable before the pilot starts.
+- `scripts\run_main_real_benchmark.py` is still the single pilot entrypoint.
+- Real/fake golden manifests live under `configs\benchmarks\v1.50_main_*.yaml`.
+- `provider_reachability/` proves whether a real or local OpenAI-compatible call actually happened.
+- `golden_real_sample/` freezes a reusable non-empty live sample contract without mutating the frozen query bank.
 - `paper_ready/`, `paper_freeze/`, and `submission_pack/` remain the only canonical export roots.
 
-Real small pilot:
+Live provider health check:
 
 ```text
-python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.49_main_real_pilot.yaml --mode pilot --out_dir data\outputs\v149_main_real_pilot
+python scripts\check_live_provider_health.py --config configs\providers\live_provider_health_v1.yaml --out_dir data\outputs\v150_provider_health
 ```
 
-Normalize provider telemetry:
+Real golden pilot:
 
 ```text
-python scripts\normalize_provider_telemetry.py --suite-dir data\outputs\v149_main_real_pilot --out_dir data\outputs\v149_main_real_pilot\provider_normalization
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.50_main_real_golden.yaml --mode pilot --out_dir data\outputs\v150_main_real_golden
 ```
 
-Export query promotion candidates:
+Build a reusable golden real sample:
 
 ```text
-python scripts\export_query_promotion_pack.py --suite-dir data\outputs\v149_main_real_pilot --out_dir data\outputs\v149_main_real_pilot\query_promotion_pack
+python scripts\build_golden_real_sample.py --suite-dir data\outputs\v150_main_real_golden --out_dir data\outputs\v150_main_real_golden\golden_real_sample
 ```
 
-What to read first after a weak real pilot:
+What to read first after a weak or partial real pilot:
 
-- `provider_normalization/snapshot.json`
+- `provider_reachability/report.md`
+- `result_health/snapshot.json`
 - `result_diagnosis/report.md`
 - `delta_audit/report.md`
-- `query_strength_audit/report.md`
 - `query_promotion_pack/report.md`
+- `golden_real_sample/report.md`
 
 ## Roadmap (Next Suggested Steps)
 

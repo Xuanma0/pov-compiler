@@ -709,6 +709,30 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    provider_reachability_dir = tmp_path / "provider_reachability"
+    provider_reachability_dir.mkdir(parents=True, exist_ok=True)
+    (provider_reachability_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "provider": "local_openai",
+                "base_url": "http://127.0.0.1:40123/v1",
+                "model": "local-openai-proof",
+                "api_mode_tested": "responses",
+                "reachable": True,
+                "real_call_status": "ok",
+                "usage_present": True,
+                "latency_ms": 42.0,
+                "structured_output_supported": True,
+                "proof_status": "ok",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (provider_reachability_dir / "report.md").write_text("# provider reachability report\n", encoding="utf-8")
+    (provider_reachability_dir / "snapshot.json").write_text(
+        json.dumps({"proof_status": "ok", "real_call_status": "ok", "reachable": True}),
+        encoding="utf-8",
+    )
     provider_normalization_dir = tmp_path / "provider_normalization"
     (provider_normalization_dir / "tables").mkdir(parents=True, exist_ok=True)
     (provider_normalization_dir / "tables" / "table_provider_normalization.csv").write_text(
@@ -756,6 +780,113 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (query_promotion_pack_dir / "report.md").write_text("# query promotion pack report\n", encoding="utf-8")
+
+    repeatability_audit_dir = tmp_path / "repeatability_audit"
+    (repeatability_audit_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (repeatability_audit_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (repeatability_audit_dir / "tables" / "table_repeatability_audit.csv").write_text(
+        "variant,metric,budget,runs_count,mean,std,min,max,coefficient_of_variation,stability_flag,provider_noise_flag\nstub->real,nlq:nlq_full_hit_at_k_strict,20/50/4,4,0.05,0.01,0.04,0.06,0.2,stable,False\n",
+        encoding="utf-8",
+    )
+    (repeatability_audit_dir / "tables" / "table_repeatability_audit.md").write_text("# repeatability\n", encoding="utf-8")
+    (repeatability_audit_dir / "figures" / "fig_repeatability_variance.png").write_bytes(b"PNG")
+    (repeatability_audit_dir / "figures" / "fig_repeatability_variance.pdf").write_bytes(b"PDF")
+    (repeatability_audit_dir / "report.md").write_text("# repeatability report\n", encoding="utf-8")
+    (repeatability_audit_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "repeatability_status": "ok",
+                "stability_flag_counts": {"stable": 1},
+                "provider_noise_rate_mean": 0.0,
+                "repeat_runs_total": 4,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    sample_size_recommendation_dir = tmp_path / "sample_size_recommendation"
+    (sample_size_recommendation_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (sample_size_recommendation_dir / "tables" / "table_sample_size_recommendation.csv").write_text(
+        "metric,current_n_pairs,recommended_n_pairs_min,recommended_n_uids_min,confidence_level,recommendation_status,based_on_variance,based_on_effect_size,notes\nnlq:nlq_full_hit_at_k_strict,6,10,4,medium,range_only,0.2,0.8,variance requires more pairs\n",
+        encoding="utf-8",
+    )
+    (sample_size_recommendation_dir / "tables" / "table_sample_size_recommendation.md").write_text(
+        "# sample size\n",
+        encoding="utf-8",
+    )
+    (sample_size_recommendation_dir / "report.md").write_text("# sample size report\n", encoding="utf-8")
+    (sample_size_recommendation_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "sample_size_recommendation_status": "range_only",
+                "recommendation_status_counts": {"range_only": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    query_uplift_candidates_dir = tmp_path / "query_uplift_candidates"
+    (query_uplift_candidates_dir / "query_uplift_candidates").mkdir(parents=True, exist_ok=True)
+    (query_uplift_candidates_dir / "query_uplift_candidates" / "candidate_queries.yaml").write_text(
+        "queries:\n  - query_id: chain_scene_to_object\n",
+        encoding="utf-8",
+    )
+    (query_uplift_candidates_dir / "query_uplift_candidates" / "analysis_only_queries.yaml").write_text(
+        "queries:\n  - query_id: repo_summary_place\n",
+        encoding="utf-8",
+    )
+    (query_uplift_candidates_dir / "query_uplift_candidates" / "drop_queries.yaml").write_text(
+        "queries:\n  - query_id: decision_put_down_summary\n",
+        encoding="utf-8",
+    )
+    (query_uplift_candidates_dir / "query_uplift_candidates" / "uplift_summary.json").write_text(
+        json.dumps(
+            {
+                "candidate_count": 1,
+                "analysis_only_count": 1,
+                "drop_count": 1,
+                "source_query_bank_id": "core_real_v1",
+                "source_query_bank_hash": "abc123",
+                "uplift_confidence": "partial",
+                "uplift_basis": {"source_main_recommendation": "increase_sample_size"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (query_uplift_candidates_dir / "report.md").write_text("# query uplift report\n", encoding="utf-8")
+
+    golden_real_sample_dir = tmp_path / "golden_real_sample"
+    golden_real_sample_dir.mkdir(parents=True, exist_ok=True)
+    (golden_real_sample_dir / "sample_manifest.json").write_text(
+        json.dumps(
+            {
+                "golden_sample_status": "ok",
+                "selected_query_groups": ["chain"],
+                "selected_query_ids": ["chain_scene_to_object"],
+                "source_provider_proof": {"proof_status": "ok", "real_call_status": "ok"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (golden_real_sample_dir / "query_set.yaml").write_text(
+        "sample_id: golden_real_sample_v1\nqueries:\n  - query_id: chain_scene_to_object\n",
+        encoding="utf-8",
+    )
+    (golden_real_sample_dir / "expected_outputs.json").write_text(
+        json.dumps({"selected_queries_total": 1}),
+        encoding="utf-8",
+    )
+    (golden_real_sample_dir / "report.md").write_text("# golden real sample report\n", encoding="utf-8")
+    (golden_real_sample_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "golden_sample_status": "ok",
+                "selected_query_groups": ["chain"],
+                "selected_query_ids": ["chain_scene_to_object"],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     freeze_dir = tmp_path / "freeze"
     freeze_dir.mkdir(parents=True, exist_ok=True)
@@ -898,6 +1029,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(delta_audit_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
+        "--provider-reachability-dir",
+        str(provider_reachability_dir),
         "--provider-normalization-dir",
         str(provider_normalization_dir),
         "--admission-calibration-dir",
@@ -906,6 +1039,14 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(query_strength_audit_dir),
         "--query-promotion-pack-dir",
         str(query_promotion_pack_dir),
+        "--repeatability-audit-dir",
+        str(repeatability_audit_dir),
+        "--sample-size-recommendation-dir",
+        str(sample_size_recommendation_dir),
+        "--query-uplift-candidates-dir",
+        str(query_uplift_candidates_dir),
+        "--golden-real-sample-dir",
+        str(golden_real_sample_dir),
         "--benchmark-freeze-dir",
         str(freeze_dir),
         "--paper-map",
@@ -943,9 +1084,14 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Result Diagnosis" in report_text
     assert "## Delta Audit" in report_text
     assert "## Query Strength Audit" in report_text
+    assert "## Repeatability Audit" in report_text
+    assert "## Sample Size Recommendation" in report_text
+    assert "## Query Uplift Candidates" in report_text
+    assert "## Provider Reachability" in report_text
     assert "## Provider Telemetry" in report_text
     assert "## Provider Normalization" in report_text
     assert "## Query Promotion Pack" in report_text
+    assert "## Golden Real Sample" in report_text
     assert "## Benchmark Freeze" in report_text
     assert (out_dir / "canonical" / "tables" / "Table_1.csv").exists()
     assert (out_dir / "canonical" / "tables" / "Table_1.md").exists()
@@ -985,10 +1131,17 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "delta_audit" / "report.md").exists()
     assert (out_dir / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (out_dir / "query_strength_audit" / "report.md").exists()
+    assert (out_dir / "provider_reachability" / "summary.json").exists()
+    assert (out_dir / "provider_reachability" / "report.md").exists()
     assert (out_dir / "provider_normalization" / "tables" / "table_provider_normalization.csv").exists()
     assert (out_dir / "provider_normalization" / "snapshot.json").exists()
     assert (out_dir / "query_promotion_pack" / "query_pack" / "promotion_summary.json").exists()
     assert (out_dir / "query_promotion_pack" / "report.md").exists()
+    assert (out_dir / "repeatability_audit" / "tables" / "table_repeatability_audit.csv").exists()
+    assert (out_dir / "sample_size_recommendation" / "tables" / "table_sample_size_recommendation.csv").exists()
+    assert (out_dir / "query_uplift_candidates" / "query_uplift_candidates" / "uplift_summary.json").exists()
+    assert (out_dir / "golden_real_sample" / "sample_manifest.json").exists()
+    assert (out_dir / "golden_real_sample" / "query_set.yaml").exists()
     assert (out_dir / "figures" / "fig_result_diagnosis_breakdown.png").exists()
     assert (out_dir / "figures" / "fig_delta_audit_breakdown.png").exists()
     assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()
@@ -1104,8 +1257,13 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "delta_audit" / "tables" / "table_delta_audit.csv").exists()
     assert (submission_pack / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (submission_pack / "provider_telemetry" / "summary.json").exists()
+    assert (submission_pack / "provider_reachability" / "summary.json").exists()
     assert (submission_pack / "provider_normalization" / "snapshot.json").exists()
     assert (submission_pack / "query_promotion_pack" / "query_pack" / "promotion_summary.json").exists()
+    assert (submission_pack / "repeatability_audit" / "snapshot.json").exists()
+    assert (submission_pack / "sample_size_recommendation" / "snapshot.json").exists()
+    assert (submission_pack / "query_uplift_candidates" / "query_uplift_candidates" / "uplift_summary.json").exists()
+    assert (submission_pack / "golden_real_sample" / "sample_manifest.json").exists()
     assert (submission_pack / "freeze" / "freeze_manifest.json").exists()
     assert (submission_pack / "manifest" / "experiment_manifest.yaml").exists()
     assert (submission_pack / "manifest" / "prompt_lock.json").exists()
@@ -1128,6 +1286,11 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Diagnosis First" in submission_readme
     assert "Delta Audit" in submission_readme
     assert "Query Strength Audit" in submission_readme
+    assert "Provider Reachability" in submission_readme
     assert "Provider Noise" in submission_readme
     assert "Normalized Telemetry" in submission_readme
+    assert "Repeatability Audit" in submission_readme
+    assert "Sample Size Recommendation" in submission_readme
+    assert "Query Uplift Candidates" in submission_readme
     assert "Query Promotion" in submission_readme
+    assert "Golden Real Sample" in submission_readme

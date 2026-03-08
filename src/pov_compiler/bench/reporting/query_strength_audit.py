@@ -188,6 +188,40 @@ def _promotion_reason(
     return recommended_action
 
 
+def _uplift_candidate(
+    *,
+    recommended_action: str,
+    provider_noise_flag: bool,
+    weak_query_flag: bool,
+) -> bool:
+    if recommended_action in {"increase_sample_size", "strengthen_signal_support"}:
+        return True
+    if provider_noise_flag and weak_query_flag and recommended_action not in {"drop_from_main_real", "algorithm_no_effect_detected"}:
+        return True
+    return False
+
+
+def _uplift_reason(
+    *,
+    recommended_action: str,
+    provider_noise_flag: bool,
+    weak_query_flag: bool,
+    signal_support_rate: float,
+    coverage_rate: float,
+) -> str:
+    if recommended_action == "strengthen_signal_support":
+        return "signal_support_too_low"
+    if recommended_action == "increase_sample_size":
+        return "sample_too_small"
+    if provider_noise_flag and weak_query_flag:
+        return "provider_noise_masks_signal"
+    if weak_query_flag and signal_support_rate < 0.55:
+        return "weak_query_signal"
+    if weak_query_flag and coverage_rate < 0.50:
+        return "weak_query_coverage"
+    return "not_uplift_candidate"
+
+
 def build_query_strength_audit_table(
     *,
     suite_dir: str | Path,
@@ -280,6 +314,18 @@ def build_query_strength_audit_table(
             provider_noise_flag=provider_noise_flag,
             recommended_action=recommended_action,
         )
+        uplift_candidate = _uplift_candidate(
+            recommended_action=recommended_action,
+            provider_noise_flag=provider_noise_flag,
+            weak_query_flag=weak_query_flag,
+        )
+        uplift_reason = _uplift_reason(
+            recommended_action=recommended_action,
+            provider_noise_flag=provider_noise_flag,
+            weak_query_flag=weak_query_flag,
+            signal_support_rate=signal_support_rate,
+            coverage_rate=coverage_rate,
+        )
 
         rows.append(
             {
@@ -297,6 +343,8 @@ def build_query_strength_audit_table(
                 "provider_noise_flag": bool(provider_noise_flag),
                 "promotion_candidate": promotion_candidate,
                 "promotion_reason": promotion_reason,
+                "uplift_candidate": uplift_candidate,
+                "uplift_reason": uplift_reason,
                 "recommended_action": recommended_action,
             }
         )
@@ -320,6 +368,8 @@ def build_query_strength_audit_table(
                     "provider_noise_flag": provider_noise_flag,
                     "promotion_candidate": False,
                     "promotion_reason": "no_query_groups",
+                    "uplift_candidate": True,
+                    "uplift_reason": "no_query_groups",
                     "recommended_action": "keep_for_analysis_only",
                 }
             ]
@@ -329,6 +379,9 @@ def build_query_strength_audit_table(
     weak_count = int(out_df["weak_query_flag"].astype(bool).sum())
     promoted_groups = sorted(
         out_df.loc[out_df["promotion_candidate"].astype(bool), "query_group"].astype(str).tolist()
+    )
+    uplift_groups = sorted(
+        out_df.loc[out_df["uplift_candidate"].astype(bool), "query_group"].astype(str).tolist()
     )
     analysis_only_groups = sorted(
         out_df.loc[out_df["recommended_action"].astype(str) == "keep_for_analysis_only", "query_group"].astype(str).tolist()
@@ -348,6 +401,8 @@ def build_query_strength_audit_table(
         "weak_query_groups_count": weak_count,
         "recommended_action_counts": {key: int(value) for key, value in sorted(action_counter.items())},
         "promoted_query_groups": promoted_groups,
+        "uplift_candidate_count": int(len(uplift_groups)),
+        "uplift_candidate_groups": uplift_groups,
         "analysis_only_query_groups": analysis_only_groups,
         "main_recommendation": main_recommendation,
         "available_tasks": available_tasks,
@@ -412,6 +467,7 @@ def write_query_strength_audit_outputs(
         f"- query_bank_version: `{snapshot.get('query_bank_version', '')}`",
         f"- rows_total: `{snapshot.get('rows_total', 0)}`",
         f"- weak_query_groups_count: `{snapshot.get('weak_query_groups_count', 0)}`",
+        f"- uplift_candidate_count: `{snapshot.get('uplift_candidate_count', 0)}`",
         f"- main_recommendation: `{snapshot.get('main_recommendation', '')}`",
         f"- recommended_action_counts: `{snapshot.get('recommended_action_counts', {})}`",
         "",
