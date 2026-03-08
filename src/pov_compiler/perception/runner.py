@@ -44,6 +44,11 @@ def _cache_key(
     model_name: str = "",
     model_path: str = "",
     hand_task_model_path: str = "",
+    perception_variant: str = "",
+    segmentation_backend_used: str = "",
+    segmentation_model_name: str = "",
+    segmentation_model_path: str = "",
+    segmentation_repo_path: str = "",
 ) -> str:
     stat = video_path.stat()
     payload = {
@@ -57,6 +62,11 @@ def _cache_key(
         "model_name": str(model_name),
         "model_path": str(model_path),
         "hand_task_model_path": str(hand_task_model_path),
+        "perception_variant": str(perception_variant),
+        "segmentation_backend_used": str(segmentation_backend_used),
+        "segmentation_model_name": str(segmentation_model_name),
+        "segmentation_model_path": str(segmentation_model_path),
+        "segmentation_repo_path": str(segmentation_repo_path),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
@@ -95,6 +105,11 @@ def run_perception(
             model_name=str(requested_meta.get("perception_model_name", "")),
             model_path=str(requested_meta.get("perception_model_path", "")),
             hand_task_model_path=str(requested_meta.get("perception_hand_task_model_path", "")),
+            perception_variant=str(requested_meta.get("perception_variant", "")),
+            segmentation_backend_used=str(requested_meta.get("segmentation_backend_used", "")),
+            segmentation_model_name=str(requested_meta.get("segmentation_model_name", "")),
+            segmentation_model_path=str(requested_meta.get("segmentation_model_path", "")),
+            segmentation_repo_path=str(requested_meta.get("segmentation_repo_path", "")),
         )
         cache_file = cache_root / f"{path.stem}_{key}.perception.json"
         if cache_file.exists():
@@ -111,6 +126,12 @@ def run_perception(
                             "perception_hand_task_model_path",
                             str(requested_meta.get("perception_hand_task_model_path", "")),
                         )
+                        meta.setdefault("perception_variant", str(requested_meta.get("perception_variant", "")))
+                        meta.setdefault("segmentation_backend_used", str(requested_meta.get("segmentation_backend_used", "")))
+                        meta.setdefault("segmentation_model_name", str(requested_meta.get("segmentation_model_name", "")))
+                        meta.setdefault("segmentation_model_path", str(requested_meta.get("segmentation_model_path", "")))
+                        meta.setdefault("segmentation_repo_path", str(requested_meta.get("segmentation_repo_path", "")))
+                        meta.setdefault("segmentation_runtime_status", str(requested_meta.get("segmentation_runtime_status", "")))
                         payload["meta"] = meta
                     summary = payload.get("summary", {})
                     if isinstance(summary, dict):
@@ -121,6 +142,12 @@ def run_perception(
                         )
                         summary.setdefault("perception_model_name", str(requested_meta.get("perception_model_name", "")))
                         summary.setdefault("perception_model_path", str(requested_meta.get("perception_model_path", "")))
+                        summary.setdefault("perception_variant", str(requested_meta.get("perception_variant", "")))
+                        summary.setdefault("segmentation_backend_used", str(requested_meta.get("segmentation_backend_used", "")))
+                        summary.setdefault("segmentation_model_name", str(requested_meta.get("segmentation_model_name", "")))
+                        summary.setdefault("segmentation_model_path", str(requested_meta.get("segmentation_model_path", "")))
+                        summary.setdefault("segmentation_repo_path", str(requested_meta.get("segmentation_repo_path", "")))
+                        summary.setdefault("segmentation_runtime_status", str(requested_meta.get("segmentation_runtime_status", "")))
                         payload["summary"] = summary
                     return payload
             except Exception:
@@ -155,6 +182,9 @@ def run_perception(
     contact_events = 0
     frames_processed = 0
     frames_failed = 0
+    segmentation_frames = 0
+    persistent_track_ids: set[str] = set()
+    persistent_object_instances = 0
 
     prev_hist: np.ndarray | None = None
     for idx, (t, frame_bgr) in enumerate(reader.iter_samples(sample_fps=float(sample_fps))):
@@ -190,6 +220,16 @@ def run_perception(
             label_counts[label] = label_counts.get(label, 0) + 1
         if hands:
             hand_frames += 1
+        segmentation = det.get("segmentation", {})
+        if isinstance(segmentation, dict) and segmentation:
+            segmentation_frames += 1
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            track_id = str(obj.get("track_id", "")).strip()
+            if track_id and bool(obj.get("persistent", False)):
+                persistent_track_ids.add(track_id)
+                persistent_object_instances += 1
 
         contact = select_active_contact(
             hands=[dict(x) for x in hands if isinstance(x, dict)],
@@ -233,6 +273,12 @@ def run_perception(
             "perception_model_name": str(effective_meta.get("perception_model_name", "")),
             "perception_model_path": str(effective_meta.get("perception_model_path", "")),
             "perception_hand_task_model_path": str(effective_meta.get("perception_hand_task_model_path", "")),
+            "perception_variant": str(effective_meta.get("perception_variant", "")),
+            "segmentation_backend_used": str(effective_meta.get("segmentation_backend_used", "")),
+            "segmentation_model_name": str(effective_meta.get("segmentation_model_name", "")),
+            "segmentation_model_path": str(effective_meta.get("segmentation_model_path", "")),
+            "segmentation_repo_path": str(effective_meta.get("segmentation_repo_path", "")),
+            "segmentation_runtime_status": str(effective_meta.get("segmentation_runtime_status", "")),
             "processed_frames": int(processed),
             "elapsed_s": float(elapsed_s),
             "throughput_fps": float(processed / elapsed_s) if elapsed_s > 0 else 0.0,
@@ -255,11 +301,20 @@ def run_perception(
             "perception_backend_used": str(effective_meta.get("perception_backend_used", getattr(backend, "name", requested_backend))),
             "perception_model_name": str(effective_meta.get("perception_model_name", "")),
             "perception_model_path": str(effective_meta.get("perception_model_path", "")),
+            "perception_variant": str(effective_meta.get("perception_variant", "")),
+            "segmentation_backend_used": str(effective_meta.get("segmentation_backend_used", "")),
+            "segmentation_model_name": str(effective_meta.get("segmentation_model_name", "")),
+            "segmentation_model_path": str(effective_meta.get("segmentation_model_path", "")),
+            "segmentation_repo_path": str(effective_meta.get("segmentation_repo_path", "")),
+            "segmentation_runtime_status": str(effective_meta.get("segmentation_runtime_status", "")),
             "objects_topk": _topk_labels(label_counts, k=int(objects_topk)),
             "hand_presence_rate": float(hand_frames / processed) if processed > 0 else 0.0,
             "contact_events_count": int(contact_events),
             "objects_total": int(sum(label_counts.values())),
             "frames_total": int(processed),
+            "segmentation_frames_total": int(segmentation_frames),
+            "persistent_tracks_total": int(len(persistent_track_ids)),
+            "persistent_object_instances_total": int(persistent_object_instances),
         },
     }
     if cache_file is not None:

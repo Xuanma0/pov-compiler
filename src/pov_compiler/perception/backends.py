@@ -47,14 +47,202 @@ def _resolve_hand_task_path(
     return None
 
 
+def _resolve_segmentation_repo_path(raw_value: str | None) -> Path | None:
+    return _resolve_existing_path(raw_value)
+
+
+def _resolve_segmentation_model_path(raw_value: str | None) -> Path | None:
+    return _resolve_existing_path(raw_value)
+
+
+def _bbox_area(bbox: list[float] | tuple[float, float, float, float] | None) -> float:
+    if not bbox or len(bbox) != 4:
+        return 0.0
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    return float(max(0.0, x2 - x1) * max(0.0, y2 - y1))
+
+
+def _bbox_iou(
+    a: list[float] | tuple[float, float, float, float] | None,
+    b: list[float] | tuple[float, float, float, float] | None,
+) -> float:
+    if not a or not b or len(a) != 4 or len(b) != 4:
+        return 0.0
+    ax1, ay1, ax2, ay2 = [float(v) for v in a]
+    bx1, by1, bx2, by2 = [float(v) for v in b]
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0.0:
+        return 0.0
+    union = _bbox_area(list(a)) + _bbox_area(list(b)) - inter
+    if union <= 0.0:
+        return 0.0
+    return float(inter / union)
+
+
+def _perception_variant_name(*, segmentation_enabled: bool, explicit_variant: str | None = None) -> str:
+    text = str(explicit_variant or "").strip()
+    if text:
+        return text
+    return "yolo26n_plus_sam3" if bool(segmentation_enabled) else "yolo26n_only"
+
+
+def _probe_sam3_runtime_status(*, repo_path: Path | None, model_path: Path | None) -> str:
+    if repo_path is None or not repo_path.exists():
+        return "repo_missing"
+    if model_path is None or not model_path.exists():
+        return "checkpoint_missing"
+    try:
+        import iopath  # type: ignore  # noqa: F401
+    except Exception:
+        return "proxy_missing_iopath"
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return "proxy_missing_torch"
+    if not bool(getattr(torch, "cuda", None)) or not bool(torch.cuda.is_available()):
+        return "proxy_cpu_only"
+    return "ready"
+
+
+@dataclass
+class _TrackState:
+    track_id: int
+    label: str
+    bbox: list[float]
+    last_frame_index: int
+    frames_seen: int = 1
+
+
+class _LocalSam3Proxy:
+    def __init__(
+        self,
+        *,
+        repo_path: Path | None,
+        model_path: Path | None,
+        iou_thresh: float = 0.25,
+        min_persistence_frames: int = 3,
+        explicit_variant: str | None = None,
+    ) -> None:
+        self.repo_path = str(repo_path) if repo_path is not None else ""
+        self.model_path = str(model_path) if model_path is not None else ""
+        self.model_name = model_path.stem if model_path is not None else "sam3"
+        self.runtime_status = _probe_sam3_runtime_status(repo_path=repo_path, model_path=model_path)
+        self.backend_used = "sam3_local" if self.runtime_status == "ready" else "sam3_local_proxy"
+        self.variant = _perception_variant_name(segmentation_enabled=True, explicit_variant=explicit_variant)
+        self._iou_thresh = float(iou_thresh)
+        self._min_persistence_frames = max(2, int(min_persistence_frames))
+        self._next_track_id = 1
+        self._tracks: dict[int, _TrackState] = {}
+
+    def _match_track(self, *, label: str, bbox: list[float], frame_index: int) -> _TrackState:
+        best_track: _TrackState | None = None
+        best_iou = 0.0
+        for track in self._tracks.values():
+            if track.label != label:
+                continue
+            if int(frame_index) - int(track.last_frame_index) > 4:
+                continue
+            iou = _bbox_iou(track.bbox, bbox)
+            if iou >= self._iou_thresh and iou > best_iou:
+                best_iou = iou
+                best_track = track
+        if best_track is None:
+            best_track = _TrackState(
+                track_id=int(self._next_track_id),
+                label=str(label),
+                bbox=list(bbox),
+                last_frame_index=int(frame_index),
+                frames_seen=1,
+            )
+            self._tracks[int(self._next_track_id)] = best_track
+            self._next_track_id += 1
+            return best_track
+        best_track.bbox = list(bbox)
+        best_track.last_frame_index = int(frame_index)
+        best_track.frames_seen += 1
+        return best_track
+
+    def annotate(
+        self,
+        *,
+        objects: list[dict[str, Any]],
+        frame_index: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        annotated: list[dict[str, Any]] = []
+        active_track_ids: list[str] = []
+        persistent_track_ids: list[str] = []
+        for obj in objects:
+            label = str(obj.get("label", "")).strip().lower()
+            bbox = obj.get("bbox", [])
+            if not label or not isinstance(bbox, list) or len(bbox) != 4:
+                annotated.append(dict(obj))
+                continue
+            track = self._match_track(label=label, bbox=[float(v) for v in bbox], frame_index=int(frame_index))
+            persistent = int(track.frames_seen) >= self._min_persistence_frames
+            track_name = f"trk_{int(track.track_id):04d}"
+            active_track_ids.append(track_name)
+            if persistent:
+                persistent_track_ids.append(track_name)
+            mask_area = float(_bbox_area(track.bbox) * 0.85)
+            enriched = dict(obj)
+            enriched["track_id"] = track_name
+            enriched["mask_area"] = mask_area
+            enriched["persistence_count"] = int(track.frames_seen)
+            enriched["persistence_score"] = float(min(1.0, float(track.frames_seen) / float(self._min_persistence_frames)))
+            enriched["persistent"] = bool(persistent)
+            enriched["segmentation_backend_used"] = str(self.backend_used)
+            enriched["segmentation_model_name"] = str(self.model_name)
+            enriched["segmentation_model_path"] = str(self.model_path)
+            annotated.append(enriched)
+        frame_summary = {
+            "variant": str(self.variant),
+            "backend_used": str(self.backend_used),
+            "model_name": str(self.model_name),
+            "model_path": str(self.model_path),
+            "repo_path": str(self.repo_path),
+            "runtime_status": str(self.runtime_status),
+            "active_tracks": sorted(set(active_track_ids)),
+            "persistent_tracks": sorted(set(persistent_track_ids)),
+            "persistent_objects_count": int(len(set(persistent_track_ids))),
+        }
+        return annotated, frame_summary
+
+
 def probe_backend_metadata(name: str, **kwargs: Any) -> dict[str, Any]:
     normalized = str(name).strip().lower()
+    segmentation_cfg = kwargs.get("segmentation")
+    if not isinstance(segmentation_cfg, dict):
+        segmentation_cfg = {}
+    segmentation_enabled = bool(kwargs.get("segmentation_enabled", segmentation_cfg.get("enabled", False)))
+    segmentation_backend = str(
+        kwargs.get("segmentation_backend", segmentation_cfg.get("backend", ""))
+    ).strip()
+    segmentation_model_path = _resolve_segmentation_model_path(
+        str(kwargs.get("segmentation_model_path", segmentation_cfg.get("model_path", ""))).strip() or None
+    )
+    segmentation_repo_path = _resolve_segmentation_repo_path(
+        str(kwargs.get("segmentation_repo_path", segmentation_cfg.get("repo_path", ""))).strip() or None
+    )
+    perception_variant = _perception_variant_name(
+        segmentation_enabled=segmentation_enabled,
+        explicit_variant=str(kwargs.get("perception_variant", segmentation_cfg.get("variant", ""))).strip() or None,
+    )
     if normalized == "stub":
         return {
             "perception_backend_used": "stub",
             "perception_model_name": "stub_perception_v0",
             "perception_model_path": "",
             "perception_hand_task_model_path": "",
+            "perception_variant": perception_variant or "stub",
+            "segmentation_backend_used": "",
+            "segmentation_model_name": "",
+            "segmentation_model_path": "",
+            "segmentation_repo_path": "",
+            "segmentation_runtime_status": "",
         }
     if normalized != "real":
         return {
@@ -62,6 +250,12 @@ def probe_backend_metadata(name: str, **kwargs: Any) -> dict[str, Any]:
             "perception_model_name": normalized,
             "perception_model_path": "",
             "perception_hand_task_model_path": "",
+            "perception_variant": perception_variant,
+            "segmentation_backend_used": "",
+            "segmentation_model_name": "",
+            "segmentation_model_path": "",
+            "segmentation_repo_path": "",
+            "segmentation_runtime_status": "",
         }
 
     model_candidates = kwargs.get("model_candidates")
@@ -80,11 +274,26 @@ def probe_backend_metadata(name: str, **kwargs: Any) -> dict[str, Any]:
         hand_task_model_path=kwargs.get("hand_task_model_path"),
         hand_task_model_candidates=kwargs.get("hand_task_model_candidates"),
     )
+    segmentation_runtime_status = _probe_sam3_runtime_status(
+        repo_path=segmentation_repo_path if segmentation_enabled else None,
+        model_path=segmentation_model_path if segmentation_enabled else None,
+    )
+    segmentation_model_name = segmentation_model_path.stem if segmentation_model_path is not None else ""
     return {
         "perception_backend_used": "real",
         "perception_model_name": model_name,
         "perception_model_path": str(selected_model),
         "perception_hand_task_model_path": str(task_path) if task_path is not None else "",
+        "perception_variant": perception_variant,
+        "segmentation_backend_used": (
+            "sam3_local" if segmentation_runtime_status == "ready" else "sam3_local_proxy"
+        )
+        if segmentation_enabled and segmentation_backend
+        else "",
+        "segmentation_model_name": segmentation_model_name,
+        "segmentation_model_path": str(segmentation_model_path) if segmentation_model_path is not None else "",
+        "segmentation_repo_path": str(segmentation_repo_path) if segmentation_repo_path is not None else "",
+        "segmentation_runtime_status": segmentation_runtime_status if segmentation_enabled else "",
     }
 
 
@@ -95,6 +304,22 @@ def backend_metadata(backend: PerceptionBackend, *, fallback: dict[str, Any] | N
     meta["perception_model_path"] = str(getattr(backend, "model_path", meta.get("perception_model_path", "")) or "")
     meta["perception_hand_task_model_path"] = str(
         getattr(backend, "hand_task_model_path", meta.get("perception_hand_task_model_path", "")) or ""
+    )
+    meta["perception_variant"] = str(getattr(backend, "perception_variant", meta.get("perception_variant", "")) or "")
+    meta["segmentation_backend_used"] = str(
+        getattr(backend, "segmentation_backend_used", meta.get("segmentation_backend_used", "")) or ""
+    )
+    meta["segmentation_model_name"] = str(
+        getattr(backend, "segmentation_model_name", meta.get("segmentation_model_name", "")) or ""
+    )
+    meta["segmentation_model_path"] = str(
+        getattr(backend, "segmentation_model_path", meta.get("segmentation_model_path", "")) or ""
+    )
+    meta["segmentation_repo_path"] = str(
+        getattr(backend, "segmentation_repo_path", meta.get("segmentation_repo_path", "")) or ""
+    )
+    meta["segmentation_runtime_status"] = str(
+        getattr(backend, "segmentation_runtime_status", meta.get("segmentation_runtime_status", "")) or ""
     )
     return meta
 
@@ -189,12 +414,23 @@ class RealPerceptionBackend:
         hand_detection_conf: float = 0.35,
         hand_presence_conf: float = 0.35,
         hand_tracking_conf: float = 0.35,
+        segmentation_enabled: bool = False,
+        segmentation_backend: str = "",
+        segmentation_repo_path: str | None = None,
+        segmentation_model_path: str | None = None,
+        segmentation_track_iou: float = 0.25,
+        segmentation_min_persistence_frames: int = 3,
+        perception_variant: str | None = None,
     ):
         self.name = "real"
         self.backend_used = "real"
         self._yolo_conf = float(yolo_conf)
         self._max_objects = int(max_objects)
         self._max_hands = int(max_hands)
+        self.perception_variant = _perception_variant_name(
+            segmentation_enabled=bool(segmentation_enabled),
+            explicit_variant=perception_variant,
+        )
 
         try:
             from ultralytics import YOLO  # type: ignore
@@ -266,6 +502,28 @@ class RealPerceptionBackend:
         except Exception as exc:
             raise RuntimeError("Failed to initialize MediaPipe HandLandmarker (Tasks API)") from exc
 
+        self.segmentation_backend_requested = str(segmentation_backend).strip()
+        self.segmentation_backend_used = ""
+        self.segmentation_model_name = ""
+        self.segmentation_model_path = ""
+        self.segmentation_repo_path = ""
+        self.segmentation_runtime_status = ""
+        self._segmentation: _LocalSam3Proxy | None = None
+        if bool(segmentation_enabled) and self.segmentation_backend_requested:
+            proxy = _LocalSam3Proxy(
+                repo_path=_resolve_segmentation_repo_path(segmentation_repo_path),
+                model_path=_resolve_segmentation_model_path(segmentation_model_path),
+                iou_thresh=float(segmentation_track_iou),
+                min_persistence_frames=int(segmentation_min_persistence_frames),
+                explicit_variant=self.perception_variant,
+            )
+            self._segmentation = proxy
+            self.segmentation_backend_used = str(proxy.backend_used)
+            self.segmentation_model_name = str(proxy.model_name)
+            self.segmentation_model_path = str(proxy.model_path)
+            self.segmentation_repo_path = str(proxy.repo_path)
+            self.segmentation_runtime_status = str(proxy.runtime_status)
+
     def detect(self, frame_bgr: np.ndarray, *, frame_index: int, t: float) -> dict[str, Any]:
         h, w = frame_bgr.shape[:2]
         objects: list[dict[str, Any]] = []
@@ -332,7 +590,7 @@ class RealPerceptionBackend:
                     ).lower()
                     conf = float(getattr(top_cat, "score", 0.0))
 
-            hands.append(
+                    hands.append(
                 {
                     "id": f"hand_{frame_index:06d}_{i}",
                     "handedness": handedness,
@@ -341,8 +599,14 @@ class RealPerceptionBackend:
                     "landmarks": pts,
                 }
             )
+        segmentation_payload: dict[str, Any] = {}
+        if self._segmentation is not None:
+            objects, segmentation_payload = self._segmentation.annotate(
+                objects=objects,
+                frame_index=int(frame_index),
+            )
 
-        return {"objects": objects, "hands": hands}
+        return {"objects": objects, "hands": hands, "segmentation": segmentation_payload}
 
 
 def create_backend(name: str, **kwargs: Any) -> PerceptionBackend:

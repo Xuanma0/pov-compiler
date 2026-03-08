@@ -657,6 +657,35 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    object_persistence_uplift_dir = tmp_path / "object_persistence_uplift"
+    (object_persistence_uplift_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (object_persistence_uplift_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (object_persistence_uplift_dir / "tables" / "table_object_persistence_uplift_summary.csv").write_text(
+        "suite_id,object_persistence_status,object_memory_improved,object_persistence_improved,lost_object_support_improved,chain_object_grounding_improved,query_strength_improved,next_action_recommendation,should_formalize_sam3_next\nv155_signal_uplift_real,improved,True,True,True,True,True,promote_sam3_to_next_stage,True\n",
+        encoding="utf-8",
+    )
+    (object_persistence_uplift_dir / "tables" / "table_object_persistence_uplift_summary.md").write_text(
+        "# object persistence uplift\n",
+        encoding="utf-8",
+    )
+    (object_persistence_uplift_dir / "figures" / "fig_object_persistence_uplift_summary.png").write_bytes(b"PNG")
+    (object_persistence_uplift_dir / "figures" / "fig_object_persistence_uplift_summary.pdf").write_bytes(b"PDF")
+    (object_persistence_uplift_dir / "report.md").write_text("# object persistence uplift report\n", encoding="utf-8")
+    (object_persistence_uplift_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "object_persistence_status": "improved",
+                "object_memory_improved": True,
+                "object_persistence_improved": True,
+                "lost_object_support_improved": True,
+                "chain_object_grounding_improved": True,
+                "query_strength_improved": True,
+                "next_action_recommendation": "promote_sam3_to_next_stage",
+                "should_formalize_sam3_next": True,
+            }
+        ),
+        encoding="utf-8",
+    )
     query_bank_rewrite_dir = tmp_path / "query_bank_rewrite"
     (query_bank_rewrite_dir / "query_bank_rewrite").mkdir(parents=True, exist_ok=True)
     (query_bank_rewrite_dir / "query_bank_rewrite" / "rewrite_summary.json").write_text(
@@ -789,6 +818,20 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "figures" / "fig_signal_uplift_object_memory.pdf").write_bytes(b"PDF")
     (compare_dir / "figures" / "fig_signal_uplift_query_strength.png").write_bytes(b"PNG")
     (compare_dir / "figures" / "fig_signal_uplift_query_strength.pdf").write_bytes(b"PDF")
+    (compare_dir / "tables" / "table_object_persistence_uplift.csv").write_text(
+        "variant_label,object_memory_items_total,persistent_tracks_total,lost_object_query_support_rate,chain_object_grounding_support_rate,object_persistence_status\nbaseline,4,0,0.25,0.20,improved\nuplift,6,5,0.75,0.67,improved\ndelta,2,5,0.50,0.47,improved\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "tables" / "table_object_persistence_uplift.md").write_text(
+        "# object persistence uplift compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "figures" / "fig_object_persistence_uplift_delta.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_object_persistence_uplift_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "figures" / "fig_object_persistence_object_memory.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_object_persistence_object_memory.pdf").write_bytes(b"PDF")
+    (compare_dir / "figures" / "fig_object_persistence_chain_support.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_object_persistence_chain_support.pdf").write_bytes(b"PDF")
 
     admission_calibration_dir = tmp_path / "admission_calibration"
     (admission_calibration_dir / "tables").mkdir(parents=True, exist_ok=True)
@@ -1187,6 +1230,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(delta_audit_dir),
         "--signal-uplift-dir",
         str(signal_uplift_dir),
+        "--object-persistence-uplift-dir",
+        str(object_persistence_uplift_dir),
         "--query-bank-rewrite-dir",
         str(query_bank_rewrite_dir),
         "--query-bank-selection-dir",
@@ -1252,6 +1297,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Result Diagnosis" in report_text
     assert "## Delta Audit" in report_text
     assert "## Signal Uplift" in report_text
+    assert "## Object Persistence Uplift" in report_text
     assert "## Query Bank Rewrite" in report_text
     assert "## Query Bank Selection" in report_text
     assert "## Query Bank Compare" in report_text
@@ -1304,6 +1350,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "delta_audit" / "report.md").exists()
     assert (out_dir / "signal_uplift" / "tables" / "table_signal_uplift_summary.csv").exists()
     assert (out_dir / "signal_uplift" / "report.md").exists()
+    assert (out_dir / "object_persistence_uplift" / "tables" / "table_object_persistence_uplift_summary.csv").exists()
+    assert (out_dir / "object_persistence_uplift" / "report.md").exists()
     assert (out_dir / "query_bank_rewrite" / "query_bank_rewrite" / "rewrite_summary.json").exists()
     assert (out_dir / "query_bank_rewrite" / "query_bank_rewrite" / "core_real_v2_candidate.yaml").exists()
     assert (out_dir / "query_bank_selection" / "tables" / "table_query_bank_selection.csv").exists()
@@ -1331,6 +1379,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_signal_uplift_delta.png").exists()
     assert (out_dir / "figures" / "fig_signal_uplift_object_memory.png").exists()
     assert (out_dir / "figures" / "fig_signal_uplift_query_strength.png").exists()
+    assert (out_dir / "figures" / "fig_object_persistence_uplift_summary.png").exists()
+    assert (out_dir / "figures" / "fig_object_persistence_uplift_delta.png").exists()
+    assert (out_dir / "figures" / "fig_object_persistence_object_memory.png").exists()
+    assert (out_dir / "figures" / "fig_object_persistence_chain_support.png").exists()
     assert (out_dir / "figures" / "fig_query_bank_delta.png").exists()
     assert (out_dir / "figures" / "fig_query_bank_tradeoff.png").exists()
     assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()

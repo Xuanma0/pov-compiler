@@ -2,34 +2,34 @@
 
 ## Current milestone
 
-- `v1.54`: Medium-Scale v1 vs v2 Query-Bank Compare
+- `v1.55`: SAM3 Object-Persistence Uplift
 
 ## Single goal
 
-- Run aligned medium-scale real experiments for `core_real_v1` and `core_real_v2_candidate`, then produce a formal promotion decision instead of inferring promotion from small-pilot uplift alone.
+- Decide whether local `SAM3`-style persistence improves object memory, lost-object support, and chain object grounding enough to justify a larger main-real follow-up beyond `YOLO26n only`.
 
 ## Status
 
-- [x] Added aligned medium-scale manifests for `core_real_v1` and `core_real_v2_candidate` under both fake and real profiles.
-- [x] `scripts/run_main_real_benchmark.py` now annotates compare summaries with `query_bank_id`, `query_bank_hash`, `compare_pair_id`, and `run_signature_hash`.
-- [x] `scripts/compare_query_banks.py` added with fail-fast alignment checks for UID set, budgets, provider signature, and perception signature.
-- [x] `scripts/report_query_bank_promotion_decision.py` added to convert aligned compare outputs into `promote_v2 | keep_v1 | expand_sample_first | consider_sam3_next`.
-- [x] Medium-scale real `v1` run validated under `data/outputs/v154_main_real_v1/`.
-- [x] Medium-scale real `v2` run validated under `data/outputs/v154_main_real_v2/`.
-- [x] Aligned compare validated under `data/outputs/v154_query_bank_compare/compare/` with `alignment_ok=true`, `selected_uids_count=6`, and matched provider/perception signatures.
-- [x] Promotion decision validated under `data/outputs/v154_query_bank_compare/promotion_decision/` with `promotion_decision=keep_v1`.
-- [x] `paper_ready/` and `submission_pack/` can now carry `query_bank_compare/` and `query_bank_promotion_decision/`.
+- [x] Added `configs/perception/yolo26n_sam3_local.yaml` for the smallest `YOLO26n + SAM3` local perception contract.
+- [x] Added fake and real object-persistence pilot manifests under `configs/benchmarks/v1.55_signal_uplift_*.yaml`.
+- [x] `src/pov_compiler/perception/backends.py` and `src/pov_compiler/perception/runner.py` now distinguish `YOLO26n only` from `YOLO26n + SAM3` in metadata and cache keys.
+- [x] Added `scripts/run_object_persistence_pilot.py` and `scripts/report_object_persistence_uplift.py`.
+- [x] Fake object-persistence pilot validated under `data/outputs/v155_signal_uplift_fake/` with `object_persistence_status=improved`.
+- [x] Real object-persistence pilot validated under `data/outputs/v155_signal_uplift_real/` with `object_persistence_status=improved`.
+- [x] Object-persistence report validated under `data/outputs/v155_signal_uplift_real/object_persistence_uplift/` with `next_action_recommendation=need_more_object_memory_logic`.
+- [x] `paper_ready/` can now carry `object_persistence_uplift/`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
 - [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
-- [x] `v1.54` milestone marked done.
+- [x] Provider dry-run remained optional and was skipped because `PARATERA_*` env vars were absent.
+- [x] `v1.55` milestone marked done.
 
-## v1.55 Candidate Tasks
+## v1.56 Candidate Tasks
 
-- Larger aligned sample for `core_real_v2_candidate`
-- Strict-metric-focused v2 query hardening
-- SAM3 decision gate after larger aligned v2 run
-- Main-table promotion freeze for `v1` vs `v2`
-- Appendix export split for candidate vs analysis-only query banks
+- Object-memory logic hardening for persistent tracks
+- Larger real SAM3 follow-up with aligned sample
+- Retrieval-side chain grounding after persistence uplift
+- Formal SAM3 admission gate before medium-scale main_real
+- Appendix split for YOLO-only vs YOLO+SAM3 evidence
 
 ## Frozen constraints
 

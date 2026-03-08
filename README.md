@@ -375,6 +375,32 @@ What to read first after a weak medium-scale compare:
 - `promotion_decision/tables/table_query_bank_promotion_decision.csv`
 - `paper_ready/query_bank_compare/README.md`
 
+## v1.55 SAM3 Object-Persistence Uplift
+
+`v1.55` keeps the retrieval, evaluation, and main-result workflow fixed and asks a narrower question than `v1.54`: if `YOLO26n` already improves raw object signal but strict metrics still stay flat, does adding local `SAM3`-style persistence improve object memory, lost-object support, and chain object grounding enough to justify a larger `main_real` follow-up?
+
+- `configs\perception\yolo26n_sam3_local.yaml` adds the smallest local `YOLO26n + SAM3` perception contract without touching retrieval or evaluator logic.
+- `scripts\run_object_persistence_pilot.py` compares `YOLO26n only` against `YOLO26n + SAM3` under the same query bank and reporting contract.
+- `scripts\report_object_persistence_uplift.py` turns the compare outputs into an explicit recommendation: keep YOLO only, promote SAM3 to the next stage, or stop and fix object-memory / retrieval first.
+- `paper_ready\object_persistence_uplift\` becomes the canonical export root for this SAM3 gate.
+
+Minimal flow:
+
+```text
+python scripts\run_offline.py --video D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4 --out data\outputs\v155_sam3_smoke.json --config configs\perception\yolo26n_sam3_local.yaml --run-perception --perception-backend real --perception-max-frames 24
+python scripts\run_object_persistence_pilot.py --manifest configs\benchmarks\v1.55_signal_uplift_fake.yaml --out_dir data\outputs\v155_signal_uplift_fake
+python scripts\run_object_persistence_pilot.py --manifest configs\benchmarks\v1.55_signal_uplift_real.yaml --out_dir data\outputs\v155_signal_uplift_real
+python scripts\report_object_persistence_uplift.py --suite_dir data\outputs\v155_signal_uplift_real --baseline_dir data\outputs\v155_signal_uplift_fake --out_dir data\outputs\v155_signal_uplift_real\object_persistence_uplift
+python scripts\export_paper_ready.py --compare_dir data\outputs\v155_signal_uplift_real\compare --suite-dir data\outputs\v155_signal_uplift_real --signal-uplift-dir data\outputs\v155_signal_uplift_real\object_persistence_uplift --object-persistence-uplift-dir data\outputs\v155_signal_uplift_real\object_persistence_uplift --out_dir data\outputs\v155_signal_uplift_real\paper_ready
+```
+
+What to read first after a weak SAM3 run:
+
+- `compare/compare_summary.json`
+- `compare/tables/table_object_persistence_uplift.csv`
+- `object_persistence_uplift/report.md`
+- `paper_ready/object_persistence_uplift/report.md`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

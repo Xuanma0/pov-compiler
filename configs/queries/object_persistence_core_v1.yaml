@@ -1,0 +1,61 @@
+query_bank_id: object_persistence_core_v1
+query_bank_version: "1"
+description: Core object-persistence query set focused on persistent object tracking, lost-object support, and chain grounding.
+provenance:
+  strategy: object_persistence_core
+  source: v1.55_design
+  target: yolo26n_plus_sam3_local
+groups:
+  - group_id: object_persistence
+    description: Persistent-object support checks
+    tags: [object_persistence]
+  - group_id: lost_object
+    description: Lost-object support checks that should benefit from stronger persistence
+    tags: [lost_object, object_memory]
+  - group_id: chain_support
+    description: Chain object-grounding support checks
+    tags: [chain, object_persistence]
+queries:
+  - query_id: persistence_bowl_last
+    group: object_persistence
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "persistent_object=bowl which=last top_k=6"
+    signal_tags: [object_persistence]
+    sensitive_to: [segmentation, object_memory]
+  - query_id: persistence_phone_last
+    group: object_persistence
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "persistent_object=cell_phone which=last top_k=6"
+    signal_tags: [object_persistence]
+    sensitive_to: [segmentation, chain_backoff]
+  - query_id: lost_object_bowl
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "lost_object=bowl which=last top_k=6"
+    signal_tags: [lost_object, object_memory]
+    sensitive_to: [object_memory, segmentation]
+  - query_id: lost_object_phone
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "lost_object=cell_phone which=last top_k=6"
+    signal_tags: [lost_object, object_memory]
+    sensitive_to: [object_memory, segmentation]
+  - query_id: chain_bowl_scene
+    group: chain_support
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then chain_object=bowl top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object_persistence]
+    sensitive_to: [segmentation, chain_backoff]
+  - query_id: chain_phone_scene
+    group: chain_support
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then chain_object=cell_phone top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object_persistence]
+    sensitive_to: [segmentation, chain_backoff]
+query_bank_hash: 1e03c3d056caf918f9d98c80fef55d4f1947a046e328002181bf2cdfc4adea5e

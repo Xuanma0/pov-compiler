@@ -286,9 +286,22 @@ class OfflinePipeline:
         event_v0_times = [float(x) for x in times]
         if bool(perception_cfg.get("enabled", False)):
             backend_name = str(perception_cfg.get("backend", "real")).strip().lower()
+            segmentation_cfg = perception_cfg.get("segmentation", {})
+            if not isinstance(segmentation_cfg, dict):
+                segmentation_cfg = {}
             backend_kwargs = {
                 "model_candidates": list(perception_cfg.get("model_candidates", ["yolo26n.pt", "yolov8n.pt"])),
                 "hand_task_model_path": perception_cfg.get("hand_task_model_path"),
+                "segmentation_enabled": bool(segmentation_cfg.get("enabled", False)),
+                "segmentation_backend": str(segmentation_cfg.get("backend", "")).strip(),
+                "segmentation_repo_path": segmentation_cfg.get("repo_path"),
+                "segmentation_model_path": segmentation_cfg.get("model_path"),
+                "segmentation_track_iou": float(segmentation_cfg.get("track_iou", 0.25)),
+                "segmentation_min_persistence_frames": int(segmentation_cfg.get("min_persistence_frames", 3)),
+                "perception_variant": str(
+                    segmentation_cfg.get("variant", perception_cfg.get("variant", ""))
+                ).strip()
+                or None,
             }
             try:
                 perception_payload = run_perception(
