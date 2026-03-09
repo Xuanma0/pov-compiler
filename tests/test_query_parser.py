@@ -34,3 +34,10 @@ def test_query_parser_text_and_budget() -> None:
     assert q.text == "bicycle door"
     assert q.top_k == 3
     assert q.budget_overrides["max_events"] == 5
+
+
+def test_query_parser_event_label() -> None:
+    q = parse_query("event_label=interaction-heavy contact_min=0.72 top_k=4")
+    assert q.event_labels == ["interaction-heavy"]
+    assert q.contact_min == 0.72
+    assert "event_label" in q.filters_applied

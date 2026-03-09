@@ -58,8 +58,13 @@ def main() -> int:
         out_prefix=Path(args.out_prefix),
     )
 
+    print(f"num_event_v1_vecs={result.get('num_event_v1_vecs', 0)}")
     print(f"num_event_vecs={result.get('num_event_vecs', 0)}")
+    print(f"num_event_v0_vecs={result.get('num_event_v0_vecs', 0)}")
     print(f"num_highlight_vecs={result.get('num_highlight_vecs', 0)}")
+    print(f"num_decision_vecs={result.get('num_decision_vecs', 0)}")
+    print(f"decision_source_kind={result.get('decision_source_kind', '')}")
+    print(f"decision_count={result.get('decision_count', 0)}")
     print(f"dim={result.get('dim', 0)}")
     print(f"backend={result.get('backend', 'numpy')}")
     print(f"embedding_backend={result.get('embedding_backend', 'unknown')}")

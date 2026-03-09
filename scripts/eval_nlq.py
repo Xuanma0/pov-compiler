@@ -13,10 +13,13 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_nlq
+from pov_compiler.bench.nlq.datasets import NLQSample, load_hard_pseudo_chain, load_hard_pseudo_nlq
 from pov_compiler.bench.nlq.evaluator import evaluate_nlq_samples
+from pov_compiler.bench.nlq.safety import SafetyGateConfig, build_safety_report
 from pov_compiler.eval.eval_cross_variant import evaluate_cross_variant
 from pov_compiler.eval.fixed_queries import FixedQuery, generate_fixed_queries
+from pov_compiler.retrieval.constraints import HardConstraintConfig
+from pov_compiler.retrieval.reranker_config import WeightConfig, resolve_weight_config
 from pov_compiler.schemas import Output
 from pov_compiler.utils.media import get_duration_bucket
 
@@ -37,6 +40,23 @@ def _as_output(path: Path) -> Output:
     if hasattr(Output, "model_validate"):
         return Output.model_validate(payload)  # type: ignore[attr-defined]
     return Output.parse_obj(payload)
+
+
+def _attach_perception_sidecar(output: Output, json_path: Path) -> Output:
+    if isinstance(output.perception, dict) and output.perception:
+        return output
+    uid = str(output.video_id)
+    run_root = json_path.parent.parent
+    sidecar = run_root / "perception" / uid / "perception.json"
+    if not sidecar.exists():
+        return output
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except Exception:
+        return output
+    if isinstance(payload, dict):
+        output.perception = payload
+    return output
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -183,7 +203,13 @@ def _make_report(
     mode: str,
     overall_rows: list[dict[str, Any]],
     by_type_rows: list[dict[str, Any]],
+    per_query_rows: list[dict[str, Any]],
     allow_gt_fallback: bool,
+    rerank_cfg_name: str = "default",
+    rerank_cfg_hash: str = "",
+    hard_constraints_enabled: bool = True,
+    hard_constraints_cfg: dict[str, Any] | None = None,
+    safety_report: dict[str, Any] | None = None,
 ) -> None:
     variants = sorted({str(r.get("variant", "")) for r in overall_rows if str(r.get("variant", ""))})
     query_types = sorted({str(r.get("query_type", "")) for r in by_type_rows if str(r.get("query_type", ""))})
@@ -195,6 +221,8 @@ def _make_report(
     mean_hitk_strict = _group_mean(overall_rows, ("variant",), "hit_at_k_strict")
     mean_fp = _group_mean(overall_rows, ("variant",), "top1_in_distractor_rate")
     mean_mrr = _group_mean(overall_rows, ("variant",), "mrr")
+    mean_planner_used = _group_mean(overall_rows, ("variant",), "planner_backend_used_rate")
+    mean_planner_fallback = _group_mean(overall_rows, ("variant",), "planner_fallback_rate")
     q_hit = _group_mean(by_type_rows, ("query_type", "variant"), "hit_at_k")
     q_hitk_strict = _group_mean(by_type_rows, ("query_type", "variant"), "hit_at_k_strict")
     q_hit1_strict = _group_mean(by_type_rows, ("query_type", "variant"), "hit_at_1_strict")
@@ -209,12 +237,27 @@ def _make_report(
     lines.append("")
     lines.append(f"- mode: {mode}")
     lines.append(f"- allow_gt_fallback: {str(bool(allow_gt_fallback)).lower()}")
+    lines.append(f"- rerank_cfg_name: {rerank_cfg_name}")
+    lines.append(f"- rerank_cfg_hash: {rerank_cfg_hash}")
+    lines.append(f"- hard_constraints_enabled: {str(bool(hard_constraints_enabled)).lower()}")
+    if isinstance(hard_constraints_cfg, dict):
+        lines.append(f"- hard_constraints_cfg: `{json.dumps(hard_constraints_cfg, ensure_ascii=False, sort_keys=True)}`")
     lines.append(f"- variants: {', '.join(variants)}")
     lines.append(f"- query_types: {', '.join(query_types)}")
     if duration_buckets:
         lines.append(f"- duration_buckets: {', '.join(duration_buckets)}")
     lines.append(f"- rows_overall: {len(overall_rows)}")
     lines.append(f"- rows_by_query_type: {len(by_type_rows)}")
+    if isinstance(safety_report, dict):
+        lines.append(
+            f"- safety_count_granularity: {str(safety_report.get('count_granularity', 'row=(variant,budget,query)'))}"
+        )
+        lines.append(f"- safety_gate_enforced: {str(bool(safety_report.get('gate_enforced', False))).lower()}")
+        lines.append(f"- safety_max_critical_fn: {int(safety_report.get('max_critical_fn', 0))}")
+        lines.append(f"- safety_critical_fn_denominator: {int(safety_report.get('critical_fn_denominator', 0))}")
+        lines.append(f"- safety_critical_fn_count: {int(safety_report.get('critical_fn_count', 0))}")
+        lines.append(f"- safety_critical_fn_rate: {float(safety_report.get('critical_fn_rate', 0.0)):.4f}")
+        lines.append(f"- safety_pass_gate: {str(bool(safety_report.get('pass_gate', True))).lower()}")
     lines.append("")
 
     lines.append("## Overall Summary")
@@ -226,6 +269,15 @@ def _make_report(
             f"| {variant} | {mean_hit.get((variant,), 0.0):.4f} | {mean_hit1.get((variant,), 0.0):.4f} | "
             f"{mean_hit1_strict.get((variant,), 0.0):.4f} | {mean_hitk_strict.get((variant,), 0.0):.4f} | "
             f"{mean_fp.get((variant,), 0.0):.4f} | {mean_mrr.get((variant,), 0.0):.4f} |"
+        )
+    lines.append("")
+    lines.append("## Planner Backend Stats")
+    lines.append("")
+    lines.append("| variant | planner_backend_used_rate | planner_fallback_rate |")
+    lines.append("|---|---:|---:|")
+    for variant in variants:
+        lines.append(
+            f"| {variant} | {mean_planner_used.get((variant,), 0.0):.4f} | {mean_planner_fallback.get((variant,), 0.0):.4f} |"
         )
     lines.append("")
 
@@ -267,7 +319,7 @@ def _make_report(
     lines.append("")
 
     qset = set(query_types)
-    if mode == "hard_pseudo_nlq":
+    if mode in {"hard_pseudo_nlq", "hard_pseudo_chain"}:
         token_q = _pick_existing(qset, ["hard_pseudo_token", "pseudo_token", "token"], "hard_pseudo_token")
         decision_q = _pick_existing(qset, ["hard_pseudo_decision", "pseudo_decision", "decision"], "hard_pseudo_decision")
         hard_q = _pick_existing(qset, ["hard_pseudo_anchor", "pseudo_hard_time", "hard_time"], "hard_pseudo_anchor")
@@ -323,10 +375,376 @@ def _make_report(
         f"- {hard_q} (event hit@k): `full` {hard_full:.4f} vs `raw_events_only` {hard_raw:.4f} "
         f"(delta {hard_full - hard_raw:+.4f})."
     )
+    if "hard_pseudo_contact" in qset:
+        contact_full = q_hit.get(("hard_pseudo_contact", "full"), 0.0)
+        contact_hl = q_hit.get(("hard_pseudo_contact", "highlights_only"), 0.0)
+        contact_fp_full = q_fp.get(("hard_pseudo_contact", "full"), 0.0)
+        contact_fp_hl = q_fp.get(("hard_pseudo_contact", "highlights_only"), 0.0)
+        lines.append(
+            f"- hard_pseudo_contact: `full` hit@k {contact_full:.4f} vs `highlights_only` {contact_hl:.4f} "
+            f"(delta {contact_full - contact_hl:+.4f}); "
+            f"top1_in_distractor_rate delta {contact_fp_full - contact_fp_hl:+.4f}. "
+            "This query family depends on events_v1 contact/perception evidence."
+        )
+    if mode == "hard_pseudo_chain":
+        chain_full = q_hit.get(("hard_pseudo_chain", "full"), 0.0)
+        chain_hl = q_hit.get(("hard_pseudo_chain", "highlights_only"), 0.0)
+        chain_fp_full = q_fp.get(("hard_pseudo_chain", "full"), 0.0)
+        chain_fp_hl = q_fp.get(("hard_pseudo_chain", "highlights_only"), 0.0)
+        lines.append(
+            f"- hard_pseudo_chain: `full` hit@k {chain_full:.4f} vs `highlights_only` {chain_hl:.4f} "
+            f"(delta {chain_full - chain_hl:+.4f}); "
+            f"top1_in_distractor_rate delta {chain_fp_full - chain_fp_hl:+.4f}."
+        )
+        chain_rows = [r for r in per_query_rows if str(r.get("query_type", "")) == "hard_pseudo_chain"]
+        if chain_rows:
+            lines.append("")
+            lines.append("### Chain Attribution")
+            lines.append("")
+            lines.append("| chain_derive | queries | hit@k_strict | chain_success | top1_in_distractor_rate |")
+            lines.append("|---|---:|---:|---:|---:|")
+            derive_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in chain_rows:
+                derive_groups[str(row.get("chain_derive", "time_only"))].append(row)
+            for derive, rows in sorted(derive_groups.items(), key=lambda x: x[0]):
+                n = float(len(rows))
+                lines.append(
+                    f"| {derive} | {int(len(rows))} | "
+                    f"{(sum(float(x.get('hit_at_k_strict', 0.0)) for x in rows) / n):.4f} | "
+                    f"{(sum(float(x.get('chain_success', 0.0)) for x in rows) / n):.4f} | "
+                    f"{(sum(float(x.get('top1_in_distractor', 0.0)) for x in rows) / n):.4f} |"
+                )
+            lines.append("")
+            reason_order = [
+                "step1_no_hit",
+                "step2_no_hit",
+                "constraints_over_filtered",
+                "backoff_exhausted",
+                "retrieval_distractor",
+                "evidence_missing",
+                "budget_insufficient",
+                "other",
+            ]
+            lines.append("| chain_fail_reason | rate |")
+            lines.append("|---|---:|")
+            total_n = float(len(chain_rows))
+            for reason in reason_order:
+                rate = sum(
+                    1.0 if str(x.get("chain_fail_reason", "")) == reason else 0.0
+                    for x in chain_rows
+                ) / total_n
+                lines.append(f"| {reason} | {rate:.4f} |")
     lines.append("")
+
+    lines.append("## Constraint Filtering Stats")
+    lines.append("")
+    if per_query_rows:
+        n = float(len(per_query_rows))
+
+        def _rate(pred) -> float:
+            c = 0.0
+            for row in per_query_rows:
+                if pred(row):
+                    c += 1.0
+            return float(c / n)
+
+        stats = {
+            "present_after_scene_change_rate": _rate(lambda r: bool(r.get("present_after_scene_change", False))),
+            "present_first_last_rate": _rate(lambda r: bool(r.get("present_first_last", False))),
+            "present_type_match_rate": _rate(lambda r: bool(r.get("present_type_match", False))),
+            "filtered_after_scene_change_rate": _rate(lambda r: bool(r.get("filtered_after_scene_change", False))),
+            "filtered_first_last_rate": _rate(lambda r: bool(r.get("filtered_first_last", False))),
+            "filtered_type_match_rate": _rate(lambda r: bool(r.get("filtered_type_match", False))),
+            "relaxed_after_scene_change_rate": _rate(lambda r: bool(r.get("relaxed_after_scene_change", False))),
+            "relaxed_first_last_rate": _rate(lambda r: bool(r.get("relaxed_first_last", False))),
+            "relaxed_type_match_rate": _rate(lambda r: bool(r.get("relaxed_type_match", False))),
+            "used_fallback_rate": _rate(lambda r: bool(r.get("used_fallback", False))),
+            "avg_filtered_before": float(sum(float(r.get("filtered_hits_before", 0.0)) for r in per_query_rows) / n),
+            "avg_filtered_after": float(sum(float(r.get("filtered_hits_after", 0.0)) for r in per_query_rows) / n),
+        }
+        lines.append("| stat | value |")
+        lines.append("|---|---:|")
+        for key in sorted(stats.keys()):
+            lines.append(f"| {key} | {float(stats[key]):.4f} |")
+    else:
+        lines.append("- no per-query rows")
+    lines.append("")
+
+    if isinstance(safety_report, dict):
+        lines.append("## Safety Gate")
+        lines.append("")
+        lines.append("| field | value |")
+        lines.append("|---|---:|")
+        lines.append(f"| count_granularity | {safety_report.get('count_granularity', '')} |")
+        lines.append(f"| gate_enforced | {str(bool(safety_report.get('gate_enforced', False))).lower()} |")
+        lines.append(f"| max_critical_fn | {int(safety_report.get('max_critical_fn', 0))} |")
+        lines.append(f"| critical_fn_denominator | {int(safety_report.get('critical_fn_denominator', 0))} |")
+        lines.append(f"| critical_fn_count | {int(safety_report.get('critical_fn_count', 0))} |")
+        lines.append(f"| critical_fn_rate | {float(safety_report.get('critical_fn_rate', 0.0)):.4f} |")
+        lines.append(f"| would_pass_gate | {str(bool(safety_report.get('would_pass_gate', True))).lower()} |")
+        lines.append(f"| pass_gate | {str(bool(safety_report.get('pass_gate', True))).lower()} |")
+        lines.append("")
+        var_stats = safety_report.get("variant_stats", {})
+        if isinstance(var_stats, dict) and var_stats:
+            lines.append("### Safety By Variant")
+            lines.append("")
+            lines.append("| variant | critical_fn_count | critical_fn_denominator | critical_fn_rate |")
+            lines.append("|---|---:|---:|---:|")
+            for variant in sorted(var_stats.keys()):
+                item = var_stats[variant] if isinstance(var_stats[variant], dict) else {}
+                lines.append(
+                    f"| {variant} | {int(item.get('critical_fn_count', 0))} | "
+                    f"{int(item.get('critical_fn_denominator', 0))} | "
+                    f"{float(item.get('critical_fn_rate', 0.0)):.4f} |"
+                )
+            lines.append("")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_chain_summary(
+    *,
+    out_dir: Path,
+    by_type_rows: list[dict[str, Any]],
+    per_query_rows: list[dict[str, Any]],
+    with_figures: bool = True,
+) -> tuple[Path, Path, list[Path]]:
+    chain_rows = [row for row in per_query_rows if str(row.get("query_type", "")) == "hard_pseudo_chain"]
+    summary: dict[tuple[str, float, int, int, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in chain_rows:
+        key = (
+            str(row.get("variant", "")),
+            float(row.get("budget_max_total_s", 0.0)),
+            int(row.get("budget_max_tokens", 0)),
+            int(row.get("budget_max_decisions", 0)),
+            str(row.get("chain_combo", "")),
+            str(row.get("chain_derive", "")),
+        )
+        summary[key].append(row)
+
+    out_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(summary.items(), key=lambda x: (x[0][0], x[0][1], x[0][4], x[0][5])):
+        variant, bs, bt, bd, combo, derive = key
+        n = float(len(rows)) if rows else 1.0
+        out_rows.append(
+            {
+                "variant": variant,
+                "query_type": "hard_pseudo_chain",
+                "chain_combo": combo,
+                "chain_derive": derive,
+                "budget_max_total_s": float(bs),
+                "budget_max_tokens": int(bt),
+                "budget_max_decisions": int(bd),
+                "num_queries": int(len(rows)),
+                "hit_at_k_strict": float(sum(float(r.get("hit_at_k_strict", 0.0)) for r in rows) / n),
+                "mrr": float(sum(float(r.get("mrr", 0.0)) for r in rows) / n),
+                "top1_in_distractor_rate": float(sum(float(r.get("top1_in_distractor", 0.0)) for r in rows) / n),
+                "chain_step1_has_hit_rate": float(sum(float(r.get("chain_step1_has_hit", 0.0)) for r in rows) / n),
+                "chain_step2_has_hit_rate": float(sum(float(r.get("chain_step2_has_hit", 0.0)) for r in rows) / n),
+                "chain_success_rate": float(sum(float(r.get("chain_success", 0.0)) for r in rows) / n),
+                "chain_filtered_ratio_step2": float(
+                    sum(float(r.get("chain_filtered_ratio_step2", 0.0)) for r in rows) / n
+                ),
+                "backoff_used_rate": float(sum(float(r.get("chain_backoff_used", 0.0)) for r in rows) / n),
+                "backoff_mean_level": float(sum(float(r.get("chain_backoff_level", 0.0)) for r in rows) / n),
+                "backoff_exhausted_rate": float(
+                    sum(1.0 if bool(r.get("chain_backoff_exhausted", False)) else 0.0 for r in rows) / n
+                ),
+            }
+        )
+
+    table_csv = out_dir / "table_chain_summary.csv"
+    table_md = out_dir / "table_chain_summary.md"
+    _write_csv(table_csv, out_rows)
+    md_lines: list[str] = [
+        "# Chain Summary",
+        "",
+        "| variant | chain_combo | chain_derive | budget | hit@k_strict | chain_success | top1_in_distractor_rate | backoff_used_rate | backoff_mean_level | backoff_exhausted_rate |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in out_rows:
+        budget_key = f"{int(float(row.get('budget_max_total_s', 0.0)))}/{int(row.get('budget_max_tokens', 0))}/{int(row.get('budget_max_decisions', 0))}"
+        md_lines.append(
+            f"| {row.get('variant', '')} | {row.get('chain_combo', '')} | {row.get('chain_derive', '')} | {budget_key} | "
+            f"{float(row.get('hit_at_k_strict', 0.0)):.4f} | {float(row.get('chain_success_rate', 0.0)):.4f} | "
+            f"{float(row.get('top1_in_distractor_rate', 0.0)):.4f} | "
+            f"{float(row.get('backoff_used_rate', 0.0)):.4f} | "
+            f"{float(row.get('backoff_mean_level', 0.0)):.4f} | "
+            f"{float(row.get('backoff_exhausted_rate', 0.0)):.4f} |"
+        )
+    table_md.write_text("\n".join(md_lines), encoding="utf-8")
+
+    figure_paths: list[Path] = []
+    if with_figures and out_rows:
+        try:
+            import matplotlib.pyplot as plt
+
+            by_variant: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in out_rows:
+                by_variant[str(row.get("variant", ""))].append(row)
+            fig_base = out_dir / "fig_chain_success_vs_budget_seconds"
+            plt.figure(figsize=(7.4, 4.2))
+            for variant, rows in sorted(by_variant.items(), key=lambda x: x[0]):
+                ordered = sorted(rows, key=lambda x: float(x.get("budget_max_total_s", 0.0)))
+                xs = [float(x.get("budget_max_total_s", 0.0)) for x in ordered]
+                ys = [float(x.get("chain_success_rate", 0.0)) for x in ordered]
+                plt.plot(xs, ys, marker="o", label=variant)
+            plt.xlabel("Budget Seconds")
+            plt.ylabel("chain_success_rate")
+            plt.title("Chain Success vs Budget")
+            plt.grid(True, alpha=0.35)
+            plt.legend()
+            plt.tight_layout()
+            for ext in ("png", "pdf"):
+                p = fig_base.with_suffix(f".{ext}")
+                plt.savefig(p)
+                figure_paths.append(p)
+            plt.close()
+        except Exception:
+            pass
+    return table_csv, table_md, figure_paths
+
+
+def _write_chain_failure_attribution(
+    *,
+    out_dir: Path,
+    per_query_rows: list[dict[str, Any]],
+    with_figures: bool = True,
+) -> tuple[Path, Path, list[Path]]:
+    chain_rows = [row for row in per_query_rows if str(row.get("query_type", "")) == "hard_pseudo_chain"]
+    reasons = [
+        "step1_no_hit",
+        "step2_no_hit",
+        "constraints_over_filtered",
+        "backoff_exhausted",
+        "retrieval_distractor",
+        "evidence_missing",
+        "budget_insufficient",
+        "other",
+    ]
+    grouped: dict[tuple[str, float, int, int, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in chain_rows:
+        key = (
+            str(row.get("variant", "")),
+            float(row.get("budget_max_total_s", 0.0)),
+            int(row.get("budget_max_tokens", 0)),
+            int(row.get("budget_max_decisions", 0)),
+            str(row.get("chain_derive", "")),
+        )
+        grouped[key].append(row)
+
+    out_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(grouped.items(), key=lambda x: (x[0][0], x[0][1], x[0][4])):
+        variant, bs, bt, bd, derive = key
+        n = float(len(rows)) if rows else 1.0
+        payload: dict[str, Any] = {
+            "variant": variant,
+            "query_type": "hard_pseudo_chain",
+            "chain_derive": derive,
+            "budget_max_total_s": float(bs),
+            "budget_max_tokens": int(bt),
+            "budget_max_decisions": int(bd),
+            "num_queries": int(len(rows)),
+            "hit_at_k_strict": float(sum(float(r.get("hit_at_k_strict", 0.0)) for r in rows) / n),
+            "mrr": float(sum(float(r.get("mrr", 0.0)) for r in rows) / n),
+            "top1_in_distractor_rate": float(sum(float(r.get("top1_in_distractor", 0.0)) for r in rows) / n),
+            "chain_success_rate": float(sum(float(r.get("chain_success", 0.0)) for r in rows) / n),
+        }
+        for reason in reasons:
+            payload[f"chain_fail_{reason}_rate"] = float(
+                sum(1.0 if str(r.get("chain_fail_reason", "")) == reason else 0.0 for r in rows) / n
+            )
+        out_rows.append(payload)
+
+    table_csv = out_dir / "table_chain_failure_attribution.csv"
+    table_md = out_dir / "table_chain_failure_attribution.md"
+    _write_csv(table_csv, out_rows)
+
+    md_lines: list[str] = [
+        "# Chain Failure Attribution",
+        "",
+        "| variant | chain_derive | budget | chain_success | step1_no_hit | step2_no_hit | constraints_over_filtered | backoff_exhausted | retrieval_distractor | evidence_missing | budget_insufficient | other |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in out_rows:
+        budget_key = (
+            f"{int(float(row.get('budget_max_total_s', 0.0)))}/"
+            f"{int(row.get('budget_max_tokens', 0))}/"
+            f"{int(row.get('budget_max_decisions', 0))}"
+        )
+        md_lines.append(
+            f"| {row.get('variant', '')} | {row.get('chain_derive', '')} | {budget_key} | "
+            f"{float(row.get('chain_success_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_step1_no_hit_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_step2_no_hit_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_constraints_over_filtered_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_backoff_exhausted_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_retrieval_distractor_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_evidence_missing_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_budget_insufficient_rate', 0.0)):.4f} | "
+            f"{float(row.get('chain_fail_other_rate', 0.0)):.4f} |"
+        )
+    table_md.write_text("\n".join(md_lines), encoding="utf-8")
+
+    figure_paths: list[Path] = []
+    if with_figures and out_rows:
+        try:
+            import matplotlib.pyplot as plt
+
+            full_rows = [r for r in out_rows if str(r.get("variant", "")) == "full"]
+            rows = full_rows if full_rows else out_rows
+            rows = sorted(rows, key=lambda r: float(r.get("budget_max_total_s", 0.0)))
+            if rows:
+                xs = [float(r.get("budget_max_total_s", 0.0)) for r in rows]
+                fig_base = out_dir / "fig_chain_failure_attribution_vs_budget_seconds"
+                plt.figure(figsize=(8.0, 4.4))
+                for reason in reasons:
+                    ys = [float(r.get(f"chain_fail_{reason}_rate", 0.0)) for r in rows]
+                    plt.plot(xs, ys, marker="o", label=reason)
+                plt.xlabel("Budget Seconds")
+                plt.ylabel("Failure Rate")
+                plt.title("Chain Failure Attribution vs Budget")
+                plt.grid(True, alpha=0.35)
+                plt.legend(fontsize=8)
+                plt.tight_layout()
+                for ext in ("png", "pdf"):
+                    p = fig_base.with_suffix(f".{ext}")
+                    plt.savefig(p)
+                    figure_paths.append(p)
+                plt.close()
+
+                # success vs derive at best-available budget
+                max_budget = max(xs)
+                budget_rows = [r for r in rows if abs(float(r.get("budget_max_total_s", 0.0)) - max_budget) < 1e-6]
+                if not budget_rows:
+                    budget_rows = rows
+                grouped_derive: dict[str, list[float]] = defaultdict(list)
+                for row in budget_rows:
+                    grouped_derive[str(row.get("chain_derive", "time_only"))].append(
+                        float(row.get("chain_success_rate", 0.0))
+                    )
+                derives = sorted(grouped_derive.keys())
+                ys = [
+                    (sum(grouped_derive[d]) / len(grouped_derive[d]) if grouped_derive[d] else 0.0)
+                    for d in derives
+                ]
+                fig_derive_base = out_dir / "fig_chain_success_vs_derive"
+                plt.figure(figsize=(8.0, 4.2))
+                plt.bar(range(len(derives)), ys)
+                plt.xticks(range(len(derives)), derives, rotation=20, ha="right")
+                plt.ylabel("chain_success_rate")
+                plt.title("Chain Success vs Derive Mode")
+                plt.tight_layout()
+                for ext in ("png", "pdf"):
+                    p = fig_derive_base.with_suffix(f".{ext}")
+                    plt.savefig(p)
+                    figure_paths.append(p)
+                plt.close()
+        except Exception:
+            pass
+
+    return table_csv, table_md, figure_paths
 
 
 def _resolve_allow_gt_fallback(mode: str, cli_value: bool | None) -> bool:
@@ -338,21 +756,65 @@ def _resolve_allow_gt_fallback(mode: str, cli_value: bool | None) -> bool:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="NLQ evaluation (mock/pseudo_nlq/hard_pseudo_nlq/ego4d)")
+    parser = argparse.ArgumentParser(description="NLQ evaluation (mock/pseudo_nlq/hard_pseudo_nlq/hard_pseudo_chain/ego4d)")
     parser.add_argument("--json", required=True, help="Pipeline output json")
     parser.add_argument("--index", default=None, help="Vector index prefix")
     parser.add_argument("--out_dir", required=True, help="Output directory")
-    parser.add_argument("--mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "ego4d"], default="pseudo_nlq")
+    parser.add_argument("--mode", choices=["mock", "pseudo_nlq", "hard_pseudo_nlq", "hard_pseudo_chain", "ego4d"], default="pseudo_nlq")
     parser.add_argument("--ann", default=None, help="Annotation path for mode=ego4d")
     parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"))
     parser.add_argument("--sweep", action="store_true", help="Run budget sweep")
     parser.add_argument("--n", type=int, default=10, help="Query count knob")
     parser.add_argument("--seed", type=int, default=0, help="Query seed")
     parser.add_argument("--top-k", "--topk", dest="top_k", type=int, default=6, help="Query top_k")
+    parser.add_argument("--budget-max-total-s", type=float, default=None, help="Single-budget override max_total_s")
+    parser.add_argument("--budget-max-tokens", type=int, default=None, help="Single-budget override max_tokens")
+    parser.add_argument("--budget-max-decisions", type=int, default=None, help="Single-budget override max_decisions")
 
     parser.set_defaults(allow_gt_fallback=None)
     parser.add_argument("--allow-gt-fallback", dest="allow_gt_fallback", action="store_true")
     parser.add_argument("--no-allow-gt-fallback", dest="allow_gt_fallback", action="store_false")
+    parser.add_argument("--rerank-cfg", default=None, help="Path to reranker WeightConfig YAML/JSON")
+    parser.add_argument(
+        "--retrieval-plan",
+        default="baseline",
+        choices=["baseline", "summary_then_token", "summary_then_decision", "summary_then_event"],
+        help="Retrieval planning mode",
+    )
+    parser.add_argument("--summary-topk", type=int, default=3, help="Top-k summary chunks for summary-first planning")
+    parser.add_argument(
+        "--planner-backend",
+        choices=["heuristic", "model", "auto"],
+        default=None,
+        help="Planner backend override (default from config retrieval.planner_backend)",
+    )
+    parser.add_argument("--planner-provider", default=None, help="Planner provider override")
+    parser.add_argument("--planner-model", default=None, help="Planner model override")
+    parser.add_argument("--planner-base-url", default=None, help="Planner model base URL override")
+    parser.add_argument("--planner-api-key-env", default=None, help="Planner model API key env override")
+    parser.add_argument("--planner-api-mode", choices=["auto", "responses", "chat"], default=None, help="Planner model API mode override")
+    parser.add_argument("--hard-constraints", choices=["on", "off"], default="on")
+    parser.add_argument(
+        "--hard-constraints-cfg",
+        default=str(ROOT / "configs" / "hard_constraints_default.yaml"),
+        help="Path to hard constraint config YAML/JSON",
+    )
+    parser.set_defaults(safety_gate_enforced=False)
+    parser.add_argument(
+        "--safety-gate",
+        "--enforce-safety-gate",
+        dest="safety_gate_enforced",
+        action="store_true",
+        help="Enforce safety gate and fail with non-zero exit when threshold is exceeded",
+    )
+    parser.add_argument(
+        "--no-safety-gate",
+        "--report-only",
+        dest="safety_gate_enforced",
+        action="store_false",
+        help="Report-only mode: always write safety report but do not fail process",
+    )
+    parser.add_argument("--max-critical-fn", type=int, default=None, help="Safety gate threshold")
     return parser.parse_args()
 
 
@@ -362,26 +824,83 @@ def main() -> int:
     eval_cfg = dict(cfg.get("eval", {}))
     budgets_cfg = dict(eval_cfg.get("budgets", {}))
     retrieval_cfg = dict(cfg.get("retrieval", {}))
-    output = _as_output(Path(args.json))
+    retrieval_cfg["plan_default"] = str(args.retrieval_plan)
+    retrieval_cfg["summary_top_k"] = int(args.summary_topk)
+    planner_backend = str(args.planner_backend or retrieval_cfg.get("planner_backend", "heuristic"))
+    planner_model_cfg = dict(retrieval_cfg.get("planner_model", {}))
+    if args.planner_provider is not None:
+        planner_model_cfg["provider"] = str(args.planner_provider)
+    if args.planner_model is not None:
+        planner_model_cfg["model"] = str(args.planner_model)
+    if args.planner_base_url is not None:
+        planner_model_cfg["base_url"] = str(args.planner_base_url)
+    if args.planner_api_key_env is not None:
+        planner_model_cfg["api_key_env"] = str(args.planner_api_key_env)
+    if args.planner_api_mode is not None:
+        planner_model_cfg["api_mode"] = str(args.planner_api_mode)
+    safety_cfg = dict(cfg.get("safety", {}))
+    rerank_cfg_yaml = cfg.get("reranker", {})
+    resolved_cfg: WeightConfig
+    if args.rerank_cfg:
+        resolved_cfg = resolve_weight_config(Path(args.rerank_cfg))
+    elif isinstance(rerank_cfg_yaml, dict) and rerank_cfg_yaml:
+        resolved_cfg = resolve_weight_config(rerank_cfg_yaml)
+    else:
+        resolved_cfg = WeightConfig()
+    hard_cfg_yaml = cfg.get("hard_constraints", {})
+    if str(args.hard_constraints).lower() == "off":
+        resolved_hard_cfg = HardConstraintConfig(
+            enable_after_scene_change=False,
+            enable_first_last=False,
+            enable_type_match=False,
+            relax_on_empty=True,
+            relax_order=["after_scene_change", "first_last", "type_match"],
+        )
+    elif args.hard_constraints_cfg and Path(args.hard_constraints_cfg).exists():
+        resolved_hard_cfg = HardConstraintConfig.from_yaml(Path(args.hard_constraints_cfg))
+    elif isinstance(hard_cfg_yaml, dict) and hard_cfg_yaml:
+        resolved_hard_cfg = HardConstraintConfig.from_dict(hard_cfg_yaml)
+    else:
+        resolved_hard_cfg = HardConstraintConfig()
+
+    json_path = Path(args.json)
+    output = _attach_perception_sidecar(_as_output(json_path), json_path)
 
     budgets = budgets_cfg if bool(args.sweep) else {
         "max_total_s": [max(budgets_cfg.get("max_total_s", [60]))],
         "max_tokens": [max(budgets_cfg.get("max_tokens", [200]))],
         "max_decisions": [max(budgets_cfg.get("max_decisions", [12]))],
     }
+    if args.budget_max_total_s is not None:
+        budgets["max_total_s"] = [float(args.budget_max_total_s)]
+    if args.budget_max_tokens is not None:
+        budgets["max_tokens"] = [int(args.budget_max_tokens)]
+    if args.budget_max_decisions is not None:
+        budgets["max_decisions"] = [int(args.budget_max_decisions)]
 
     allow_gt_fallback = _resolve_allow_gt_fallback(str(args.mode), args.allow_gt_fallback)
 
-    if str(args.mode) == "hard_pseudo_nlq":
+    if str(args.mode) in {"hard_pseudo_nlq", "hard_pseudo_chain"}:
         try:
-            samples: list[NLQSample] = load_hard_pseudo_nlq(
-                output,
-                seed=int(args.seed),
-                n_highlight=max(1, int(args.n)),
-                n_token=max(1, int(args.n)),
-                n_decision=max(1, int(args.n)),
-                top_k=max(1, int(args.top_k)),
-            )
+            if str(args.mode) == "hard_pseudo_chain":
+                samples = load_hard_pseudo_chain(
+                    output,
+                    seed=int(args.seed),
+                    n_chain=max(1, int(args.n)),
+                    n_highlight=max(2, int(args.n)),
+                    n_token=max(2, int(args.n)),
+                    n_decision=max(2, int(args.n)),
+                    top_k=max(1, int(args.top_k)),
+                )
+            else:
+                samples = load_hard_pseudo_nlq(
+                    output,
+                    seed=int(args.seed),
+                    n_highlight=max(1, int(args.n)),
+                    n_token=max(1, int(args.n)),
+                    n_decision=max(1, int(args.n)),
+                    top_k=max(1, int(args.top_k)),
+                )
         except Exception as exc:
             print(f"error=build_hard_queries_failed detail={exc}")
             return 1
@@ -396,7 +915,12 @@ def main() -> int:
             sweep=bool(args.sweep),
             retriever_config=retrieval_cfg,
             index_prefix=args.index,
+            rerank_cfg=resolved_cfg,
+            hard_constraints_cfg=resolved_hard_cfg,
             allow_gt_fallback=allow_gt_fallback,
+            planner_backend=planner_backend,
+            planner_model_cfg=planner_model_cfg,
+            planner_seed=int(args.seed),
         )
         overall_rows = result["overall_rows"]
         by_type_rows = result["by_query_type_rows"]
@@ -437,32 +961,109 @@ def main() -> int:
         for row in rows:
             row.setdefault("video_uid", row.get("video_id", output.video_id))
             row.setdefault("duration_bucket", duration_bucket)
+            row.setdefault("rerank_cfg_name", resolved_cfg.name)
+            row.setdefault("rerank_cfg_hash", resolved_cfg.short_hash())
+            row.setdefault("hard_constraints_enabled", str(args.hard_constraints).lower() == "on")
+            row.setdefault("planner_backend_used_rate", 0.0)
+            row.setdefault("planner_fallback_rate", 0.0)
+            row.setdefault("planner_backend_used", str(planner_backend))
+            row.setdefault("planner_fallback_reason", "")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     results_csv = out_dir / "nlq_results.csv"
     summary_csv = out_dir / "nlq_summary.csv"
     report_md = out_dir / "nlq_report.md"
+    safety_json = out_dir / "safety_report.json"
+    chain_table_csv: Path | None = None
+    chain_table_md: Path | None = None
+    chain_figures: list[Path] = []
+    chain_failure_table_csv: Path | None = None
+    chain_failure_table_md: Path | None = None
+    chain_failure_figures: list[Path] = []
     _write_csv(results_csv, per_query_rows)
     _write_csv(summary_csv, by_type_rows)
+    resolved_safety_cfg = SafetyGateConfig.from_dict(safety_cfg)
+    if args.max_critical_fn is not None:
+        resolved_safety_cfg.max_critical_fn = int(args.max_critical_fn)
+    safety_report = build_safety_report(
+        video_id=output.video_id,
+        per_query_rows=per_query_rows,
+        gate_cfg=resolved_safety_cfg,
+        enforce_gate=bool(args.safety_gate_enforced),
+    )
+    safety_json.write_text(json.dumps(safety_report, ensure_ascii=False, indent=2), encoding="utf-8")
+
     _make_report(
         report_md,
         mode=str(args.mode),
         overall_rows=overall_rows,
         by_type_rows=by_type_rows,
+        per_query_rows=per_query_rows,
         allow_gt_fallback=allow_gt_fallback,
+        rerank_cfg_name=str(resolved_cfg.name),
+        rerank_cfg_hash=str(resolved_cfg.short_hash()),
+        hard_constraints_enabled=str(args.hard_constraints).lower() == "on",
+        hard_constraints_cfg=resolved_hard_cfg.to_dict(),
+        safety_report=safety_report,
     )
+    if str(args.mode) == "hard_pseudo_chain":
+        chain_table_csv, chain_table_md, chain_figures = _write_chain_summary(
+            out_dir=out_dir,
+            by_type_rows=by_type_rows,
+            per_query_rows=per_query_rows,
+            with_figures=True,
+        )
+        chain_failure_table_csv, chain_failure_table_md, chain_failure_figures = _write_chain_failure_attribution(
+            out_dir=out_dir,
+            per_query_rows=per_query_rows,
+            with_figures=True,
+        )
 
     print(f"video_id={output.video_id}")
     print(f"mode={args.mode}")
+    print(f"retrieval_plan={args.retrieval_plan}")
+    print(f"summary_topk={int(args.summary_topk)}")
+    print(f"planner_backend={planner_backend}")
+    planner_used_vals = [float(row.get("planner_backend_used_rate", 0.0) or 0.0) for row in overall_rows]
+    planner_fb_vals = [float(row.get("planner_fallback_rate", 0.0) or 0.0) for row in overall_rows]
+    planner_used_rate = float(sum(planner_used_vals) / len(planner_used_vals)) if planner_used_vals else 0.0
+    planner_fallback_rate = float(sum(planner_fb_vals) / len(planner_fb_vals)) if planner_fb_vals else 0.0
+    print(f"planner_backend_used_rate={planner_used_rate:.4f}")
+    print(f"planner_fallback_rate={planner_fallback_rate:.4f}")
     print(f"allow_gt_fallback={str(bool(allow_gt_fallback)).lower()}")
+    print(f"rerank_cfg_name={resolved_cfg.name}")
+    print(f"rerank_cfg_hash={resolved_cfg.short_hash()}")
+    print(f"hard_constraints={args.hard_constraints}")
     print(f"duration_bucket={duration_bucket}")
     print(f"queries_total={queries_total}")
     print(f"rows_results={len(per_query_rows)}")
     print(f"rows_summary={len(by_type_rows)}")
+    print(f"safety_count_granularity={safety_report.get('count_granularity', 'row=(variant,budget,query)')}")
+    print(f"safety_gate_enforced={str(bool(safety_report.get('gate_enforced', False))).lower()}")
+    print(f"safety_threshold={int(safety_report.get('max_critical_fn', 0))}")
+    print(f"safety_denominator={int(safety_report.get('critical_fn_denominator', 0))}")
+    print(f"safety_rate={float(safety_report.get('critical_fn_rate', 0.0)):.4f}")
+    print(f"safety_pass={str(bool(safety_report.get('pass_gate', True))).lower()}")
+    print(f"safety_critical_fn={int(safety_report.get('critical_fn_count', 0))}")
     print(f"saved_results={results_csv}")
     print(f"saved_summary={summary_csv}")
     print(f"saved_report={report_md}")
+    print(f"saved_safety={safety_json}")
+    if chain_table_csv is not None:
+        print(f"saved_chain_table_csv={chain_table_csv}")
+    if chain_table_md is not None:
+        print(f"saved_chain_table_md={chain_table_md}")
+    if chain_figures:
+        print(f"saved_chain_figures={[str(p) for p in chain_figures]}")
+    if chain_failure_table_csv is not None:
+        print(f"saved_chain_failure_table_csv={chain_failure_table_csv}")
+    if chain_failure_table_md is not None:
+        print(f"saved_chain_failure_table_md={chain_failure_table_md}")
+    if chain_failure_figures:
+        print(f"saved_chain_failure_figures={[str(p) for p in chain_failure_figures]}")
+    if bool(safety_report.get("gate_enforced", False)) and not bool(safety_report.get("pass_gate", True)):
+        return 2
     return 0
 
 

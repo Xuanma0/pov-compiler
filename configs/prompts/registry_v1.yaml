@@ -1,0 +1,38 @@
+registry_id: prompt_registry_v1
+version: "1"
+
+entries:
+  - prompt_id: model_decision_v1
+    task: decisions
+    version: v1
+    path: prompts/decisions/model_decision_v1.txt
+    owner: pov-compiler
+    tags: [paper_main, benchmark, provenance]
+    frozen: true
+    notes: Default decision prompt tracked for v1.42 provenance.
+
+  - prompt_id: model_planner_v1
+    task: planner
+    version: v1
+    path: prompts/planner/model_planner_v1.txt
+    owner: pov-compiler
+    tags: [paper_main, benchmark, provenance]
+    frozen: true
+    notes: Default planner prompt tracked for v1.42 provenance.
+
+  - prompt_id: repo_summary_v1
+    task: repository
+    version: v1
+    path: prompts/repository/repo_summary_v1.txt
+    owner: pov-compiler
+    tags: [paper_main, benchmark, provenance]
+    frozen: true
+    notes: Default repository summary prompt tracked for v1.42 provenance.
+
+profiles:
+  v1.42_main:
+    description: Default prompt profile for the v1.42 paper benchmark suite.
+    prompts:
+      decisions: model_decision_v1
+      planner: model_planner_v1
+      repository: repo_summary_v1

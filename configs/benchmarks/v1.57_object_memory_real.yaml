@@ -1,0 +1,37 @@
+suite_id: v1.57_object_memory_real
+suite_version: "1.57"
+description: Real persistent object-memory uplift pilot comparing persistence_v1 and persistent_v2 under YOLO26n plus local SAM3.
+query_bank: configs/queries/persistent_object_memory_core_v1.yaml
+video: D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4
+baseline:
+  label: baseline
+  source: offline
+  config: configs/perception/yolo26n_sam3_local.yaml
+  perception_backend: real
+  video: D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4
+  perception_fps: 4.0
+  perception_max_frames: 24
+  fallback_to_stub: true
+  object_memory:
+    enabled: true
+    contact_threshold: 0.55
+    logic_variant: persistence_v1
+    persistence_min_frames: 2
+    persistence_score_min: 0.5
+    enable_alias_merge: true
+uplift:
+  label: uplift
+  source: offline
+  config: configs/perception/yolo26n_sam3_local.yaml
+  perception_backend: real
+  video: D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4
+  perception_fps: 4.0
+  perception_max_frames: 24
+  fallback_to_stub: true
+  object_memory:
+    enabled: true
+    contact_threshold: 0.55
+    logic_variant: persistent_v2
+    persistence_min_frames: 2
+    persistence_score_min: 0.5
+    enable_alias_merge: true

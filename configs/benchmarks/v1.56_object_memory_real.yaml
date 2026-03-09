@@ -1,0 +1,39 @@
+suite_id: v1.56_object_memory_real
+suite_version: "1.56"
+description: Small real object-memory logic uplift pilot comparing current and persistence-aware object_memory_v0 under YOLO26n plus local SAM3.
+query_bank: configs/queries/object_memory_logic_core_v1.yaml
+video: D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4
+report:
+  thresholds:
+    lost_object_support_delta_min: 0.10
+    chain_support_delta_min: 0.10
+    query_strength_delta_min: 0.10
+baseline:
+  label: baseline
+  source: offline
+  config: configs/perception/yolo26n_sam3_local.yaml
+  perception_backend: real
+  sample_fps: 4.0
+  perception_fps: 4.0
+  perception_max_frames: 24
+  fallback_to_stub: true
+  object_memory:
+    enabled: true
+    contact_threshold: 0.55
+    logic_variant: current
+uplift:
+  label: uplift
+  source: offline
+  config: configs/perception/yolo26n_sam3_local.yaml
+  perception_backend: real
+  sample_fps: 4.0
+  perception_fps: 4.0
+  perception_max_frames: 24
+  fallback_to_stub: true
+  object_memory:
+    enabled: true
+    contact_threshold: 0.55
+    logic_variant: persistence_v1
+    persistence_min_frames: 2
+    persistence_score_min: 0.5
+    enable_alias_merge: true

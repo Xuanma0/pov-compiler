@@ -1,0 +1,40 @@
+normalization_id: provider_normalization_v1
+version: "1"
+description: Unified provider telemetry schema and missing-field semantics for result-layer diagnostics.
+targets:
+  provider: [provider, provider_name]
+  model: [model, model_name]
+  api_mode_used: [api_mode_used, strategy_used]
+  usage_present: [usage_present]
+  prompt_tokens: [prompt_tokens, input_tokens, usage_prompt_tokens]
+  completion_tokens: [completion_tokens, output_tokens, usage_completion_tokens]
+  total_tokens: [total_tokens, usage_total_tokens]
+  cost_known: [cost_known]
+  model_cost_usd_total: [model_cost_usd_total, cost_usd_total]
+  model_cost_usd_mean_per_query: [model_cost_usd_mean_per_query, cost_usd_mean_per_query]
+  latency_p50_ms: [latency_p50_ms, model_latency_p50_ms, e2e_ms_p50]
+  latency_p95_ms: [latency_p95_ms, model_latency_p95_ms, e2e_ms_p95]
+  structured_parse_fail_rate: [structured_parse_fail_rate, parse_fail_rate]
+  planner_fallback_rate: [planner_fallback_rate]
+  calls_total: [calls_total, model_requests_total]
+  calls_with_usage: [calls_with_usage]
+  calls_with_cost: [calls_with_cost]
+required_fields:
+  - provider
+  - model
+  - api_mode_used
+  - usage_present
+  - cost_known
+  - calls_total
+conditional_required:
+  usage_present:
+    when_true: [prompt_tokens, completion_tokens, total_tokens, calls_with_usage]
+  cost_known:
+    when_true: [model_cost_usd_total, model_cost_usd_mean_per_query, calls_with_cost]
+summary_fields:
+  - usage_present_rate
+  - model_cost_known_rate
+  - model_latency_p95_ms_mean
+  - structured_parse_fail_rate_mean
+  - planner_fallback_rate
+  - calls_total

@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pov_compiler.ir.events_v1 import ensure_events_v1
+from pov_compiler.repository import build_repo_chunks, deduplicate_chunks, select_chunks_for_query
+from pov_compiler.repository.schema import RepoChunk
 from pov_compiler.schemas import ContextSchema, DecisionPoint, Event, KeyClip, Output, Token
 
 
@@ -14,6 +17,12 @@ DEFAULT_BUDGET = {
     "max_tokens": 200,
     "decisions_min_gap_s": 2.0,
     "max_seconds": None,
+    "max_repo_chunks": 16,
+    "max_repo_chars": 6000,
+    "max_repo_tokens": 200,
+    "repo_strategy": "importance_greedy",
+    "use_repo": False,
+    "repo_read_policy": "budgeted_topk",
 }
 
 
@@ -95,7 +104,7 @@ def _token_priority(
 
 
 def _select_events(
-    events: list[Event],
+    events: list[Any],
     highlights: list[dict[str, Any]],
     max_events: int,
     preferred_event_ids: list[str] | None = None,
@@ -123,15 +132,30 @@ def _select_events(
         if event is None:
             continue
         anchor_summary: dict[str, int] = {}
-        for anchor in event.anchors:
-            anchor_summary[anchor.type] = anchor_summary.get(anchor.type, 0) + 1
+        evidence_summary: dict[str, int] = {}
+        if hasattr(event, "anchors"):
+            for anchor in event.anchors:
+                anchor_summary[anchor.type] = anchor_summary.get(anchor.type, 0) + 1
+        else:
+            for evidence in getattr(event, "evidence", []):
+                et = str(getattr(evidence, "type", ""))
+                evidence_summary[et] = evidence_summary.get(et, 0) + 1
+                if et == "anchor":
+                    anchor_type = str(getattr(evidence, "source", {}).get("anchor_type", ""))
+                    if anchor_type:
+                        anchor_summary[anchor_type] = anchor_summary.get(anchor_type, 0) + 1
+
+        label = str(getattr(event, "label", getattr(event, "meta", {}).get("label", "")))
+        boundary_conf = float(getattr(event, "scores", {}).get("boundary_conf", 0.0))
         summaries.append(
             {
                 "id": event.id,
                 "t0": float(event.t0),
                 "t1": float(event.t1),
-                "boundary_conf": float(event.scores.get("boundary_conf", 0.0)),
+                "boundary_conf": boundary_conf,
+                "label": label,
                 "anchor_summary": anchor_summary,
+                "evidence_summary": evidence_summary,
             }
         )
     summaries.sort(key=lambda e: (e["t0"], e["t1"]))
@@ -345,6 +369,47 @@ def _select_decisions(
     return [_decision_summary(d) for d in selected]
 
 
+def _load_repo_chunks(output: Output, repo_cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    repository = dict(output.repository or {})
+    chunks_payload = repository.get("chunks", [])
+    chunks: list[dict[str, Any]] = []
+    if isinstance(chunks_payload, list):
+        for item in chunks_payload:
+            if isinstance(item, dict):
+                chunks.append(dict(item))
+    if chunks:
+        return chunks
+    cfg = dict(repo_cfg or {})
+    dedup_cfg = dict(cfg.get("dedup", {}))
+    built = build_repo_chunks(output, cfg=cfg)
+    deduped = deduplicate_chunks(built, cfg=dedup_cfg)
+    return [_model_dump(chunk) for chunk in deduped]
+
+
+def summarize_repo_selection(selection_trace: dict[str, Any] | None) -> dict[str, Any]:
+    trace = dict(selection_trace or {})
+    chunk_ids = trace.get("selected_chunk_ids_time_sorted", trace.get("selected_chunk_ids", []))
+    if not isinstance(chunk_ids, list):
+        chunk_ids = []
+    by_level_raw = trace.get("selected_breakdown_by_level", {})
+    by_level: dict[str, int] = {}
+    if isinstance(by_level_raw, dict):
+        for key, value in by_level_raw.items():
+            try:
+                by_level[str(key)] = int(value)
+            except Exception:
+                continue
+    dropped_raw = trace.get("dropped_topN", [])
+    dropped_count = len(dropped_raw) if isinstance(dropped_raw, list) else 0
+    return {
+        "policy_name": str(trace.get("policy_name", "")),
+        "policy_hash": str(trace.get("policy_hash", "")),
+        "selected_chunks": int(len(chunk_ids)),
+        "by_level": dict(sorted(by_level.items())),
+        "dropped_topN_count": int(dropped_count),
+    }
+
+
 def build_context(
     output_json: str | Path | dict[str, Any] | Output,
     mode: str = "highlights",
@@ -353,12 +418,13 @@ def build_context(
     selected_highlights: list[str] | None = None,
     selected_tokens: list[str | dict[str, Any] | Token] | None = None,
     selected_decisions: list[str | dict[str, Any] | DecisionPoint] | None = None,
+    query_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mode = str(mode).lower()
-    if mode not in {"timeline", "highlights", "decisions", "full"}:
-        raise ValueError("mode must be one of: timeline, highlights, decisions, full")
+    if mode not in {"timeline", "highlights", "decisions", "full", "repo_only", "events_plus_repo"}:
+        raise ValueError("mode must be one of: timeline, highlights, decisions, full, repo_only, events_plus_repo")
 
-    output = _as_output(output_json)
+    output = ensure_events_v1(_as_output(output_json))
 
     merged_budget = dict(DEFAULT_BUDGET)
     if budget:
@@ -372,7 +438,7 @@ def build_context(
     raw_max_seconds = merged_budget.get("max_seconds", None)
     max_seconds = None if raw_max_seconds in (None, "", "none") else float(raw_max_seconds)
 
-    events_pool = list(output.events)
+    events_pool = list(output.events_v1) if output.events_v1 else (list(output.events) + list(output.events_v0))
     highlights_pool = list(output.highlights)
     decisions_pool = list(output.decision_points)
     tokens_pool = list(output.token_codec.tokens)
@@ -390,9 +456,11 @@ def build_context(
     if selected_decision_ids:
         decisions_pool = [decision for decision in decisions_pool if decision.id in selected_decision_ids]
 
-    if mode == "timeline":
+    core_mode = "full" if mode == "events_plus_repo" else mode
+
+    if core_mode == "timeline":
         decisions = []
-    elif mode in {"decisions", "full"} or selected_decision_ids:
+    elif core_mode in {"decisions", "full"} or selected_decision_ids:
         decisions = _select_decisions(
             decisions_pool,
             max_decisions=max_decisions,
@@ -401,9 +469,9 @@ def build_context(
     else:
         decisions = []
 
-    if mode == "timeline":
+    if core_mode == "timeline":
         highlights = []
-    elif mode == "decisions":
+    elif core_mode == "decisions":
         decision_highlight_ids = {d["source_highlight"] for d in decisions if d.get("source_highlight")}
         if decision_highlight_ids:
             highlights_source = [hl for hl in highlights_pool if hl.id in decision_highlight_ids]
@@ -433,12 +501,112 @@ def build_context(
     event_ids = {e["id"] for e in events}
     selected_tokens_final = _select_tokens(
         tokens=all_tokens,
-        mode=mode,
+        mode=core_mode,
         highlights=highlights,
         decisions=decisions,
         event_ids=event_ids,
         max_tokens=max_tokens,
     )
+
+    use_repo = bool(merged_budget.get("use_repo", False)) or mode in {"repo_only", "events_plus_repo"}
+    repo_cfg = dict((output.repository or {}).get("cfg", {}) if isinstance(output.repository, dict) else {})
+    repo_chunks = _load_repo_chunks(output, repo_cfg=repo_cfg) if use_repo else []
+    repo_selected: list[dict[str, Any]] = []
+    repo_selection_trace: dict[str, Any] = {}
+    if use_repo and repo_chunks:
+        repo_models = [
+            RepoChunk.model_validate(chunk) if hasattr(RepoChunk, "model_validate") else RepoChunk.parse_obj(chunk)
+            for chunk in repo_chunks
+        ]
+        repo_query = str((budget or {}).get("repo_query", ""))
+        if not repo_query and query_info and str(query_info.get("query", "")).strip():
+            repo_query = str(query_info.get("query", "")).strip()
+        repo_query_hints: dict[str, Any] = {}
+        if isinstance(query_info, dict):
+            hints_raw = query_info.get("query_hints", None)
+            if isinstance(hints_raw, dict):
+                repo_query_hints.update(dict(hints_raw))
+            derived_raw = query_info.get("derived_constraints", None)
+            if isinstance(derived_raw, dict):
+                repo_query_hints["derived_constraints"] = dict(derived_raw)
+            chain_meta_raw = query_info.get("chain_meta", None)
+            if isinstance(chain_meta_raw, dict):
+                repo_query_hints["chain_meta"] = dict(chain_meta_raw)
+        repo_selected_models, repo_selection_trace = select_chunks_for_query(
+            repo_models,
+            query=repo_query,
+            budget={
+                "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
+                "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+                "max_repo_tokens": int(merged_budget.get("max_repo_tokens", 200)),
+                "max_seconds": max_seconds,
+                "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+            },
+            cfg={
+                "strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+                "read_policy": {
+                    "name": str(merged_budget.get("repo_read_policy", merged_budget.get("repo_strategy", "importance_greedy")))
+                },
+            },
+            query_info=query_info,
+            query_hints=repo_query_hints if repo_query_hints else None,
+            return_trace=True,
+        )
+        repo_selected = [_model_dump(chunk) for chunk in repo_selected_models]
+        summary_rows = [row for row in repo_selected if str(row.get("level", row.get("scale", ""))).strip().lower() == "summary"]
+        detail_rows = [row for row in repo_selected if row not in summary_rows]
+        summary_rows.sort(key=lambda r: (float(r.get("t0", 0.0)), float(r.get("t1", 0.0)), str(r.get("id", ""))))
+        detail_rows.sort(key=lambda r: (float(r.get("t0", 0.0)), float(r.get("t1", 0.0)), str(r.get("id", ""))))
+        ordered_rows = summary_rows + detail_rows
+        max_repo_chars = int(merged_budget.get("max_repo_chars", 6000) or 6000)
+        if max_repo_chars > 0:
+            clipped: list[dict[str, Any]] = []
+            used_chars = 0
+            for row in ordered_rows:
+                text_len = len(str(row.get("text", "")))
+                if used_chars + text_len > max_repo_chars:
+                    continue
+                clipped.append(row)
+                used_chars += text_len
+            repo_selected = clipped
+        else:
+            repo_selected = ordered_rows
+    summary_count = sum(
+        1
+        for row in repo_selected
+        if str(row.get("level", row.get("scale", ""))).strip().lower() == "summary"
+    )
+    detail_count = max(0, len(repo_selected) - summary_count)
+    repo_chars_after = int(sum(len(str(c.get("text", ""))) for c in repo_selected))
+    repo_selection_trace = dict(repo_selection_trace or {})
+    repo_selection_trace["selected_summary_chunks_count"] = int(summary_count)
+    repo_selection_trace["selected_non_summary_chunks_count"] = int(detail_count)
+    repo_selection_trace["repo_context_char_budget_used"] = int(repo_chars_after)
+    repo_trace = {
+        "mode": mode,
+        "use_repo": use_repo,
+        "budget_used": {
+            "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
+            "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+            "max_repo_tokens": int(merged_budget.get("max_repo_tokens", 200)),
+            "max_seconds": max_seconds,
+            "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+            "repo_read_policy": str(merged_budget.get("repo_read_policy", merged_budget.get("repo_strategy", "importance_greedy"))),
+        },
+        "repo_before": len(repo_chunks),
+        "repo_after": len(repo_selected),
+        "repo_chars_after": int(repo_chars_after),
+        "repo_selected_summary_chunks_count": int(summary_count),
+        "repo_selected_non_summary_chunks_count": int(detail_count),
+        "repo_context_char_budget_used": int(repo_chars_after),
+        "selection_trace": repo_selection_trace,
+    }
+
+    if mode == "repo_only":
+        events = []
+        highlights = []
+        decisions = []
+        selected_tokens_final = []
 
     context = ContextSchema(
         video_id=output.video_id,
@@ -452,6 +620,12 @@ def build_context(
             "max_tokens": max_tokens,
             "decisions_min_gap_s": decisions_min_gap_s,
             "max_seconds": max_seconds,
+            "use_repo": use_repo,
+            "max_repo_chunks": int(merged_budget.get("max_repo_chunks", 16)),
+            "max_repo_chars": merged_budget.get("max_repo_chars", 6000),
+            "max_repo_tokens": int(merged_budget.get("max_repo_tokens", 200)),
+            "repo_strategy": str(merged_budget.get("repo_strategy", "importance_greedy")),
+            "repo_read_policy": str(merged_budget.get("repo_read_policy", merged_budget.get("repo_strategy", "importance_greedy"))),
         },
         events=events,
         highlights=highlights,
@@ -463,5 +637,7 @@ def build_context(
             "by_type_before": _count_by_type(all_tokens),
             "by_type_after": _count_by_type(selected_tokens_final),
         },
+        repo_chunks=repo_selected,
+        repo_trace=repo_trace,
     )
     return _model_dump(context)

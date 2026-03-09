@@ -1,0 +1,19 @@
+sample_fps: 4.0
+features:
+  use_clip: false
+perception:
+  enabled: true
+  backend: real
+  fallback_to_stub: true
+  strict: false
+  sample_fps: 4.0
+  max_frames: 96
+  cache_dir: data/cache/perception_yolo26n
+  contact_min_score: 0.25
+  objects_topk: 12
+  model_candidates:
+    - D:\BYES\models\yolo26\yolo26n.pt
+  hand_task_model_path: assets/mediapipe/hand_landmarker.task
+object_memory:
+  enabled: true
+  contact_threshold: 0.55

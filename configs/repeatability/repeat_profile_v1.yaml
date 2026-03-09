@@ -1,0 +1,12 @@
+profile_id: repeat_profile_v1
+description: Default repeatability thresholds for small repeated real/fake pilots.
+min_runs: 3
+small_sample_selected_uids_max: 2
+provider_noise_cv_max: 0.25
+provider_latency_cv_max: 0.25
+max_parse_fail_rate: 0.10
+max_fallback_rate: 0.10
+stable_no_effect_abs_mean_max: 0.05
+stable_no_effect_std_max: 0.02
+sample_size_growth_factor: 2.0
+sample_size_range_growth_factor: 3.0

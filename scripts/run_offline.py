@@ -48,6 +48,61 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--thresh", type=float, default=None, help="Boundary threshold")
     parser.add_argument("--min-event-s", type=float, default=None, help="Minimum event duration in seconds")
     parser.add_argument("--use-clip", action="store_true", help="Enable CLIP embedding if torch+open_clip exist")
+    parser.add_argument("--run-perception", action="store_true", help="Enable Perception v0 (YOLO/MediaPipe or fallback)")
+    parser.add_argument(
+        "--perception-backend",
+        choices=["real", "stub"],
+        default=None,
+        help="Perception backend (real|stub)",
+    )
+    parser.set_defaults(perception_fallback_stub=None)
+    parser.add_argument(
+        "--perception-fallback-stub",
+        dest="perception_fallback_stub",
+        action="store_true",
+        help="Allow fallback from real backend to stub backend",
+    )
+    parser.add_argument(
+        "--no-perception-fallback-stub",
+        dest="perception_fallback_stub",
+        action="store_false",
+        help="Disable fallback to stub backend",
+    )
+    parser.add_argument(
+        "--perception-strict",
+        action="store_true",
+        help="Strict perception mode: no fallback, fail on missing deps/frame errors",
+    )
+    parser.add_argument("--perception-fps", type=float, default=None, help="Perception sampling fps")
+    parser.add_argument("--perception-max-frames", type=int, default=None, help="Perception frame cap")
+    parser.add_argument("--with-repo", action="store_true", help="Enable RepoV0 chunk write/dedup in pipeline output")
+    parser.add_argument("--decisions-backend", choices=["heuristic", "model"], default=None, help="Decisions backend")
+    parser.add_argument(
+        "--model-provider",
+        choices=["fake", "openai", "openai_compat", "gemini", "qwen", "deepseek", "glm"],
+        default=None,
+        help="Model provider (used when --decisions-backend=model)",
+    )
+    parser.add_argument("--model-name", default=None, help="Model name for decisions backend=model")
+    parser.add_argument("--model-base-url", default=None, help="Model base URL")
+    parser.add_argument("--model-api-key-env", default=None, help="API key environment variable name")
+    parser.add_argument(
+        "--model-api-mode",
+        choices=["auto", "responses", "chat"],
+        default=None,
+        help="Model API mode (auto/responses/chat) for OpenAI-compatible providers",
+    )
+    parser.add_argument("--model-timeout-s", type=int, default=None)
+    parser.add_argument("--model-max-retries", type=int, default=None)
+    parser.add_argument("--model-max-tokens", type=int, default=None)
+    parser.add_argument("--model-temperature", type=float, default=None)
+    parser.add_argument("--dry-run", action="store_true", help="Do not call model backend when decisions backend is model")
+    parser.add_argument("--model-fake-mode", choices=["minimal", "diverse"], default=None)
+    parser.add_argument("--model-cache-dir", default=None, help="Model call cache directory")
+    parser.set_defaults(model_cache=None)
+    cache_group = parser.add_mutually_exclusive_group()
+    cache_group.add_argument("--model-cache", dest="model_cache", action="store_true")
+    cache_group.add_argument("--no-model-cache", dest="model_cache", action="store_false")
     return parser.parse_args()
 
 
@@ -66,6 +121,59 @@ def main() -> int:
         config.setdefault("segmenter", {})["min_event_s"] = float(args.min_event_s)
     if args.use_clip:
         config.setdefault("features", {})["use_clip"] = True
+    if args.run_perception:
+        config.setdefault("perception", {})["enabled"] = True
+    if args.perception_backend is not None:
+        config.setdefault("perception", {})["backend"] = str(args.perception_backend)
+    if args.perception_fallback_stub is not None:
+        config.setdefault("perception", {})["fallback_to_stub"] = bool(args.perception_fallback_stub)
+    if args.perception_strict:
+        config.setdefault("perception", {})["strict"] = True
+        config.setdefault("perception", {})["fallback_to_stub"] = False
+    if args.perception_fps is not None:
+        config.setdefault("perception", {})["sample_fps"] = float(args.perception_fps)
+    if args.perception_max_frames is not None:
+        config.setdefault("perception", {})["max_frames"] = int(args.perception_max_frames)
+    if args.with_repo:
+        config.setdefault("repo", {})["enable"] = True
+    if args.decisions_backend is not None:
+        config.setdefault("decisions", {})["backend"] = str(args.decisions_backend)
+    model_cfg = config.setdefault("decisions", {}).setdefault("model_client", {})
+    if args.model_provider is not None:
+        model_cfg["provider"] = str(args.model_provider)
+    if args.model_name is not None:
+        model_cfg["model"] = str(args.model_name)
+    if args.model_base_url is not None:
+        model_cfg["base_url"] = str(args.model_base_url)
+    if args.model_api_key_env is not None:
+        model_cfg["api_key_env"] = str(args.model_api_key_env)
+    if args.model_api_mode is not None:
+        model_cfg["api_mode"] = str(args.model_api_mode)
+    if args.model_timeout_s is not None:
+        model_cfg["timeout_s"] = int(args.model_timeout_s)
+    if args.model_max_retries is not None:
+        model_cfg["max_retries"] = int(args.model_max_retries)
+    if args.model_max_tokens is not None:
+        model_cfg["max_tokens"] = int(args.model_max_tokens)
+    if args.model_temperature is not None:
+        model_cfg["temperature"] = float(args.model_temperature)
+    if args.model_fake_mode is not None:
+        model_cfg.setdefault("extra", {})
+        if isinstance(model_cfg["extra"], dict):
+            model_cfg["extra"]["fake_mode"] = str(args.model_fake_mode)
+    if bool(args.dry_run):
+        model_cfg.setdefault("extra", {})
+        if isinstance(model_cfg["extra"], dict):
+            model_cfg["extra"]["dry_run"] = True
+    if args.model_cache_dir is not None:
+        model_cfg["model_cache_dir"] = str(args.model_cache_dir)
+    if args.model_cache is not None:
+        model_cfg["model_cache_enabled"] = bool(args.model_cache)
+    if config.get("perception", {}).get("enabled", False):
+        config.setdefault("perception", {})
+        if not config["perception"].get("cache_dir"):
+            out_path = Path(args.out)
+            config["perception"]["cache_dir"] = str(out_path.parent / "perception_cache")
 
     pipeline = OfflinePipeline(config=config)
     output = pipeline.run(args.video)
@@ -81,10 +189,20 @@ def main() -> int:
     for event in output.events:
         dur = event.t1 - event.t0
         print(f"{event.id}: duration={dur:.2f}s anchors={len(event.anchors)}")
+    print(f"events_v0={len(output.events_v0)}")
+    for event in output.events_v0[:5]:
+        dur = event.t1 - event.t0
+        label = str(event.meta.get("label", ""))
+        print(f"{event.id}: duration={dur:.2f}s label={label}")
+    print(f"events_v1={len(output.events_v1)}")
+    for event in output.events_v1[:5]:
+        dur = event.t1 - event.t0
+        print(f"{event.id}: duration={dur:.2f}s label={event.label} evidence={len(event.evidence)}")
     kept = float(output.stats.get("kept_duration_s", 0.0)) if isinstance(output.stats, dict) else 0.0
     ratio = float(output.stats.get("compression_ratio", 0.0)) if isinstance(output.stats, dict) else 0.0
     tokens_total = len(output.token_codec.tokens) if output.token_codec else 0
     decisions_total = len(output.decision_points)
+    decisions_model_total = len(getattr(output, "decisions_model_v1", []) or [])
     context_default_cfg = dict(config.get("context_default", {}))
     context_mode = str(context_default_cfg.pop("mode", "highlights"))
     context_json = build_context(output_dict, mode=context_mode, budget=context_default_cfg)
@@ -96,7 +214,52 @@ def main() -> int:
     print(f"tokens_total={tokens_total}")
     print(f"tokens_context_default={tokens_context_default}")
     print(f"decision_points_total={decisions_total}")
+    print(f"decisions_model_v1_total={decisions_model_total}")
+    print(f"decisions_backend={output.meta.get('decisions_backend', 'heuristic')}")
+    if output.meta.get("decisions_model_provider"):
+        print(f"decisions_model_provider={output.meta.get('decisions_model_provider', '')}")
+        print(f"decisions_model_name={output.meta.get('decisions_model_name', '')}")
+        print(f"decisions_model_cfg_hash={output.meta.get('decisions_model_cfg_hash', '')}")
+        if output.meta.get("decisions_model_api_mode"):
+            print(f"decisions_model_api_mode={output.meta.get('decisions_model_api_mode', '')}")
+        if output.meta.get("decisions_model_api_mode_used"):
+            print(f"decisions_model_api_mode_used={output.meta.get('decisions_model_api_mode_used', '')}")
+        if output.meta.get("decisions_model_parse_ok") is not None:
+            print(
+                "decisions_model_parse_ok="
+                + str(bool(output.meta.get("decisions_model_parse_ok", False))).lower()
+            )
+        cache_stats = output.meta.get("decisions_model_cache", {})
+        if isinstance(cache_stats, dict):
+            print(f"model_cache_enabled={str(bool(cache_stats.get('enabled', False))).lower()}")
+            print(f"model_cache_dir={cache_stats.get('dir', '')}")
+            print(
+                "model_cache_stats="
+                + json.dumps(
+                    {
+                        "hit": int(cache_stats.get("hit", 0)),
+                        "miss": int(cache_stats.get("miss", 0)),
+                        "write_fail": int(cache_stats.get("write_fail", 0)),
+                        "hash_prefix": str(cache_stats.get("hash_prefix", "")),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
     print(f"decisions_context_default={decisions_context_default}")
+    if isinstance(output.perception, dict) and output.perception:
+        p_meta = output.perception.get("meta", {}) if isinstance(output.perception.get("meta", {}), dict) else {}
+        p_sum = output.perception.get("summary", {}) if isinstance(output.perception.get("summary", {}), dict) else {}
+        print(f"perception_backend={p_meta.get('backend', '')}")
+        print(f"perception_frames={p_meta.get('processed_frames', 0)}")
+        print(f"contact_events_count={p_sum.get('contact_events_count', 0)}")
+        print(f"perception_fallback_used={str(bool(p_sum.get('fallback_used', False))).lower()}")
+        if p_sum.get("fallback_reason"):
+            print(f"perception_fallback_reason={p_sum.get('fallback_reason')}")
+    if isinstance(output.repository, dict) and output.repository:
+        repo_summary = output.repository.get("summary", {}) if isinstance(output.repository.get("summary", {}), dict) else {}
+        print(f"repo_chunks_before={repo_summary.get('chunks_before_dedup', 0)}")
+        print(f"repo_chunks_after={repo_summary.get('chunks_after_dedup', 0)}")
     print(f"saved={out_path}")
     return 0
 

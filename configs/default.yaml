@@ -29,11 +29,35 @@ tokens:
   merge_gap_s: 0.2
 decisions:
   enabled: true
+  backend: heuristic
   pre_s: 2.0
   post_s: 2.0
   merge_iou: 0.7
   min_gap_s: 0.0
   boundary_thresh: 0.65
+  model_client:
+    # provider options: fake | openai | openai_compat | gemini | qwen | deepseek | glm
+    # qwen/deepseek/glm are routed through OpenAI-compatible endpoints by default.
+    provider: fake
+    model: fake-decision-v1
+    api_mode: auto
+    base_url: null
+    # optional env indirection for base_url:
+    # OPENAI_BASE_URL / QWEN_BASE_URL / DEEPSEEK_BASE_URL / GLM_BASE_URL
+    base_url_env: OPENAI_BASE_URL
+    # API key env name only (never put real key values in tracked files):
+    # OPENAI_API_KEY / GEMINI_API_KEY / DASHSCOPE_API_KEY / DEEPSEEK_API_KEY / ZAI_API_KEY
+    api_key_env: OPENAI_API_KEY
+    timeout_s: 60
+    max_tokens: 800
+    temperature: 0.2
+    model_cache_enabled: true
+    model_cache_dir: data/outputs/model_cache
+    model_cache_max_entries: 0
+    model_cache_max_mb: 0
+    extra_headers: {}
+    extra:
+      fake_mode: minimal
 context_default:
   mode: highlights
   max_events: 8
@@ -46,6 +70,59 @@ index:
 retrieval:
   default_top_k: 8
   prefer: highlight
+  planner_backend: heuristic
+  planner_model:
+    provider: fake
+    model: fake-planner-v1
+    api_mode: auto
+    base_url: null
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
+    timeout_s: 60
+    max_tokens: 500
+    temperature: 0.1
+    model_cache_enabled: true
+    model_cache_dir: data/outputs/model_cache
+    max_retries: 1
+    extra: {}
+reranker:
+  name: default
+  bonus_intent_token_on_token: 1.0
+  bonus_intent_decision_on_decision: 1.0
+  bonus_intent_anchor_on_highlight: 1.0
+  bonus_first: 0.5
+  bonus_last: 0.5
+  penalty_before_scene_change: 0.6
+  penalty_distractor_near: 0.3
+  distractor_near_window_s: 5.0
+  bonus_conf_scale: 0.2
+  bonus_boundary_scale: 0.15
+  w_trigger: 0.3
+  w_action: 0.35
+  w_constraint: 0.2
+  w_outcome: 0.1
+  w_evidence: 0.15
+  w_semantic: 1.0
+hard_constraints:
+  enable_after_scene_change: true
+  enable_first_last: true
+  enable_type_match: false
+  enable_object_match: true
+  relax_on_empty: true
+  relax_order: ["after_scene_change", "object_match", "first_last", "type_match"]
+safety:
+  enabled: true
+  max_critical_fn: 0
+  strict_metric: hit_at_k_strict
+  critical_query_types:
+    - hard_pseudo_anchor
+    - hard_pseudo_contact
+    - hard_pseudo_decision
+    - hard_pseudo_lost_object
+    - hard_pseudo_token
+    - pseudo_anchor
+    - pseudo_decision
+    - pseudo_token
 eval:
   num_time_queries: 10
   time_window_s: 8
@@ -64,3 +141,89 @@ eval:
     max_decisions: [4, 8, 12]
 features:
   use_clip: false
+perception:
+  enabled: false
+  backend: stub
+  fallback_to_stub: true
+  strict: false
+  sample_fps: 10.0
+  max_frames: 300
+  cache_dir: data/cache/perception
+  contact_min_score: 0.25
+  objects_topk: 10
+  model_candidates: ["yolo26n.pt", "yolov8n.pt"]
+  hand_task_model_path: assets/mediapipe/hand_landmarker.task
+event_v0:
+  enabled: true
+  thresh: 0.45
+  min_event_s: 3.0
+  visual_weight: 0.7
+  contact_weight: 0.3
+  append_to_events: false
+events_v1:
+  enabled: true
+object_memory:
+  enabled: true
+  contact_threshold: 0.6
+repo:
+  enable: false
+  write_policy:
+    name: fixed_interval
+    chunk_step_s: 8.0
+    keep_levels: ["decision", "place"]
+  summary:
+    enabled: false
+    window_s: 60.0
+    model:
+      enabled: false
+      provider: fake
+      model: fake-summary-v0
+      api_mode: auto
+      api_key_env: OPENAI_API_KEY
+      base_url_env: OPENAI_BASE_URL
+      timeout_s: 60
+      max_retries: 1
+      max_tokens: 400
+      temperature: 0.2
+      model_cache_enabled: true
+      model_cache_dir: data/outputs/model_cache
+  read_policy:
+    name: budgeted_topk
+    max_chunks: 16
+    max_tokens: 200
+    max_seconds: null
+  query_aware_read_policy:
+    name: query_aware
+    max_chunks: 16
+    max_tokens: 200
+    recency_weight: 0.1
+    redundancy_penalty: 0.2
+    dedup_sim_threshold: 0.92
+  window_s: 30.0
+  min_segment_s: 5.0
+  scales:
+    event: true
+    decision: true
+    place: true
+    window: true
+    segment: true
+  dedup:
+    iou_thresh: 0.6
+    sim_thresh: 0.9
+    cross_scale: true
+    keep_best_importance: true
+context:
+  use_repo: false
+streaming:
+  step_s: 5.0
+  context_use_repo: false
+  repo_read_policy: budgeted_topk
+  repo_budget: null
+  chain_backoff_strategy: strict
+  chain_backoff_fixed_level: 0
+  chain_backoff_seed: 0
+  chain_backoff_alpha_latency: 0.2
+  chain_backoff_beta_safety: 0.5
+  queries:
+    - anchor=turn_head top_k=6
+    - token=SCENE_CHANGE top_k=6

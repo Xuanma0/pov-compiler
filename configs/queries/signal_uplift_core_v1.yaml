@@ -1,0 +1,78 @@
+query_bank_id: signal_uplift_core_v1
+query_bank_version: "1"
+description: Core signal-uplift query set focused on decision, chain, lost-object, and summary-first support.
+provenance:
+  strategy: signal_uplift_core
+  source: v1.52_design
+  target: yolo26n_local_signal_uplift
+groups:
+  - group_id: decision
+    description: Decision-sensitive support checks
+    tags: [decision]
+  - group_id: chain
+    description: Chain-sensitive support checks
+    tags: [chain]
+  - group_id: lost_object
+    description: Lost-object and object-memory support checks
+    tags: [lost_object, object_memory]
+  - group_id: summary_first
+    description: Summary-first support checks
+    tags: [summary_first, repo_summary]
+queries:
+  - query_id: uplift_decision_pick_up
+    group: decision
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "decision=pick_up which=last top_k=6"
+    signal_tags: [decision]
+    sensitive_to: [decision_backend]
+  - query_id: uplift_decision_open
+    group: decision
+    task: repo
+    mode: summary_first
+    query: "decision=open which=last repo_mode=summary_first top_k=6"
+    signal_tags: [decision, repo_summary]
+    sensitive_to: [repo_summary]
+  - query_id: uplift_chain_scene_to_door
+    group: chain
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then interaction_object=door top_k=6 chain_derive=time+object"
+    signal_tags: [chain]
+    sensitive_to: [chain_backoff]
+  - query_id: uplift_chain_place_object
+    group: chain
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "place=kitchen top_k=6 then interaction_object=cup top_k=6 chain_derive=time+object"
+    signal_tags: [chain, place]
+    sensitive_to: [chain_backoff, streaming]
+  - query_id: uplift_lost_object_door
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "lost_object=door which=last top_k=6"
+    signal_tags: [lost_object, object_memory]
+    sensitive_to: [object_memory]
+  - query_id: uplift_lost_object_cup
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "lost_object=cup which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object"
+    signal_tags: [lost_object, chain]
+    sensitive_to: [object_memory, chain_backoff]
+  - query_id: uplift_summary_first_door
+    group: summary_first
+    task: repo
+    mode: summary_first
+    query: "interaction_object=door repo_mode=summary_first summary_topk=3 top_k=6"
+    signal_tags: [repo_summary]
+    sensitive_to: [repo_summary]
+  - query_id: uplift_summary_first_place
+    group: summary_first
+    task: repo
+    mode: summary_first
+    query: "place=hallway repo_mode=summary_first summary_topk=3 top_k=6"
+    signal_tags: [repo_summary, place]
+    sensitive_to: [repo_summary]
+query_bank_hash: ad8900c491db9139a9c42d6a2c3c2eab9a07a9d46f89945551c0ce9403995cfb

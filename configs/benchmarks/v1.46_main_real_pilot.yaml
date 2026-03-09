@@ -1,0 +1,106 @@
+suite_id: v1.46_main_real_pilot
+suite_version: "1.46"
+seed: 0
+description: Small real-data pilot contract for validating provider telemetry diagnosis before a full main_real run.
+selection:
+  compare_dir: data/outputs/v146_main_real_compare
+  tasks: [nlq, streaming, bye]
+  labels:
+    a: stub
+    b: real
+  task_sources:
+    nlq: nlq_budget/{label}/aggregate/metrics_by_budget.csv
+    streaming: streaming_budget/{label}/aggregate/metrics_by_budget.csv
+    bye: bye_budget/{label}/aggregate/metrics_by_budget.csv
+  pair_sources:
+    nlq: nlq_budget/{label}/pairs/metrics_by_pair.csv
+    streaming: streaming_budget/{label}/pairs/metrics_by_pair.csv
+    bye: bye_budget/{label}/pairs/metrics_by_pair.csv
+  mode: auto_signal_cache
+  signal_min_score: 2.0
+  top_k_uids: 5
+  signal_selection_dir: data/outputs/v146_main_real_compare/signal_selection
+budgets:
+  points:
+    - key: 20/50/4
+    - key: 40/100/8
+queries:
+  profile: v1.46_main_real_pilot
+  families: [decision, chain, lost_object, repo_summary]
+  top_k: 6
+  query_bank: configs/queries/core_real_v1.yaml
+  auxiliary_banks:
+    - configs/queries/core_chain_v1.yaml
+    - configs/queries/core_lost_object_v1.yaml
+  groups: [decision, chain, lost_object, repo_summary]
+variants:
+  baseline: a
+  treatment: b
+metrics:
+  primary:
+    nlq: nlq_full_hit_at_k_strict
+    streaming: "hit@k_strict"
+    bye: qualityScore
+  failure:
+    nlq:
+      - safety_reason_budget_insufficient_rate
+      - safety_reason_evidence_missing_rate
+      - safety_reason_constraints_over_filtered_rate
+      - safety_reason_retrieval_distractor_rate
+      - safety_reason_other_rate
+prompts:
+  registry: configs/prompts/registry_v1.yaml
+  profile: v1.42_main
+  lock_required: true
+output:
+  root: data/outputs/v146_main_real_pilot
+  figure_formats: [png, pdf]
+  include_paper_ready: true
+  include_submission_pack: true
+significance_pairs:
+  - task: nlq
+    pair_source: nlq
+  - task: streaming
+    pair_source: streaming
+  - task: bye
+    pair_source: bye
+health_gate_profile: main_real
+paper_map: configs/paper/main_result_map_v1.yaml
+output_root: data/outputs/v146_main_real_pilot
+diagnosis_enabled: true
+telemetry_enabled: true
+telemetry_require_usage: false
+telemetry_require_latency: true
+telemetry:
+  variants:
+    stub:
+      provider: fake
+      model: fake-stub-v1
+      api_mode_used: fixture_json
+      usage_present: true
+      cost_known: true
+      model_cost_usd_total: 0.0000
+      model_cost_usd_mean_per_query: 0.0000
+      latency_p50_ms: 8.0
+      latency_p95_ms: 12.0
+      structured_parse_fail_rate: 0.0
+      planner_fallback_rate: 0.0
+      calls_total: 0
+      calls_with_usage: 0
+      calls_with_cost: 0
+    real:
+      provider: openai
+      model: gpt-4.1-mini
+      api_mode_used: responses_json_schema
+      api_key_env: OPENAI_API_KEY
+      usage_present: false
+      cost_known: false
+      model_cost_usd_total:
+      model_cost_usd_mean_per_query:
+      latency_p50_ms:
+      latency_p95_ms:
+      structured_parse_fail_rate:
+      planner_fallback_rate:
+      calls_total: 0
+      calls_with_usage: 0
+      calls_with_cost: 0

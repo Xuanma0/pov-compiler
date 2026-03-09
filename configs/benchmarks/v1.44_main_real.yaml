@@ -1,0 +1,70 @@
+suite_id: v1.44_main_real
+suite_version: "1.44"
+seed: 0
+description: Real main-result execution contract for the v1.44 benchmark production line.
+selection:
+  compare_dir: data/outputs/v144_main_real_compare
+  tasks: [nlq, streaming, bye]
+  labels:
+    a: stub
+    b: real
+  task_sources:
+    nlq: nlq_budget/{label}/aggregate/metrics_by_budget.csv
+    streaming: streaming_budget/{label}/aggregate/metrics_by_budget.csv
+    bye: bye_budget/{label}/aggregate/metrics_by_budget.csv
+  pair_sources:
+    nlq: nlq_budget/{label}/pairs/metrics_by_pair.csv
+    streaming: streaming_budget/{label}/pairs/metrics_by_pair.csv
+    bye: bye_budget/{label}/pairs/metrics_by_pair.csv
+  mode: auto_signal_cache
+  signal_min_score: 2.0
+  top_k_uids: 20
+  signal_selection_dir: data/outputs/v144_main_real_compare/signal_selection
+budgets:
+  points:
+    - key: 20/50/4
+    - key: 40/100/8
+    - key: 60/200/12
+queries:
+  profile: v1.44_main_real
+  families: [decision, chain, lost_object, repo_summary]
+  top_k: 6
+  query_bank: configs/queries/core_real_v1.yaml
+  auxiliary_banks:
+    - configs/queries/core_chain_v1.yaml
+    - configs/queries/core_lost_object_v1.yaml
+  groups: [decision, chain, lost_object, repo_summary]
+variants:
+  baseline: a
+  treatment: b
+metrics:
+  primary:
+    nlq: nlq_full_hit_at_k_strict
+    streaming: "hit@k_strict"
+    bye: qualityScore
+  failure:
+    nlq:
+      - safety_reason_budget_insufficient_rate
+      - safety_reason_evidence_missing_rate
+      - safety_reason_constraints_over_filtered_rate
+      - safety_reason_retrieval_distractor_rate
+      - safety_reason_other_rate
+prompts:
+  registry: configs/prompts/registry_v1.yaml
+  profile: v1.42_main
+  lock_required: true
+output:
+  root: data/outputs/v144_main_real
+  figure_formats: [png, pdf]
+  include_paper_ready: true
+  include_submission_pack: true
+significance_pairs:
+  - task: nlq
+    pair_source: nlq
+  - task: streaming
+    pair_source: streaming
+  - task: bye
+    pair_source: bye
+health_gate_profile: main_real
+paper_map: configs/paper/main_result_map_v1.yaml
+output_root: data/outputs/v144_main_real

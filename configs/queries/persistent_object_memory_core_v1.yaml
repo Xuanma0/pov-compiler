@@ -1,0 +1,78 @@
+query_bank_id: persistent_object_memory_core_v1
+query_bank_version: "1"
+description: Core persistent object-memory query set focused on reappearance, lost-object support, chain grounding, and last tracked/interacted recall.
+provenance:
+  strategy: persistent_object_memory_core
+  source: v1.57_design
+  target: yolo26n_plus_sam3_persistent_object_memory
+groups:
+  - group_id: persistent_recall
+    description: Persistent memory recall checks that should benefit from short-term and long-term memory tiers
+    tags: [object_memory, object_persistence]
+  - group_id: lost_object
+    description: Lost-object support checks that should benefit from long-term and reappearance-aware memory
+    tags: [lost_object, object_memory]
+  - group_id: chain_support
+    description: Chain grounding checks that should benefit from persistence-backed memory and long-term grounding
+    tags: [chain, object_memory]
+  - group_id: reappearance
+    description: Reappearance and last-tracked checks that should benefit from persistent memory
+    tags: [reappearance, object_memory]
+queries:
+  - query_id: persistent_recall_bowl
+    group: persistent_recall
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "persistent_object=bowl which=last top_k=6"
+    signal_tags: [object_memory, object_persistence, last_interacted]
+    sensitive_to: [object_memory, persistence]
+  - query_id: persistent_recall_phone
+    group: persistent_recall
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "persistent_object=cell_phone which=last top_k=6"
+    signal_tags: [object_memory, object_persistence, last_interacted]
+    sensitive_to: [object_memory, persistence]
+  - query_id: lost_object_bowl_reappearance
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "lost_object=bowl which=last top_k=6"
+    signal_tags: [lost_object, object_memory, reappearance]
+    sensitive_to: [object_memory, persistence]
+  - query_id: lost_object_phone_reappearance
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "lost_object=cell_phone which=last top_k=6"
+    signal_tags: [lost_object, object_memory, reappearance]
+    sensitive_to: [object_memory, persistence]
+  - query_id: chain_bowl_persistent_memory
+    group: chain_support
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then chain_object=bowl top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object_memory, last_tracked]
+    sensitive_to: [object_memory, chain_backoff]
+  - query_id: chain_phone_persistent_memory
+    group: chain_support
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then chain_object=cell_phone top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object_memory, last_tracked]
+    sensitive_to: [object_memory, chain_backoff]
+  - query_id: reappearance_bowl_last_tracked
+    group: reappearance
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "persistent_object=bowl which=last_tracked top_k=6"
+    signal_tags: [reappearance, object_memory, last_tracked]
+    sensitive_to: [object_memory, persistence]
+  - query_id: reappearance_phone_last_interacted
+    group: reappearance
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "persistent_object=cell_phone which=last_interacted top_k=6"
+    signal_tags: [reappearance, object_memory, last_interacted]
+    sensitive_to: [object_memory, persistence]
+query_bank_hash: 798cdcfe736dfbc0d0a6b14dbd97f25a49498e3044560e439df30ead6edb56aa

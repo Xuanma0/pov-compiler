@@ -1,0 +1,36 @@
+query_bank_id: core_real_v2_analysis_only
+query_bank_version: "2-candidate"
+description: Analysis-only companion bank for queries that remain too weak for main-result promotion under current signal evidence.
+source_query_bank_id: core_real_v1
+source_query_bank_hash: f988b8c1a12f293bcf90074b46c5390d9c07acb0990e4783a0347c2518216ec6
+rewrite_basis:
+  - v151_main_real_repeat.query_strength_audit analysis-only groups
+  - v151_main_real_repeat.query_uplift_candidates analysis_only groups
+  - keep weak repo-summary queries out of the main candidate bank
+selection_confidence: medium
+provenance:
+  strategy: signal_aware_query_bank_rewrite
+  source: v1.53
+  target_role: analysis_only
+groups:
+  - group_id: repo_summary
+    description: Weak but still informative repo-summary queries kept for analysis only
+    tags: [repo_summary, summary_first]
+queries:
+  - query_id: repo_summary_place
+    group: repo_summary
+    task: repo
+    mode: summary_first
+    query: "place=hallway repo_mode=summary_first summary_topk=3 top_k=6"
+    signal_tags: [repo_summary]
+    sensitive_to: [repo_summary]
+    notes: analysis_only_from=core_real_v1
+  - query_id: repo_summary_decision
+    group: repo_summary
+    task: repo
+    mode: summary_first
+    query: "decision=open which=last repo_mode=summary_first summary_topk=3 top_k=6"
+    signal_tags: [repo_summary, decision]
+    sensitive_to: [repo_summary]
+    notes: analysis_only_from=core_real_v1
+query_bank_hash: "154098fa437cff564d5bb59efd664fd15114c3d8e62e46089c051de4795fe487"

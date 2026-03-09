@@ -12,6 +12,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from pov_compiler.context.context_builder import build_context
+from pov_compiler.retrieval.query_parser import parse_query
+from pov_compiler.retrieval.query_planner import plan as plan_query
 from pov_compiler.retrieval.retriever import Retriever
 
 
@@ -33,12 +35,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json", required=True, help="Path to pipeline output JSON")
     parser.add_argument("--out", required=True, help="Path to context output JSON")
     parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"), help="Config YAML path")
-    parser.add_argument("--mode", choices=["timeline", "highlights", "decisions", "full"], default=None)
+    parser.add_argument("--mode", choices=["timeline", "highlights", "decisions", "full", "repo_only", "events_plus_repo"], default=None)
     parser.add_argument("--max-events", type=int, default=None)
     parser.add_argument("--max-highlights", type=int, default=None)
     parser.add_argument("--max-decisions", type=int, default=None)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--max-seconds", type=float, default=None)
+    parser.add_argument("--use-repo", dest="use_repo", action="store_true")
+    parser.add_argument("--no-use-repo", dest="use_repo", action="store_false")
+    parser.set_defaults(use_repo=None)
+    parser.add_argument("--max-repo-chunks", type=int, default=None)
+    parser.add_argument("--max-repo-chars", type=int, default=None)
+    parser.add_argument("--max-repo-tokens", type=int, default=None)
+    parser.add_argument("--repo-strategy", default=None)
+    parser.add_argument("--repo-read-policy", default=None)
+    parser.add_argument("--repo-query", default=None)
     parser.add_argument("--query", default=None, help='Optional retrieval query, e.g. "anchor=turn_head top_k=6"')
     parser.add_argument("--index", default=None, help="Optional index prefix for vector retrieval")
     return parser.parse_args()
@@ -58,10 +69,28 @@ def main() -> int:
     selected_highlights: list[str] | None = None
     selected_tokens: list[str] | None = None
     selected_decisions: list[str] | None = None
+    query_info: dict[str, Any] | None = None
 
     mode = args.mode or context_cfg.get("mode", "highlights")
 
     if args.query:
+        parsed = parse_query(str(args.query))
+        plan = plan_query(str(args.query))
+        parsed_constraints: dict[str, Any] = dict(plan.constraints)
+        if parsed.place is not None:
+            parsed_constraints.setdefault("place", parsed.place)
+        if parsed.place_segment_ids:
+            parsed_constraints.setdefault("place_segment_id", list(parsed.place_segment_ids))
+        if parsed.interaction_min is not None:
+            parsed_constraints.setdefault("interaction_min", parsed.interaction_min)
+        if parsed.interaction_object:
+            parsed_constraints.setdefault("interaction_object", parsed.interaction_object)
+        query_info = {
+            "query": str(args.query),
+            "plan_intent": str(plan.intent),
+            "parsed_constraints": parsed_constraints,
+            "top_k": int(parsed.top_k if parsed.top_k is not None else retrieval_cfg.get("default_top_k", 8)),
+        }
         retriever = Retriever(
             output_json=Path(args.json),
             index=Path(args.index) if args.index else None,
@@ -85,6 +114,20 @@ def main() -> int:
         budget["max_tokens"] = int(args.max_tokens)
     if args.max_seconds is not None:
         budget["max_seconds"] = float(args.max_seconds)
+    if args.use_repo is not None:
+        budget["use_repo"] = bool(args.use_repo)
+    if args.max_repo_chunks is not None:
+        budget["max_repo_chunks"] = int(args.max_repo_chunks)
+    if args.max_repo_chars is not None:
+        budget["max_repo_chars"] = int(args.max_repo_chars)
+    if args.max_repo_tokens is not None:
+        budget["max_repo_tokens"] = int(args.max_repo_tokens)
+    if args.repo_strategy is not None:
+        budget["repo_strategy"] = str(args.repo_strategy)
+    if args.repo_read_policy is not None:
+        budget["repo_read_policy"] = str(args.repo_read_policy)
+    if args.repo_query is not None:
+        budget["repo_query"] = str(args.repo_query)
 
     context = build_context(
         output_json=Path(args.json),
@@ -94,6 +137,7 @@ def main() -> int:
         selected_highlights=selected_highlights,
         selected_tokens=selected_tokens,
         selected_decisions=selected_decisions,
+        query_info=query_info,
     )
 
     out_path = Path(args.out)

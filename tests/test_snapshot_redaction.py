@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_min_output(path: Path) -> None:
+    payload = {
+        "video_id": "snap_demo",
+        "meta": {"duration_s": 6.0},
+        "events": [{"id": "event_0001", "t0": 0.0, "t1": 1.0, "scores": {}, "anchors": []}],
+        "events_v1": [],
+        "highlights": [],
+        "decision_points": [],
+        "token_codec": {"version": "0.2", "vocab": [], "tokens": []},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_model_smoke_snapshot_redacted(tmp_path: Path) -> None:
+    in_json = tmp_path / "input_v03_decisions.json"
+    out_dir = tmp_path / "out"
+    _write_min_output(in_json)
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "model_decisions_smoke.py"),
+        "--json",
+        str(in_json),
+        "--out_dir",
+        str(out_dir),
+        "--provider",
+        "fake",
+        "--base_url",
+        "https://example.invalid/v1beta/models/test:generateContent?key=SECRET123",
+    ]
+    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    snap_text = (out_dir / "snapshot.json").read_text(encoding="utf-8").lower()
+    report_text = (out_dir / "report.md").read_text(encoding="utf-8").lower()
+    stdout_text = (proc.stdout or "").lower()
+    banned = ["api_key", "authorization", "bearer ", "aiza", "?key=", "key=", "sk-"]
+    for token in banned:
+        assert token not in snap_text
+        assert token not in report_text
+        assert token not in stdout_text
+
+
+def test_commands_render_redacted() -> None:
+    from scripts.run_decisions_backend_compare import _render_cmd
+
+    rendered = _render_cmd(
+        [
+            "python",
+            "scripts/ego4d_smoke.py",
+            "--model-base-url",
+            "https://example.test/v1/chat/completions?key=REALSECRET123456",
+            "--model-api-key-env",
+            "OPENAI_API_KEY",
+            "--header",
+            "Authorization=Bearer sk-abc123456789",
+        ]
+    ).lower()
+    banned = ["authorization=bearer", "sk-abc", "realsecret", "key=real"]
+    for token in banned:
+        assert token not in rendered
+    assert "***" in rendered
+
+
+def test_trace_planner_meta_redacted(tmp_path: Path) -> None:
+    in_json = tmp_path / "trace_input_v03_decisions.json"
+    out_dir = tmp_path / "trace_out"
+    _write_min_output(in_json)
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "trace_one_query.py"),
+        "--json",
+        str(in_json),
+        "--out_dir",
+        str(out_dir),
+        "--query",
+        "anchor=turn_head top_k=4",
+        "--planner-backend",
+        "model",
+        "--planner-provider",
+        "fake",
+        "--planner-model",
+        "fake-planner-v1",
+        "--planner-base-url",
+        "https://example.invalid/v1/chat/completions?key=TRACE_SECRET_ABC",
+    ]
+    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    trace_text = (out_dir / "trace.json").read_text(encoding="utf-8").lower()
+    report_text = (out_dir / "trace_report.md").read_text(encoding="utf-8").lower()
+    stdout_text = (proc.stdout or "").lower()
+    banned = ["authorization", "bearer ", "sk-", "?key=", "key=trace_secret", "aiza"]
+    for token in banned:
+        assert token not in trace_text
+        assert token not in report_text
+        assert token not in stdout_text

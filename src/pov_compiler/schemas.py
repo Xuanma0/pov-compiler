@@ -18,6 +18,7 @@ class Event(BaseModel):
     t1: float
     scores: dict[str, float] = Field(default_factory=dict)
     anchors: list[Anchor] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class KeyClip(BaseModel):
@@ -74,6 +75,108 @@ class DecisionPoint(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class ScoreBreakdown(BaseModel):
+    base_score: float = 0.0
+    semantic_score: float = 0.0
+    decision_align_score: float = 0.0
+    intent_bonus: float = 0.0
+    match_score: float = 0.0
+    first_last_bonus: float = 0.0
+    scene_penalty: float = 0.0
+    distractor_penalty: float = 0.0
+    conf_bonus: float = 0.0
+    boundary_bonus: float = 0.0
+    priority_bonus: float = 0.0
+    place_match_bonus: float = 0.0
+    object_match_bonus: float = 0.0
+    chain_place_bonus: float = 0.0
+    chain_object_bonus: float = 0.0
+    trigger_match: float = 0.0
+    action_match: float = 0.0
+    constraint_match: float = 0.0
+    outcome_match: float = 0.0
+    evidence_quality: float = 0.0
+    total: float = 0.0
+
+
+class ConstraintTrace(BaseModel):
+    source_query: str = ""
+    chosen_plan_intent: str = ""
+    applied_constraints: list[str] = Field(default_factory=list)
+    constraints_relaxed: list[str] = Field(default_factory=list)
+    filtered_hits_before: int = 0
+    filtered_hits_after: int = 0
+    used_fallback: bool = False
+    rerank_cfg_hash: str = ""
+    top1_kind: str = ""
+    top1_in_distractor: bool = False
+    score_breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class RetrievalHit(BaseModel):
+    kind: str
+    id: str
+    t0: float
+    t1: float
+    score: float = 0.0
+    rank: int = 0
+    source_query: str = ""
+    chosen_plan_intent: str = ""
+    applied_constraints: list[str] = Field(default_factory=list)
+    score_breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
+    rerank_cfg_hash: str = ""
+    top1_kind: str = ""
+    top1_in_distractor: bool = False
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class Evidence(BaseModel):
+    id: str
+    type: str
+    t0: float
+    t1: float
+    conf: float = 0.0
+    source: dict[str, Any] = Field(default_factory=dict)
+    retrieval_hit: RetrievalHit | None = None
+    constraint_trace: ConstraintTrace | None = None
+    place_segment_id: str | None = None
+    place_segment_conf: float | None = None
+    place_segment_reason: str | None = None
+    interaction_signature: dict[str, Any] = Field(default_factory=dict)
+    interaction_primary_object: str | None = None
+    interaction_score: float | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventV1(BaseModel):
+    id: str
+    t0: float
+    t1: float
+    label: str = ""
+    source_event_ids: list[str] = Field(default_factory=list)
+    evidence: list[Evidence] = Field(default_factory=list)
+    retrieval_hints: list[str] = Field(default_factory=list)
+    scores: dict[str, float] = Field(default_factory=dict)
+    place_segment_id: str | None = None
+    place_segment_conf: float | None = None
+    place_segment_reason: str | None = None
+    interaction_signature: dict[str, Any] = Field(default_factory=dict)
+    interaction_primary_object: str | None = None
+    interaction_score: float | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class ObjectMemoryItemV0(BaseModel):
+    object_name: str
+    last_seen_t_ms: int
+    last_contact_t_ms: int | None = None
+    last_place_id: str | None = None
+    evidence_event_ids: list[str] = Field(default_factory=list)
+    score: float = 0.0
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
 class ContextSchema(BaseModel):
     video_id: str
     meta: dict[str, Any] = Field(default_factory=dict)
@@ -85,6 +188,8 @@ class ContextSchema(BaseModel):
     decision_points: list[dict[str, Any]] = Field(default_factory=list)
     tokens: list[Token] = Field(default_factory=list)
     token_stats: dict[str, Any] = Field(default_factory=dict)
+    repo_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    repo_trace: dict[str, Any] = Field(default_factory=dict)
 
 
 class Output(BaseModel):
@@ -94,7 +199,13 @@ class Output(BaseModel):
     highlights: list[KeyClip] = Field(default_factory=list)
     token_codec: TokenCodec = Field(default_factory=TokenCodec)
     events: list[Event] = Field(default_factory=list)
+    events_v0: list[Event] = Field(default_factory=list)
+    events_v1: list[EventV1] = Field(default_factory=list)
     decision_points: list[DecisionPoint] = Field(default_factory=list)
+    decisions_model_v1: list[dict[str, Any]] = Field(default_factory=list)
+    perception: dict[str, Any] = Field(default_factory=dict)
+    object_memory_v0: list[ObjectMemoryItemV0] = Field(default_factory=list)
+    repository: dict[str, Any] = Field(default_factory=dict)
     debug: dict[str, Any] = Field(
         default_factory=lambda: {
             "signals": {

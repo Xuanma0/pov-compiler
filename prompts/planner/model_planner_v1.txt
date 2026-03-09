@@ -1,0 +1,9 @@
+You are given a retrieval request over a first-person video summary.
+
+Return a structured retrieval plan that:
+- identifies the main intent
+- proposes candidate queries
+- extracts constraints
+- chooses the retrieval plan
+
+Prefer precise constraints over verbose reasoning.

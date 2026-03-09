@@ -1,0 +1,76 @@
+query_bank_id: core_real_v2_candidate
+query_bank_version: "2-candidate"
+description: Signal-aware candidate main-result query bank rewritten to consume stronger local YOLO26n object evidence.
+source_query_bank_id: core_real_v1
+source_query_bank_hash: f988b8c1a12f293bcf90074b46c5390d9c07acb0990e4783a0347c2518216ec6
+rewrite_basis:
+  - v151_main_real_repeat.query_strength_audit uplift-candidate groups
+  - v151_main_real_repeat.query_uplift_candidates candidate groups
+  - v152_signal_uplift_real non-generic YOLO26n object labels
+  - v152_signal_uplift_real query_bank_still_too_weak recommendation
+selection_confidence: medium
+provenance:
+  strategy: signal_aware_query_bank_rewrite
+  source: v1.53
+  seed_signal_bank: signal_uplift_core_v1
+  target_signal_model: yolo26n
+groups:
+  - group_id: decision
+    description: Decision queries preserved without repo-summary dependency
+    tags: [decision]
+  - group_id: chain
+    description: Chain queries rewritten toward non-generic YOLO26n object evidence
+    tags: [chain, object]
+  - group_id: lost_object
+    description: Lost-object queries rewritten toward non-generic YOLO26n object-memory evidence
+    tags: [lost_object, object_memory]
+queries:
+  - query_id: v2_decision_pick_up_last
+    group: decision
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "decision=pick_up which=last top_k=6"
+    signal_tags: [decision]
+    sensitive_to: [decision_backend]
+    notes: rewritten_from=decision_last_pickup
+  - query_id: v2_decision_open_last
+    group: decision
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "decision=open which=last top_k=6"
+    signal_tags: [decision]
+    sensitive_to: [decision_backend]
+    notes: rewritten_from=uplift_decision_open stripped_repo_summary_dependency
+  - query_id: v2_chain_scene_to_bowl
+    group: chain
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then interaction_object=bowl top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object]
+    sensitive_to: [chain_backoff]
+    notes: rewritten_from=chain_scene_to_object using_yolo26n_label=bowl
+  - query_id: v2_chain_scene_to_cell_phone
+    group: chain
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then interaction_object=cell_phone top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object]
+    sensitive_to: [chain_backoff, streaming]
+    notes: rewritten_from=chain_place_backoff using_yolo26n_label=cell_phone
+  - query_id: v2_lost_object_bowl
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "lost_object=bowl which=last top_k=6"
+    signal_tags: [lost_object, object_memory]
+    sensitive_to: [object_memory]
+    notes: rewritten_from=lost_object_last_seen using_yolo26n_label=bowl
+  - query_id: v2_lost_object_cell_phone
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "lost_object=cell_phone which=last top_k=6 then token=SCENE_CHANGE which=last top_k=6 chain_derive=time+object"
+    signal_tags: [lost_object, chain, object_memory]
+    sensitive_to: [object_memory, chain_backoff]
+    notes: rewritten_from=lost_object_chain_followup using_yolo26n_label=cell_phone
+query_bank_hash: "bd2fdec22aed4afc9c40402154bdf3ffbfae982d417db1d9ddeaed83efb6ddd8"

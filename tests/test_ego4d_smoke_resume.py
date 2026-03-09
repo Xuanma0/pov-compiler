@@ -29,6 +29,7 @@ def test_resume_skips_completed_stages(tmp_path: Path) -> None:
     queries_path = tmp_path / "eval" / "v" / "queries.jsonl"
     eval_dir = tmp_path / "eval" / "v"
     nlq_dir = tmp_path / "nlq" / "v"
+    bye_dir = tmp_path / "bye" / "v"
 
     _write_pipeline_json(json_path)
     Path(f"{index_prefix}.index.npz").parent.mkdir(parents=True, exist_ok=True)
@@ -46,8 +47,10 @@ def test_resume_skips_completed_stages(tmp_path: Path) -> None:
         queries_path=queries_path,
         eval_dir=eval_dir,
         nlq_dir=nlq_dir,
+        bye_dir=bye_dir,
         run_eval=True,
         run_nlq=True,
+        run_bye=False,
         resume=True,
     )
     assert actions == {
@@ -56,6 +59,7 @@ def test_resume_skips_completed_stages(tmp_path: Path) -> None:
         "gen_queries": False,
         "eval_cross": False,
         "eval_nlq": False,
+        "run_bye": False,
     }
 
 
@@ -65,6 +69,7 @@ def test_no_resume_forces_all_stages(tmp_path: Path) -> None:
     queries_path = tmp_path / "eval" / "v" / "queries.jsonl"
     eval_dir = tmp_path / "eval" / "v"
     nlq_dir = tmp_path / "nlq" / "v"
+    bye_dir = tmp_path / "bye" / "v"
 
     actions = plan_stage_actions(
         json_path=json_path,
@@ -72,8 +77,10 @@ def test_no_resume_forces_all_stages(tmp_path: Path) -> None:
         queries_path=queries_path,
         eval_dir=eval_dir,
         nlq_dir=nlq_dir,
+        bye_dir=bye_dir,
         run_eval=True,
         run_nlq=True,
+        run_bye=False,
         resume=False,
     )
     assert actions == {
@@ -82,4 +89,5 @@ def test_no_resume_forces_all_stages(tmp_path: Path) -> None:
         "gen_queries": True,
         "eval_cross": True,
         "eval_nlq": True,
+        "run_bye": False,
     }

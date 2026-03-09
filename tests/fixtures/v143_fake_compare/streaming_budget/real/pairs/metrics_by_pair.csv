@@ -1,0 +1,5 @@
+budget_key,budget_seconds,sample_unit,hit@k_strict
+20/50/4,20,u1,1
+20/50/4,20,u2,1
+40/100/8,40,u1,1
+40/100/8,40,u2,1
