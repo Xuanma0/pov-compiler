@@ -1,0 +1,55 @@
+suite_id: v1.56_object_memory_fake
+suite_version: "1.56"
+description: Fixture-backed object-memory logic uplift pilot comparing current and persistence-aware object_memory_v0 under YOLO26n plus local SAM3.
+query_bank: configs/queries/object_memory_logic_core_v1.yaml
+report:
+  thresholds:
+    lost_object_support_delta_min: 0.10
+    chain_support_delta_min: 0.10
+    query_strength_delta_min: 0.10
+baseline:
+  label: baseline
+  source: fixture
+  perception_backend: real
+  perception_model_name: yolo26n
+  perception_model_path: D:\BYES\models\yolo26\yolo26n.pt
+  segmentation_backend_used: sam3_local_proxy
+  segmentation_model_name: sam3
+  segmentation_model_path: D:\BYES\models\sam3\sam3\sam3.pt
+  object_memory_logic_variant: current
+  cache_used: false
+  fixture_metrics:
+    object_detections_total: 70
+    object_vocab_size: 7
+    object_memory_items_total: 6
+    object_memory_persistence_items_total: 1
+    object_persistence_support_rate: 0.33
+    lost_object_query_support_rate: 0.25
+    chain_object_grounding_support_rate: 0.33
+    query_strength:
+      coverage_rate: 0.33
+      weak_query_groups_count: 2
+    delta_audit_main_recommendation: need_more_object_memory_logic
+uplift:
+  label: uplift
+  source: fixture
+  perception_backend: real
+  perception_model_name: yolo26n
+  perception_model_path: D:\BYES\models\yolo26\yolo26n.pt
+  segmentation_backend_used: sam3_local_proxy
+  segmentation_model_name: sam3
+  segmentation_model_path: D:\BYES\models\sam3\sam3\sam3.pt
+  object_memory_logic_variant: persistence_v1
+  cache_used: false
+  fixture_metrics:
+    object_detections_total: 70
+    object_vocab_size: 7
+    object_memory_items_total: 7
+    object_memory_persistence_items_total: 4
+    object_persistence_support_rate: 0.83
+    lost_object_query_support_rate: 0.75
+    chain_object_grounding_support_rate: 0.67
+    query_strength:
+      coverage_rate: 0.83
+      weak_query_groups_count: 0
+    delta_audit_main_recommendation: promote_object_memory_logic

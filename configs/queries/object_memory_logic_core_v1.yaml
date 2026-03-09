@@ -1,0 +1,61 @@
+query_bank_id: object_memory_logic_core_v1
+query_bank_version: "1"
+description: Core object-memory logic query set focused on persistence-backed memory recall, lost-object support, and chain grounding.
+provenance:
+  strategy: object_memory_logic_core
+  source: v1.56_design
+  target: yolo26n_plus_sam3_object_memory_logic
+groups:
+  - group_id: object_memory_recall
+    description: Persistence-backed object-memory recall checks
+    tags: [object_memory, object_persistence]
+  - group_id: lost_object
+    description: Lost-object support checks that should benefit from stronger memory aggregation
+    tags: [lost_object, object_memory]
+  - group_id: chain_support
+    description: Chain grounding checks that should benefit from persistence-backed memory
+    tags: [chain, object_memory]
+queries:
+  - query_id: memory_recall_bowl
+    group: object_memory_recall
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "object=bowl which=last top_k=6"
+    signal_tags: [object_memory, object_persistence]
+    sensitive_to: [object_memory, persistence]
+  - query_id: memory_recall_phone
+    group: object_memory_recall
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "object=cell_phone which=last top_k=6"
+    signal_tags: [object_memory, object_persistence]
+    sensitive_to: [object_memory, persistence]
+  - query_id: lost_object_bowl_memory
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_nlq
+    query: "lost_object=bowl which=last top_k=6"
+    signal_tags: [lost_object, object_memory]
+    sensitive_to: [object_memory, persistence]
+  - query_id: lost_object_phone_memory
+    group: lost_object
+    task: nlq
+    mode: hard_pseudo_chain
+    query: "lost_object=cell_phone which=last top_k=6"
+    signal_tags: [lost_object, object_memory]
+    sensitive_to: [object_memory, persistence]
+  - query_id: chain_bowl_memory
+    group: chain_support
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then chain_object=bowl top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object_memory]
+    sensitive_to: [object_memory, chain_backoff]
+  - query_id: chain_phone_memory
+    group: chain_support
+    task: streaming
+    mode: hard_pseudo_chain
+    query: "token=SCENE_CHANGE which=last top_k=6 then chain_object=cell_phone top_k=6 chain_derive=time+object"
+    signal_tags: [chain, object_memory]
+    sensitive_to: [object_memory, chain_backoff]
+query_bank_hash: e723890b8fb61c2b77a85ea88acbd1e80b6e4ebc1f38d10e4572d301e31985ca

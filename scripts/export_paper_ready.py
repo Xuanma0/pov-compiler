@@ -149,6 +149,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional object-persistence uplift output directory",
     )
+    parser.add_argument(
+        "--object-memory-uplift-dir",
+        default=None,
+        help="Optional object-memory uplift output directory",
+    )
     parser.add_argument("--query-bank-rewrite-dir", default=None, help="Optional query-bank rewrite output directory")
     parser.add_argument("--query-bank-selection-dir", default=None, help="Optional query-bank selection output directory")
     parser.add_argument("--query-bank-compare-dir", default=None, help="Optional query-bank compare output directory")
@@ -2039,6 +2044,85 @@ def main() -> int:
             except Exception:
                 object_persistence_uplift_snapshot = {}
 
+    resolved_object_memory_uplift_dir: Path | None = None
+    if args.object_memory_uplift_dir:
+        resolved_object_memory_uplift_dir = Path(args.object_memory_uplift_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "object_memory_uplift"
+        if candidate.exists():
+            resolved_object_memory_uplift_dir = candidate
+    object_memory_uplift_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    object_memory_uplift_snapshot: dict[str, Any] = {}
+    if resolved_object_memory_uplift_dir:
+        object_memory_uplift_panel["enabled"] = True
+        object_memory_uplift_panel["source_dir"] = str(resolved_object_memory_uplift_dir)
+        dst_root = out_dir / "object_memory_uplift"
+        copied = []
+        for src in (
+            resolved_object_memory_uplift_dir / "tables" / "table_object_memory_uplift_summary.csv",
+            resolved_object_memory_uplift_dir / "tables" / "table_object_memory_uplift_summary.md",
+            resolved_object_memory_uplift_dir / "figures" / "fig_object_memory_uplift_summary.png",
+            resolved_object_memory_uplift_dir / "figures" / "fig_object_memory_uplift_summary.pdf",
+            resolved_object_memory_uplift_dir / "report.md",
+            resolved_object_memory_uplift_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+                if cp:
+                    copied.append(cp)
+        for src in (
+            compare_dir / "tables" / "table_object_memory_uplift.csv",
+            compare_dir / "tables" / "table_object_memory_uplift.md",
+            compare_dir / "figures" / "fig_object_memory_uplift_delta.png",
+            compare_dir / "figures" / "fig_object_memory_uplift_delta.pdf",
+            compare_dir / "figures" / "fig_object_memory_lost_object.png",
+            compare_dir / "figures" / "fig_object_memory_lost_object.pdf",
+            compare_dir / "figures" / "fig_object_memory_chain_support.png",
+            compare_dir / "figures" / "fig_object_memory_chain_support.pdf",
+            compare_dir / "compare_summary.json",
+            compare_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                stem_name = src.name
+                if src.parent == compare_dir and src.name == "snapshot.json":
+                    stem_name = "compare_snapshot.json"
+                elif src.parent == compare_dir and src.name == "compare_summary.json":
+                    stem_name = "compare_summary.json"
+                cp = _copy_if_exists(src, dst_root / stem_name)
+                if cp:
+                    copied.append(cp)
+        object_memory_uplift_panel["copied_files"] = copied
+        snapshot_src = resolved_object_memory_uplift_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                object_memory_uplift_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                object_memory_uplift_snapshot = {}
+
     resolved_query_bank_rewrite_dir: Path | None = None
     if args.query_bank_rewrite_dir:
         resolved_query_bank_rewrite_dir = Path(args.query_bank_rewrite_dir)
@@ -3163,6 +3247,26 @@ def main() -> int:
             )
         else:
             report_lines.append("- object_persistence_uplift: source provided but artifacts missing.")
+    if resolved_object_memory_uplift_dir:
+        if object_memory_uplift_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Object Memory Uplift",
+                    "",
+                    f"- object_memory_uplift_dir: `{object_memory_uplift_panel.get('source_dir')}`",
+                    f"- object_memory_uplift_files: `{object_memory_uplift_panel.get('copied_files')}`",
+                    f"- object_memory_logic_status: `{object_memory_uplift_snapshot.get('object_memory_logic_status', 'no_change')}`",
+                    f"- object_memory_improved: `{object_memory_uplift_snapshot.get('object_memory_improved', False)}`",
+                    f"- persistence_backed_memory_improved: `{object_memory_uplift_snapshot.get('persistence_backed_memory_improved', False)}`",
+                    f"- lost_object_support_improved: `{object_memory_uplift_snapshot.get('lost_object_support_improved', False)}`",
+                    f"- chain_object_grounding_improved: `{object_memory_uplift_snapshot.get('chain_object_grounding_improved', False)}`",
+                    f"- query_strength_improved: `{object_memory_uplift_snapshot.get('query_strength_improved', False)}`",
+                    f"- object_memory_recommendation: `{object_memory_uplift_snapshot.get('next_action_recommendation', '')}`",
+                    f"- should_formalize_object_memory_logic: `{object_memory_uplift_snapshot.get('should_formalize_object_memory_logic', False)}`",
+                ]
+            )
+        else:
+            report_lines.append("- object_memory_uplift: source provided but artifacts missing.")
     if resolved_query_bank_rewrite_dir:
         if query_bank_rewrite_panel.get("copied_files"):
             report_lines.extend(
@@ -3470,6 +3574,9 @@ def main() -> int:
             "object_persistence_uplift_dir": str(resolved_object_persistence_uplift_dir)
             if resolved_object_persistence_uplift_dir
             else None,
+            "object_memory_uplift_dir": str(resolved_object_memory_uplift_dir)
+            if resolved_object_memory_uplift_dir
+            else None,
             "query_bank_rewrite_dir": str(resolved_query_bank_rewrite_dir) if resolved_query_bank_rewrite_dir else None,
             "query_bank_selection_dir": str(resolved_query_bank_selection_dir) if resolved_query_bank_selection_dir else None,
             "query_bank_compare_dir": str(resolved_query_bank_compare_dir) if resolved_query_bank_compare_dir else None,
@@ -3534,6 +3641,7 @@ def main() -> int:
             "delta_audit_panel": delta_audit_panel,
             "signal_uplift_panel": signal_uplift_panel,
             "object_persistence_uplift_panel": object_persistence_uplift_panel,
+            "object_memory_uplift_panel": object_memory_uplift_panel,
             "query_bank_rewrite_panel": query_bank_rewrite_panel,
             "query_bank_selection_panel": query_bank_selection_panel,
             "query_bank_compare_panel": query_bank_compare_panel,

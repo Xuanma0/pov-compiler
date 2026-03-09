@@ -401,6 +401,32 @@ What to read first after a weak SAM3 run:
 - `object_persistence_uplift/report.md`
 - `paper_ready/object_persistence_uplift/report.md`
 
+## v1.56 Object-Memory Logic Uplift
+
+`v1.56` keeps the `YOLO26n + SAM3` perception path fixed and asks a narrower follow-up than `v1.55`: if persistence and chain grounding already improve, can a small object-memory logic change actually turn that signal into stronger lost-object support and memory-backed query strength without widening scope into retrieval or decision code?
+
+- `configs\benchmarks\v1.56_object_memory_*.yaml` compare the same `YOLO26n + SAM3` perception stack with two object-memory variants: current logic vs `persistence_v1`.
+- `src\pov_compiler\perception\object_memory_v0.py` is the only runtime focal point: it now absorbs persistence-aware merge cues, label alias cleanup, and stronger last-seen/last-tracked memory hints without changing the top-level output contract.
+- `scripts\run_object_memory_uplift_pilot.py` and `scripts\report_object_memory_uplift.py` turn that narrow runtime change into explicit compare and recommendation artifacts.
+- `paper_ready\object_memory_uplift\` becomes the canonical export root for deciding whether this logic should move into the main line.
+
+Minimal flow:
+
+```text
+python scripts\run_offline.py --video D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4 --out data\outputs\v156_object_memory_smoke.json --config configs\perception\yolo26n_sam3_local.yaml --run-perception --perception-backend real --perception-max-frames 24
+python scripts\run_object_memory_uplift_pilot.py --manifest configs\benchmarks\v1.56_object_memory_fake.yaml --out_dir data\outputs\v156_object_memory_fake
+python scripts\run_object_memory_uplift_pilot.py --manifest configs\benchmarks\v1.56_object_memory_real.yaml --out_dir data\outputs\v156_object_memory_real
+python scripts\report_object_memory_uplift.py --suite_dir data\outputs\v156_object_memory_real --baseline_dir data\outputs\v156_object_memory_fake --out_dir data\outputs\v156_object_memory_real\object_memory_uplift
+python scripts\export_paper_ready.py --compare_dir data\outputs\v156_object_memory_real\compare --suite-dir data\outputs\v156_object_memory_real --object-memory-uplift-dir data\outputs\v156_object_memory_real\object_memory_uplift --out_dir data\outputs\v156_object_memory_real\paper_ready
+```
+
+What to read first after the real object-memory run:
+
+- `compare/compare_summary.json`
+- `compare/tables/table_object_memory_uplift.csv`
+- `object_memory_uplift/report.md`
+- `paper_ready/object_memory_uplift/report.md`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

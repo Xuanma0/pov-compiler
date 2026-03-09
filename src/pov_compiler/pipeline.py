@@ -488,7 +488,14 @@ class OfflinePipeline:
                 perception=output.perception,
                 events_v1=list(output.events_v1),
                 contact_threshold=float(object_memory_cfg.get("contact_threshold", 0.6)),
+                logic_variant=str(object_memory_cfg.get("logic_variant", "current")),
+                persistence_min_frames=int(object_memory_cfg.get("persistence_min_frames", 2)),
+                persistence_score_min=float(object_memory_cfg.get("persistence_score_min", 0.5)),
+                enable_alias_merge=bool(object_memory_cfg.get("enable_alias_merge", True)),
             )
+            output.meta["object_memory_logic_variant"] = str(object_memory_cfg.get("logic_variant", "current"))
+            output.meta["object_memory_persistence_min_frames"] = int(object_memory_cfg.get("persistence_min_frames", 2))
+            output.meta["object_memory_persistence_score_min"] = float(object_memory_cfg.get("persistence_score_min", 0.5))
         else:
             output.object_memory_v0 = []
 

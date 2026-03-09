@@ -2,46 +2,44 @@
 
 ## Current milestone
 
-- `v1.55`: SAM3 Object-Persistence Uplift
+- `v1.56`: Object-Memory Logic Uplift
 
 ## Single goal
 
-- Decide whether local `SAM3`-style persistence improves object memory, lost-object support, and chain object grounding enough to justify a larger main-real follow-up beyond `YOLO26n only`.
+- Decide whether a minimal `object_memory_v0` uplift can turn the already-proven `YOLO26n + SAM3` persistence signal into stronger lost-object support and chain object grounding without widening scope into retrieval or decision logic.
 
 ## Status
 
-- [x] Added `configs/perception/yolo26n_sam3_local.yaml` for the smallest `YOLO26n + SAM3` local perception contract.
-- [x] Added fake and real object-persistence pilot manifests under `configs/benchmarks/v1.55_signal_uplift_*.yaml`.
-- [x] `src/pov_compiler/perception/backends.py` and `src/pov_compiler/perception/runner.py` now distinguish `YOLO26n only` from `YOLO26n + SAM3` in metadata and cache keys.
-- [x] Added `scripts/run_object_persistence_pilot.py` and `scripts/report_object_persistence_uplift.py`.
-- [x] Fake object-persistence pilot validated under `data/outputs/v155_signal_uplift_fake/` with `object_persistence_status=improved`.
-- [x] Real object-persistence pilot validated under `data/outputs/v155_signal_uplift_real/` with `object_persistence_status=improved`.
-- [x] Object-persistence report validated under `data/outputs/v155_signal_uplift_real/object_persistence_uplift/` with `next_action_recommendation=need_more_object_memory_logic`.
-- [x] `paper_ready/` can now carry `object_persistence_uplift/`.
+- [x] Added fake and real object-memory uplift manifests under `configs/benchmarks/v1.56_object_memory_*.yaml`.
+- [x] Added `configs/queries/object_memory_logic_core_v1.yaml` to stress lost-object, chain-support, persistence support, and object-memory recall.
+- [x] `src/pov_compiler/perception/object_memory_v0.py` now supports the smallest persistence-aware merge/alias/last-seen uplift without changing the top-level output schema.
+- [x] `scripts/run_object_memory_uplift_pilot.py` and `scripts/report_object_memory_uplift.py` now produce compare/report artifacts for current vs `persistence_v1` object-memory logic.
+- [x] Fake object-memory uplift pilot validated under `data/outputs/v156_object_memory_fake/` with `object_memory_logic_status=improved`.
+- [x] Real object-memory uplift pilot validated under `data/outputs/v156_object_memory_real/` with `object_memory_logic_status=improved`.
+- [x] Object-memory uplift report validated under `data/outputs/v156_object_memory_real/object_memory_uplift/` with `next_action_recommendation=need_more_object_memory_logic`.
+- [x] `paper_ready/` can now carry `object_memory_uplift/`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
 - [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
 - [x] Provider dry-run remained optional and was skipped because `PARATERA_*` env vars were absent.
-- [x] `v1.55` milestone marked done.
+- [x] `v1.56` milestone marked done.
 
-## v1.56 Candidate Tasks
+## v1.57 Candidate Tasks
 
-- Object-memory logic hardening for persistent tracks
-- Larger real SAM3 follow-up with aligned sample
-- Retrieval-side chain grounding after persistence uplift
-- Formal SAM3 admission gate before medium-scale main_real
-- Appendix split for YOLO-only vs YOLO+SAM3 evidence
+- Retrieval-side chain grounding after object-memory uplift
+- Decision-side consumption of persistent object-memory evidence
+- Medium-scale SAM3 + object-memory admission gate
+- Lost-object query-family hardening after persistence-backed memory
+- Appendix split for YOLO-only vs YOLO+SAM3+memory evidence
 
 ## Frozen constraints
 
 - Prefer new files over editing existing runtime files.
 - Keep work on benchmark, reporting, export, and provenance; do not widen runtime scope unless absolutely necessary.
 - Prefer modifying only these existing non-doc files for the next milestone:
-  - `scripts/run_main_real_benchmark.py`
-  - `scripts/compare_query_banks.py`
-  - `scripts/report_query_bank_promotion_decision.py`
+  - `scripts/run_object_memory_uplift_pilot.py`
+  - `scripts/report_object_memory_uplift.py`
   - `scripts/export_paper_ready.py`
-  - `scripts/export_submission_pack.py` (only if pack needs to surface new result-layer panels)
-  - `src/pov_compiler/bench/reporting/query_bank_promotion.py`
+  - `src/pov_compiler/bench/reporting/object_memory_uplift.py`
   - `tests/test_export_paper_ready_smoke.py`
 - Do not modify, unless implementation proves it is impossible to avoid:
   - `src/pov_compiler/perception/backends.py`
