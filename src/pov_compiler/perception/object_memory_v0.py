@@ -9,6 +9,7 @@ from pov_compiler.schemas import EventV1, ObjectMemoryItemV0
 @dataclass
 class _Accum:
     object_name: str
+    first_seen_t_ms: int | None = None
     last_seen_t_ms: int = 0
     last_contact_t_ms: int | None = None
     last_tracked_t_ms: int | None = None
@@ -19,6 +20,9 @@ class _Accum:
     persistence_score_max: float = 0.0
     mask_area_max: float = 0.0
     persistent_track_ids: set[str] = field(default_factory=set)
+    track_times: dict[str, list[int]] = field(default_factory=dict)
+    reappearance_count: int = 0
+    occlusion_gap_max_ms: int = 0
 
 
 _LABEL_ALIASES: dict[str, str] = {
@@ -55,6 +59,11 @@ def _to_float(value: Any) -> float | None:
     if out != out:
         return None
     return out
+
+
+def _clamp01(value: Any) -> float:
+    out = _to_float(value) or 0.0
+    return float(max(0.0, min(1.0, out)))
 
 
 def _map_place_id(events_v1: list[EventV1], t_ms: int | None) -> str | None:
@@ -99,6 +108,68 @@ def _event_ids_for_object(events_v1: list[EventV1], object_name: str, t_ms: int 
     return sorted(set(out))
 
 
+def _persistent_v2_meta(
+    acc: _Accum,
+    *,
+    persistence_min_frames: int,
+    reappearance_gap_ms: int = 1000,
+    long_term_min_frames: int | None = None,
+) -> dict[str, Any]:
+    total_track_sightings = sum(len(times) for times in acc.track_times.values())
+    long_term_frames = max(int(long_term_min_frames or 0), max(3, int(persistence_min_frames) * 2))
+    seen_term = min(1.0, float(acc.seen_count) / 12.0)
+    contact_term = min(1.0, float(acc.contact_count) / 4.0)
+    persistence_term = min(1.0, float(acc.persistence_frame_count) / float(max(1, long_term_frames)))
+    tracked_term = min(1.0, float(total_track_sightings) / float(max(1, long_term_frames + 2)))
+    reappearance_term = min(1.0, float(acc.reappearance_count) / 2.0)
+    gap_term = min(1.0, float(acc.occlusion_gap_max_ms) / float(max(1, reappearance_gap_ms * 3)))
+    interaction_bonus = 1.0 if acc.last_contact_t_ms is not None else 0.0
+
+    short_term_score = _clamp01(0.45 * seen_term + 0.35 * contact_term + 0.20 * interaction_bonus)
+    long_term_score = _clamp01(
+        0.28 * persistence_term
+        + 0.18 * tracked_term
+        + 0.18 * reappearance_term
+        + 0.18 * float(acc.persistence_score_max)
+        + 0.10 * gap_term
+        + 0.08 * (1.0 if acc.persistent_track_ids else 0.0)
+    )
+    reappearance_score = _clamp01(0.60 * reappearance_term + 0.40 * gap_term)
+    persistence_confidence = _clamp01(
+        max(
+            long_term_score,
+            0.35 * persistence_term + 0.25 * tracked_term + 0.20 * float(acc.persistence_score_max) + 0.20 * reappearance_score,
+        )
+    )
+    if acc.last_contact_t_ms is not None:
+        short_term_score = max(short_term_score, 0.45)
+    if acc.reappearance_count > 0:
+        long_term_score = max(long_term_score, 0.55)
+        persistence_confidence = max(persistence_confidence, 0.60)
+    if acc.persistence_frame_count >= max(1, long_term_frames):
+        long_term_score = max(long_term_score, 0.70)
+        persistence_confidence = max(persistence_confidence, 0.70)
+
+    if long_term_score >= 0.55 or persistence_confidence >= 0.65 or reappearance_score >= 0.35:
+        memory_tier = "long_term"
+    elif short_term_score >= 0.35:
+        memory_tier = "short_term"
+    else:
+        memory_tier = "weak"
+
+    return {
+        "memory_tier": memory_tier,
+        "short_term_score": float(short_term_score),
+        "long_term_score": float(long_term_score),
+        "reappearance_score": float(reappearance_score),
+        "persistence_confidence": float(persistence_confidence),
+        "last_interacted_t_ms": int(acc.last_contact_t_ms) if acc.last_contact_t_ms is not None else None,
+        "reappearance_count": int(acc.reappearance_count),
+        "occlusion_gap_max_ms": int(acc.occlusion_gap_max_ms),
+        "tracked_sightings_total": int(total_track_sightings),
+    }
+
+
 def _score(acc: _Accum, *, logic_variant: str, persistence_min_frames: int) -> float:
     seen_term = min(1.0, float(acc.seen_count) / 10.0)
     contact_term = min(1.0, float(acc.contact_count) / 5.0)
@@ -109,6 +180,14 @@ def _score(acc: _Accum, *, logic_variant: str, persistence_min_frames: int) -> f
         score = 0.22 * seen_term + 0.33 * contact_term + 0.20 * float(acc.contact_score_max) + 0.25 * persistence_score
         if acc.persistence_frame_count >= max(1, persistence_min_frames) and acc.last_contact_t_ms is None:
             score = max(score, 0.25 + 0.35 * persistence_score)
+    elif logic_variant == "persistent_v2":
+        persistent_meta = _persistent_v2_meta(acc, persistence_min_frames=persistence_min_frames)
+        score = (
+            0.30 * float(persistent_meta["short_term_score"])
+            + 0.45 * float(persistent_meta["long_term_score"])
+            + 0.15 * float(persistent_meta["reappearance_score"])
+            + 0.10 * float(acc.contact_score_max)
+        )
     return float(max(0.0, min(1.0, score)))
 
 
@@ -130,6 +209,7 @@ def build_object_memory_v0(
     events = list(events_v1 or [])
     by_object: dict[str, _Accum] = {}
     resolved_logic = str(logic_variant or "current").strip().lower() or "current"
+    supports_persistence_logic = resolved_logic in {"persistence_v1", "persistent_v2"}
 
     for frame in frames:
         if not isinstance(frame, dict):
@@ -144,14 +224,24 @@ def build_object_memory_v0(
                 if not label:
                     continue
                 acc = by_object.setdefault(label, _Accum(object_name=label))
+                if acc.first_seen_t_ms is None:
+                    acc.first_seen_t_ms = int(t_ms)
                 acc.last_seen_t_ms = max(int(acc.last_seen_t_ms), int(t_ms))
                 acc.seen_count += 1
-                if resolved_logic == "persistence_v1":
+                if supports_persistence_logic:
                     track_id = str(item.get("track_id", "")).strip()
                     persistence_count = int(_to_float(item.get("persistence_count")) or 0)
                     persistence_score = float(_to_float(item.get("persistence_score")) or 0.0)
                     mask_area = float(_to_float(item.get("mask_area")) or 0.0)
                     persistent_flag = bool(item.get("persistent", False))
+                    if track_id:
+                        history = acc.track_times.setdefault(track_id, [])
+                        if history:
+                            gap_ms = int(t_ms) - int(history[-1])
+                            if resolved_logic == "persistent_v2" and gap_ms >= 1000:
+                                acc.reappearance_count += 1
+                                acc.occlusion_gap_max_ms = max(int(acc.occlusion_gap_max_ms), int(gap_ms))
+                        history.append(int(t_ms))
                     if track_id and (
                         persistent_flag
                         or persistence_count >= max(1, int(persistence_min_frames))
@@ -179,6 +269,8 @@ def build_object_memory_v0(
         if c_score < float(contact_threshold):
             continue
         acc = by_object.setdefault(label, _Accum(object_name=label))
+        if acc.first_seen_t_ms is None:
+            acc.first_seen_t_ms = int(t_ms)
         acc.last_contact_t_ms = max(int(acc.last_contact_t_ms or 0), int(t_ms))
         acc.last_seen_t_ms = max(int(acc.last_seen_t_ms), int(t_ms))
         acc.contact_count += 1
@@ -195,6 +287,21 @@ def build_object_memory_v0(
         last_place_id = _map_place_id(events, pivot_ms)
         evidence_event_ids = _event_ids_for_object(events, name, pivot_ms)
         persistence_backed = bool(acc.persistence_frame_count >= max(1, int(persistence_min_frames)) or acc.persistent_track_ids)
+        persistent_meta = (
+            _persistent_v2_meta(acc, persistence_min_frames=int(persistence_min_frames))
+            if resolved_logic == "persistent_v2"
+            else {
+                "memory_tier": "short_term" if acc.last_contact_t_ms is not None or acc.seen_count >= 2 else "weak",
+                "short_term_score": _clamp01(0.50 * min(1.0, float(acc.seen_count) / 8.0) + 0.50 * min(1.0, float(acc.contact_count) / 3.0)),
+                "long_term_score": 0.0,
+                "reappearance_score": 0.0,
+                "persistence_confidence": _clamp01(float(acc.persistence_score_max)),
+                "last_interacted_t_ms": int(acc.last_contact_t_ms) if acc.last_contact_t_ms is not None else None,
+                "reappearance_count": int(acc.reappearance_count),
+                "occlusion_gap_max_ms": int(acc.occlusion_gap_max_ms),
+                "tracked_sightings_total": int(sum(len(times) for times in acc.track_times.values())),
+            }
+        )
         out.append(
             ObjectMemoryItemV0(
                 object_name=str(name),
@@ -214,6 +321,18 @@ def build_object_memory_v0(
                     "persistent_track_ids": sorted(acc.persistent_track_ids),
                     "persistence_backed": persistence_backed,
                     "mask_area_max": float(acc.mask_area_max),
+                    "memory_tier": str(persistent_meta.get("memory_tier", "")),
+                    "short_term_score": float(_to_float(persistent_meta.get("short_term_score")) or 0.0),
+                    "long_term_score": float(_to_float(persistent_meta.get("long_term_score")) or 0.0),
+                    "reappearance_score": float(_to_float(persistent_meta.get("reappearance_score")) or 0.0),
+                    "persistence_confidence": float(_to_float(persistent_meta.get("persistence_confidence")) or 0.0),
+                    "last_interacted_t_ms": int(_to_float(persistent_meta.get("last_interacted_t_ms")) or 0)
+                    if _to_float(persistent_meta.get("last_interacted_t_ms")) is not None
+                    else None,
+                    "reappearance_count": int(_to_float(persistent_meta.get("reappearance_count")) or 0),
+                    "occlusion_gap_max_ms": int(_to_float(persistent_meta.get("occlusion_gap_max_ms")) or 0),
+                    "tracked_sightings_total": int(_to_float(persistent_meta.get("tracked_sightings_total")) or 0),
+                    "first_seen_t_ms": int(acc.first_seen_t_ms) if acc.first_seen_t_ms is not None else None,
                 },
             )
         )

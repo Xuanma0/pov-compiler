@@ -715,6 +715,37 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    persistent_object_memory_uplift_dir = tmp_path / "persistent_object_memory_uplift"
+    (persistent_object_memory_uplift_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (persistent_object_memory_uplift_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (persistent_object_memory_uplift_dir / "tables" / "table_persistent_object_memory_uplift_summary.csv").write_text(
+        "suite_id,persistent_object_memory_status,object_memory_improved,short_term_memory_improved,long_term_memory_improved,reappearance_support_improved,lost_object_support_improved,chain_object_grounding_improved,query_strength_improved,next_action_recommendation,should_formalize_persistent_object_memory\nv157_object_memory_real,improved,True,True,True,True,True,True,True,promote_persistent_object_memory,True\n",
+        encoding="utf-8",
+    )
+    (persistent_object_memory_uplift_dir / "tables" / "table_persistent_object_memory_uplift_summary.md").write_text(
+        "# persistent object memory uplift\n",
+        encoding="utf-8",
+    )
+    (persistent_object_memory_uplift_dir / "figures" / "fig_persistent_object_memory_uplift_summary.png").write_bytes(b"PNG")
+    (persistent_object_memory_uplift_dir / "figures" / "fig_persistent_object_memory_uplift_summary.pdf").write_bytes(b"PDF")
+    (persistent_object_memory_uplift_dir / "report.md").write_text("# persistent object memory uplift report\n", encoding="utf-8")
+    (persistent_object_memory_uplift_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "persistent_object_memory_status": "improved",
+                "object_memory_improved": True,
+                "short_term_memory_improved": True,
+                "long_term_memory_improved": True,
+                "reappearance_support_improved": True,
+                "lost_object_support_improved": True,
+                "chain_object_grounding_improved": True,
+                "query_strength_improved": True,
+                "next_action_recommendation": "promote_persistent_object_memory",
+                "should_formalize_persistent_object_memory": True,
+            }
+        ),
+        encoding="utf-8",
+    )
     query_bank_rewrite_dir = tmp_path / "query_bank_rewrite"
     (query_bank_rewrite_dir / "query_bank_rewrite").mkdir(parents=True, exist_ok=True)
     (query_bank_rewrite_dir / "query_bank_rewrite" / "rewrite_summary.json").write_text(
@@ -875,6 +906,22 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     (compare_dir / "figures" / "fig_object_memory_lost_object.pdf").write_bytes(b"PDF")
     (compare_dir / "figures" / "fig_object_memory_chain_support.png").write_bytes(b"PNG")
     (compare_dir / "figures" / "fig_object_memory_chain_support.pdf").write_bytes(b"PDF")
+    (compare_dir / "tables" / "table_persistent_object_memory_uplift.csv").write_text(
+        "variant_label,object_memory_items_total,object_memory_long_term_items_total,reappearance_support_rate,persistent_object_memory_status\nbaseline,7,1,0.25,improved\nuplift,8,3,0.75,improved\ndelta,1,2,0.5,improved\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "tables" / "table_persistent_object_memory_uplift.md").write_text(
+        "# persistent object memory uplift compare\n",
+        encoding="utf-8",
+    )
+    (compare_dir / "figures" / "fig_persistent_object_memory_delta.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_persistent_object_memory_delta.pdf").write_bytes(b"PDF")
+    (compare_dir / "figures" / "fig_persistent_object_memory_lost_object.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_persistent_object_memory_lost_object.pdf").write_bytes(b"PDF")
+    (compare_dir / "figures" / "fig_persistent_object_memory_chain_support.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_persistent_object_memory_chain_support.pdf").write_bytes(b"PDF")
+    (compare_dir / "figures" / "fig_persistent_object_memory_reappearance.png").write_bytes(b"PNG")
+    (compare_dir / "figures" / "fig_persistent_object_memory_reappearance.pdf").write_bytes(b"PDF")
 
     admission_calibration_dir = tmp_path / "admission_calibration"
     (admission_calibration_dir / "tables").mkdir(parents=True, exist_ok=True)
@@ -1277,6 +1324,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(object_persistence_uplift_dir),
         "--object-memory-uplift-dir",
         str(object_memory_uplift_dir),
+        "--persistent-object-memory-uplift-dir",
+        str(persistent_object_memory_uplift_dir),
         "--query-bank-rewrite-dir",
         str(query_bank_rewrite_dir),
         "--query-bank-selection-dir",
@@ -1344,6 +1393,7 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Signal Uplift" in report_text
     assert "## Object Persistence Uplift" in report_text
     assert "## Object Memory Uplift" in report_text
+    assert "## Persistent Object Memory Uplift" in report_text
     assert "## Query Bank Rewrite" in report_text
     assert "## Query Bank Selection" in report_text
     assert "## Query Bank Compare" in report_text
@@ -1400,6 +1450,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "object_persistence_uplift" / "report.md").exists()
     assert (out_dir / "object_memory_uplift" / "tables" / "table_object_memory_uplift_summary.csv").exists()
     assert (out_dir / "object_memory_uplift" / "report.md").exists()
+    assert (out_dir / "persistent_object_memory_uplift" / "tables" / "table_persistent_object_memory_uplift_summary.csv").exists()
+    assert (out_dir / "persistent_object_memory_uplift" / "report.md").exists()
     assert (out_dir / "query_bank_rewrite" / "query_bank_rewrite" / "rewrite_summary.json").exists()
     assert (out_dir / "query_bank_rewrite" / "query_bank_rewrite" / "core_real_v2_candidate.yaml").exists()
     assert (out_dir / "query_bank_selection" / "tables" / "table_query_bank_selection.csv").exists()
@@ -1435,6 +1487,11 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_object_memory_uplift_delta.png").exists()
     assert (out_dir / "figures" / "fig_object_memory_lost_object.png").exists()
     assert (out_dir / "figures" / "fig_object_memory_chain_support.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_object_memory_uplift_summary.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_object_memory_delta.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_object_memory_lost_object.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_object_memory_chain_support.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_object_memory_reappearance.png").exists()
     assert (out_dir / "figures" / "fig_query_bank_delta.png").exists()
     assert (out_dir / "figures" / "fig_query_bank_tradeoff.png").exists()
     assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()
@@ -1601,3 +1658,4 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Query Bank Selection" in submission_report_text
     assert "## Query Bank Compare" in submission_report_text
     assert "## Query Bank Promotion Decision" in submission_report_text
+    assert "## Persistent Object Memory Uplift" in submission_report_text

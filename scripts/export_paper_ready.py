@@ -154,6 +154,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional object-memory uplift output directory",
     )
+    parser.add_argument(
+        "--persistent-object-memory-uplift-dir",
+        default=None,
+        help="Optional persistent object-memory uplift output directory",
+    )
     parser.add_argument("--query-bank-rewrite-dir", default=None, help="Optional query-bank rewrite output directory")
     parser.add_argument("--query-bank-selection-dir", default=None, help="Optional query-bank selection output directory")
     parser.add_argument("--query-bank-compare-dir", default=None, help="Optional query-bank compare output directory")
@@ -2123,6 +2128,93 @@ def main() -> int:
             except Exception:
                 object_memory_uplift_snapshot = {}
 
+    resolved_persistent_object_memory_uplift_dir: Path | None = None
+    if args.persistent_object_memory_uplift_dir:
+        resolved_persistent_object_memory_uplift_dir = Path(args.persistent_object_memory_uplift_dir)
+    elif args.suite_dir:
+        candidate = Path(args.suite_dir) / "persistent_object_memory_uplift"
+        if candidate.exists():
+            resolved_persistent_object_memory_uplift_dir = candidate
+    persistent_object_memory_uplift_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "compare_files": [],
+        "figure_files": [],
+    }
+    persistent_object_memory_uplift_snapshot: dict[str, Any] = {}
+    if resolved_persistent_object_memory_uplift_dir:
+        persistent_object_memory_uplift_panel["enabled"] = True
+        persistent_object_memory_uplift_panel["source_dir"] = str(resolved_persistent_object_memory_uplift_dir)
+        dst_root = out_dir / "persistent_object_memory_uplift"
+        copied: list[str] = []
+        for src in (
+            resolved_persistent_object_memory_uplift_dir / "tables" / "table_persistent_object_memory_uplift_summary.csv",
+            resolved_persistent_object_memory_uplift_dir / "tables" / "table_persistent_object_memory_uplift_summary.md",
+            resolved_persistent_object_memory_uplift_dir / "figures" / "fig_persistent_object_memory_uplift_summary.png",
+            resolved_persistent_object_memory_uplift_dir / "figures" / "fig_persistent_object_memory_uplift_summary.pdf",
+            resolved_persistent_object_memory_uplift_dir / "report.md",
+            resolved_persistent_object_memory_uplift_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+                if cp:
+                    copied.append(cp)
+        for src in (
+            compare_dir / "tables" / "table_persistent_object_memory_uplift.csv",
+            compare_dir / "tables" / "table_persistent_object_memory_uplift.md",
+            compare_dir / "figures" / "fig_persistent_object_memory_delta.png",
+            compare_dir / "figures" / "fig_persistent_object_memory_delta.pdf",
+            compare_dir / "figures" / "fig_persistent_object_memory_lost_object.png",
+            compare_dir / "figures" / "fig_persistent_object_memory_lost_object.pdf",
+            compare_dir / "figures" / "fig_persistent_object_memory_chain_support.png",
+            compare_dir / "figures" / "fig_persistent_object_memory_chain_support.pdf",
+            compare_dir / "figures" / "fig_persistent_object_memory_reappearance.png",
+            compare_dir / "figures" / "fig_persistent_object_memory_reappearance.pdf",
+            compare_dir / "compare_summary.json",
+            compare_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".png", ".pdf"}:
+                for dst in (dst_root / "figures" / src.name, figures_dir / src.name):
+                    cp = _copy_if_exists(src, dst)
+                    if cp:
+                        copied.append(cp)
+                        figure_paths.append(str(cp))
+            elif src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    copied.append(cp)
+            else:
+                stem_name = src.name
+                if src.parent == compare_dir and src.name == "snapshot.json":
+                    stem_name = "compare_snapshot.json"
+                elif src.parent == compare_dir and src.name == "compare_summary.json":
+                    stem_name = "compare_summary.json"
+                cp = _copy_if_exists(src, dst_root / stem_name)
+                if cp:
+                    copied.append(cp)
+        persistent_object_memory_uplift_panel["copied_files"] = copied
+        persistent_object_memory_uplift_panel["compare_files"] = copied
+        persistent_object_memory_uplift_panel["figure_files"] = [
+            path for path in copied if str(path).lower().endswith((".png", ".pdf"))
+        ]
+        snapshot_src = resolved_persistent_object_memory_uplift_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                persistent_object_memory_uplift_snapshot = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                persistent_object_memory_uplift_snapshot = {}
+
     resolved_query_bank_rewrite_dir: Path | None = None
     if args.query_bank_rewrite_dir:
         resolved_query_bank_rewrite_dir = Path(args.query_bank_rewrite_dir)
@@ -3267,6 +3359,28 @@ def main() -> int:
             )
         else:
             report_lines.append("- object_memory_uplift: source provided but artifacts missing.")
+    if resolved_persistent_object_memory_uplift_dir:
+        if persistent_object_memory_uplift_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Persistent Object Memory Uplift",
+                    "",
+                    f"- persistent_object_memory_uplift_dir: `{persistent_object_memory_uplift_panel.get('source_dir')}`",
+                    f"- persistent_object_memory_uplift_files: `{persistent_object_memory_uplift_panel.get('copied_files')}`",
+                    f"- persistent_object_memory_status: `{persistent_object_memory_uplift_snapshot.get('persistent_object_memory_status', 'no_change')}`",
+                    f"- object_memory_improved: `{persistent_object_memory_uplift_snapshot.get('object_memory_improved', False)}`",
+                    f"- short_term_memory_improved: `{persistent_object_memory_uplift_snapshot.get('short_term_memory_improved', False)}`",
+                    f"- long_term_memory_improved: `{persistent_object_memory_uplift_snapshot.get('long_term_memory_improved', False)}`",
+                    f"- reappearance_support_improved: `{persistent_object_memory_uplift_snapshot.get('reappearance_support_improved', False)}`",
+                    f"- lost_object_support_improved: `{persistent_object_memory_uplift_snapshot.get('lost_object_support_improved', False)}`",
+                    f"- chain_object_grounding_improved: `{persistent_object_memory_uplift_snapshot.get('chain_object_grounding_improved', False)}`",
+                    f"- query_strength_improved: `{persistent_object_memory_uplift_snapshot.get('query_strength_improved', False)}`",
+                    f"- persistent_object_memory_recommendation: `{persistent_object_memory_uplift_snapshot.get('next_action_recommendation', '')}`",
+                    f"- should_formalize_persistent_object_memory: `{persistent_object_memory_uplift_snapshot.get('should_formalize_persistent_object_memory', False)}`",
+                ]
+            )
+        else:
+            report_lines.append("- persistent_object_memory_uplift: source provided but artifacts missing.")
     if resolved_query_bank_rewrite_dir:
         if query_bank_rewrite_panel.get("copied_files"):
             report_lines.extend(
@@ -3577,6 +3691,9 @@ def main() -> int:
             "object_memory_uplift_dir": str(resolved_object_memory_uplift_dir)
             if resolved_object_memory_uplift_dir
             else None,
+            "persistent_object_memory_uplift_dir": str(resolved_persistent_object_memory_uplift_dir)
+            if resolved_persistent_object_memory_uplift_dir
+            else None,
             "query_bank_rewrite_dir": str(resolved_query_bank_rewrite_dir) if resolved_query_bank_rewrite_dir else None,
             "query_bank_selection_dir": str(resolved_query_bank_selection_dir) if resolved_query_bank_selection_dir else None,
             "query_bank_compare_dir": str(resolved_query_bank_compare_dir) if resolved_query_bank_compare_dir else None,
@@ -3642,6 +3759,7 @@ def main() -> int:
             "signal_uplift_panel": signal_uplift_panel,
             "object_persistence_uplift_panel": object_persistence_uplift_panel,
             "object_memory_uplift_panel": object_memory_uplift_panel,
+            "persistent_object_memory_uplift_panel": persistent_object_memory_uplift_panel,
             "query_bank_rewrite_panel": query_bank_rewrite_panel,
             "query_bank_selection_panel": query_bank_selection_panel,
             "query_bank_compare_panel": query_bank_compare_panel,
