@@ -17,7 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from pov_compiler.bench.reporting.admission_control import write_admission_outputs
-from pov_compiler.bench.query_bank import load_query_banks_from_manifest
+from pov_compiler.bench.query_bank import load_query_banks_from_manifest, selection_artifact_paths
 from pov_compiler.bench.reporting.paper_map import load_paper_map, stable_paper_map_hash
 from pov_compiler.bench.reporting.provider_normalization import write_provider_normalization_outputs
 from pov_compiler.bench.reporting.provider_telemetry import write_provider_telemetry_outputs
@@ -54,6 +54,60 @@ def _resolve_optional_path(raw_value: str | None, base_dir: Path) -> Path | None
     if base_candidate.exists():
         return base_candidate
     return (ROOT / path).resolve()
+
+
+def _selected_uids_signature(compare_dir: Path, manifest_path: Path) -> tuple[list[str], str]:
+    selection_paths = selection_artifact_paths(compare_dir, manifest_path)
+    selected_uids_path = selection_paths["selected_uids"]
+    if not selected_uids_path.exists():
+        return [], ""
+    selected_uids = sorted(
+        line.strip()
+        for line in selected_uids_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+    return selected_uids, _stable_hash(selected_uids)
+
+
+def _object_memory_logic_variant(manifest_payload: dict[str, Any]) -> str:
+    object_memory = manifest_payload.get("object_memory", {})
+    if isinstance(object_memory, dict):
+        value = str(object_memory.get("logic_variant", "")).strip()
+        if value:
+            return value
+    return str(manifest_payload.get("object_memory_logic_variant", "")).strip()
+
+
+def _provider_label_and_model_route(manifest_payload: dict[str, Any]) -> tuple[str, str]:
+    telemetry = manifest_payload.get("telemetry", {})
+    variants = telemetry.get("variants", {}) if isinstance(telemetry, dict) else {}
+    real_variant = variants.get("real", {}) if isinstance(variants, dict) else {}
+    if not isinstance(real_variant, dict):
+        real_variant = {}
+    provider_label = str(real_variant.get("provider", "")).strip()
+    model_name = str(real_variant.get("model", "")).strip()
+    api_mode = str(real_variant.get("api_mode_used", "")).strip()
+    model_route = "|".join(part for part in (provider_label, model_name, api_mode) if part)
+    return provider_label, model_route
+
+
+def _persistent_memory_main_metrics_payload(
+    manifest_payload: dict[str, Any],
+    *,
+    compare_summary: dict[str, Any],
+) -> dict[str, Any]:
+    payload = manifest_payload.get("persistent_memory_main_metrics", {})
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    provider_label, model_route = _provider_label_and_model_route(manifest_payload)
+    object_memory_logic_variant = _object_memory_logic_variant(manifest_payload)
+    enriched = dict(payload)
+    enriched.setdefault("object_memory_logic_variant", object_memory_logic_variant)
+    enriched.setdefault("query_bank_id", str(compare_summary.get("query_bank_id", "")).strip())
+    enriched.setdefault("query_bank_hash", str(compare_summary.get("query_bank_hash", "")).strip())
+    enriched.setdefault("provider_label", provider_label)
+    enriched.setdefault("model_route", model_route)
+    return enriched
 
 
 def _run_cmd(cmd: list[str], *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
@@ -170,6 +224,31 @@ def _annotate_compare_outputs(
     primary_bank = query_banks.get("primary", {}) if isinstance(query_banks, dict) else {}
     run_signature_context = _run_signature_context(manifest_payload, manifest_path)
     run_signature_hash = _stable_hash(run_signature_context)
+    compare_dir_text = str(
+        compare_summary.get("compare_dir", manifest_payload.get("selection", {}).get("compare_dir", ""))
+    ).strip()
+    compare_dir = Path(compare_dir_text) if compare_dir_text else compare_summary_path.parent
+    if not compare_dir.is_absolute():
+        compare_dir = (ROOT / compare_dir).resolve()
+    selected_uids, sample_signature_hash = _selected_uids_signature(compare_dir, manifest_path)
+    object_memory_logic_variant = _object_memory_logic_variant(manifest_payload)
+    uid_set_id = str(
+        manifest_payload.get("uid_set_id", manifest_payload.get("selection", {}).get("uid_set_id", ""))
+    ).strip()
+    provider_label, model_route = _provider_label_and_model_route(manifest_payload)
+    paired_contract_hash = _stable_hash(
+        {
+            "compare_pair_id": str(manifest_payload.get("compare_pair_id", "")).strip(),
+            "uid_set_id": uid_set_id,
+            "selected_uids": selected_uids,
+            "query_bank_id": str(compare_summary.get("query_bank_id", primary_bank.get("query_bank_id", ""))).strip(),
+            "query_bank_hash": str(compare_summary.get("query_bank_hash", primary_bank.get("query_bank_hash", ""))).strip(),
+            "budgets": run_signature_context.get("budgets", []),
+            "provider_label": provider_label,
+            "model_route": model_route,
+            "perception_signature": manifest_payload.get("perception_signature", {}),
+        }
+    )
     compare_summary["compare_pair_id"] = str(manifest_payload.get("compare_pair_id", "")).strip()
     compare_summary["source_query_bank_id"] = str(manifest_payload.get("source_query_bank_id", "")).strip()
     compare_summary["source_query_bank_hash"] = str(manifest_payload.get("source_query_bank_hash", "")).strip()
@@ -179,6 +258,12 @@ def _annotate_compare_outputs(
     compare_summary["manifest_hash"] = manifest_hash
     compare_summary["perception_signature"] = manifest_payload.get("perception_signature", {})
     compare_summary["run_signature_hash"] = run_signature_hash
+    compare_summary["object_memory_logic_variant"] = object_memory_logic_variant
+    compare_summary["uid_set_id"] = uid_set_id
+    compare_summary["provider_label"] = provider_label
+    compare_summary["model_route"] = model_route
+    compare_summary["sample_signature_hash"] = sample_signature_hash
+    compare_summary["paired_contract_hash"] = paired_contract_hash
     _write_json(compare_summary_path, compare_summary)
 
     snapshot = _read_json(compare_snapshot_path)
@@ -191,7 +276,20 @@ def _annotate_compare_outputs(
     snapshot["manifest_hash"] = manifest_hash
     snapshot["perception_signature"] = manifest_payload.get("perception_signature", {})
     snapshot["run_signature_hash"] = run_signature_hash
+    snapshot["object_memory_logic_variant"] = object_memory_logic_variant
+    snapshot["uid_set_id"] = uid_set_id
+    snapshot["provider_label"] = provider_label
+    snapshot["model_route"] = model_route
+    snapshot["sample_signature_hash"] = sample_signature_hash
+    snapshot["paired_contract_hash"] = paired_contract_hash
     _write_json(compare_snapshot_path, snapshot)
+
+    metrics_payload = _persistent_memory_main_metrics_payload(
+        manifest_payload,
+        compare_summary=compare_summary,
+    )
+    if metrics_payload:
+        _write_json(compare_summary_path.parent / "persistent_memory_main_metrics.json", metrics_payload)
     return compare_summary
 
 
@@ -331,7 +429,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", required=True, help="Main real/fake benchmark manifest YAML")
     parser.add_argument("--out_dir", required=True, help="Output root for the full result bundle")
     parser.add_argument("--dry-collect", action="store_true", help="Validate manifest and contracts without running suite collection")
-    parser.add_argument("--mode", choices=["smoke", "pilot", "full"], default="full")
+    parser.add_argument("--mode", choices=["smoke", "pilot", "full", "main_real"], default="full")
     return parser.parse_args()
 
 
@@ -1217,6 +1315,10 @@ def main() -> int:
     print(f"paper_ready_saved={paper_ready_dir}")
     print(f"paper_freeze_saved={paper_freeze_dir}")
     print(f"submission_pack_saved={submission_pack_dir}")
+    print(f"query_bank_id={compare_summary.get('query_bank_id', '')}")
+    print(f"query_bank_hash={compare_summary.get('query_bank_hash', '')}")
+    print(f"run_signature_hash={compare_summary.get('run_signature_hash', '')}")
+    print(f"object_memory_logic_variant={compare_summary.get('object_memory_logic_variant', '')}")
     print(f"gate_status={gate_status}")
     print(f"admission_status={admission_status}")
     print(f"calibration_status={calibration_status}")

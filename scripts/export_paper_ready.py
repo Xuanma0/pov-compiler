@@ -167,6 +167,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional query-bank promotion decision output directory",
     )
+    parser.add_argument(
+        "--persistent-memory-main-compare-dir",
+        default=None,
+        help="Optional persistent-memory main compare output directory",
+    )
+    parser.add_argument(
+        "--persistent-memory-main-decision-dir",
+        default=None,
+        help="Optional persistent-memory main admission decision output directory",
+    )
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
     parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
@@ -2378,6 +2388,106 @@ def main() -> int:
                 dict(summary_payload) if isinstance(summary_payload, dict) else {}
             )
 
+    resolved_persistent_memory_main_compare_dir: Path | None = None
+    if args.persistent_memory_main_compare_dir:
+        resolved_persistent_memory_main_compare_dir = Path(args.persistent_memory_main_compare_dir)
+    elif args.compare_dir:
+        candidate = compare_dir
+        if (candidate / "tables" / "table_persistent_memory_main_compare.csv").exists():
+            resolved_persistent_memory_main_compare_dir = candidate
+    persistent_memory_main_compare_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+        "figure_files": [],
+    }
+    persistent_memory_main_compare_summary: dict[str, Any] = {}
+    if resolved_persistent_memory_main_compare_dir:
+        persistent_memory_main_compare_panel["enabled"] = True
+        persistent_memory_main_compare_panel["source_dir"] = str(resolved_persistent_memory_main_compare_dir)
+        dst_root = out_dir / "persistent_memory_main_compare"
+        copied = []
+        figures = []
+        for src in (
+            resolved_persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_compare.csv",
+            resolved_persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_compare.md",
+            resolved_persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_significance.csv",
+            resolved_persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_significance.md",
+            resolved_persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_delta.png",
+            resolved_persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_delta.pdf",
+            resolved_persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_health.png",
+            resolved_persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_health.pdf",
+            resolved_persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_query_strength.png",
+            resolved_persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_query_strength.pdf",
+            resolved_persistent_memory_main_compare_dir / "compare_summary.json",
+            resolved_persistent_memory_main_compare_dir / "snapshot.json",
+            resolved_persistent_memory_main_compare_dir / "commands.sh",
+            resolved_persistent_memory_main_compare_dir / "README.md",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            elif src.suffix.lower() in {".png", ".pdf"} and src.parent.name == "figures":
+                cp = _copy_if_exists(src, dst_root / "figures" / src.name)
+                if cp:
+                    figures.append(cp)
+                    direct = _copy_if_exists(src, out_dir / "figures" / src.name)
+                    if direct:
+                        figure_paths.append(str(direct))
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        persistent_memory_main_compare_panel["copied_files"] = copied
+        persistent_memory_main_compare_panel["figure_files"] = figures
+        summary_src = resolved_persistent_memory_main_compare_dir / "compare_summary.json"
+        if summary_src.exists():
+            try:
+                persistent_memory_main_compare_summary = json.loads(summary_src.read_text(encoding="utf-8"))
+            except Exception:
+                persistent_memory_main_compare_summary = {}
+
+    resolved_persistent_memory_main_decision_dir: Path | None = None
+    if args.persistent_memory_main_decision_dir:
+        resolved_persistent_memory_main_decision_dir = Path(args.persistent_memory_main_decision_dir)
+    persistent_memory_main_decision_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    persistent_memory_main_decision_summary: dict[str, Any] = {}
+    if resolved_persistent_memory_main_decision_dir:
+        persistent_memory_main_decision_panel["enabled"] = True
+        persistent_memory_main_decision_panel["source_dir"] = str(resolved_persistent_memory_main_decision_dir)
+        dst_root = out_dir / "persistent_memory_main_decision"
+        copied = []
+        for src in (
+            resolved_persistent_memory_main_decision_dir
+            / "tables"
+            / "table_persistent_memory_main_decision.csv",
+            resolved_persistent_memory_main_decision_dir
+            / "tables"
+            / "table_persistent_memory_main_decision.md",
+            resolved_persistent_memory_main_decision_dir / "report.md",
+            resolved_persistent_memory_main_decision_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        persistent_memory_main_decision_panel["copied_files"] = copied
+        snapshot_src = resolved_persistent_memory_main_decision_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                persistent_memory_main_decision_payload = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                persistent_memory_main_decision_payload = {}
+            summary_payload = persistent_memory_main_decision_payload.get("promotion_decision_summary", {})
+            persistent_memory_main_decision_summary = (
+                dict(summary_payload) if isinstance(summary_payload, dict) else {}
+            )
+
     resolved_query_strength_audit_dir: Path | None = None
     if args.query_strength_audit_dir:
         resolved_query_strength_audit_dir = Path(args.query_strength_audit_dir)
@@ -3441,6 +3551,39 @@ def main() -> int:
             )
         else:
             report_lines.append("- query_bank_promotion_decision: source provided but artifacts missing.")
+    if resolved_persistent_memory_main_compare_dir:
+        if persistent_memory_main_compare_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Persistent Memory Main Compare",
+                    "",
+                    f"- persistent_memory_main_compare_dir: `{persistent_memory_main_compare_panel.get('source_dir')}`",
+                    f"- persistent_memory_main_compare_files: `{persistent_memory_main_compare_panel.get('copied_files')}`",
+                    f"- persistent_memory_main_compare_summary: `{json.dumps(persistent_memory_main_compare_summary, ensure_ascii=False, sort_keys=True)}`",
+                    f"- persistent_memory_main_status: `{persistent_memory_main_compare_summary.get('persistent_memory_main_status', 'no_change')}`",
+                    f"- main_gain_state: `{persistent_memory_main_compare_summary.get('main_gain_state', '')}`",
+                    f"- alignment_ok: `{persistent_memory_main_compare_summary.get('alignment_ok', False)}`",
+                    f"- mismatch_reasons: `{persistent_memory_main_compare_summary.get('mismatch_reasons', [])}`",
+                ]
+            )
+        else:
+            report_lines.append("- persistent_memory_main_compare: source provided but artifacts missing.")
+    if resolved_persistent_memory_main_decision_dir:
+        if persistent_memory_main_decision_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Persistent Memory Main Decision",
+                    "",
+                    f"- persistent_memory_main_decision_dir: `{persistent_memory_main_decision_panel.get('source_dir')}`",
+                    f"- persistent_memory_main_decision_files: `{persistent_memory_main_decision_panel.get('copied_files')}`",
+                    f"- promotion_to_mainline: `{persistent_memory_main_decision_summary.get('promotion_decision', '')}`",
+                    f"- decision_confidence: `{persistent_memory_main_decision_summary.get('decision_confidence', '')}`",
+                    f"- recommended_next_step: `{persistent_memory_main_decision_summary.get('recommended_next_step', '')}`",
+                    f"- promotion_ready: `{persistent_memory_main_decision_summary.get('promotion_ready', False)}`",
+                ]
+            )
+        else:
+            report_lines.append("- persistent_memory_main_decision: source provided but artifacts missing.")
     if resolved_query_strength_audit_dir:
         if query_strength_audit_panel.get("copied_files"):
             report_lines.extend(
@@ -3700,6 +3843,12 @@ def main() -> int:
             "query_bank_promotion_decision_dir": str(resolved_query_bank_promotion_decision_dir)
             if resolved_query_bank_promotion_decision_dir
             else None,
+            "persistent_memory_main_compare_dir": str(resolved_persistent_memory_main_compare_dir)
+            if resolved_persistent_memory_main_compare_dir
+            else None,
+            "persistent_memory_main_decision_dir": str(resolved_persistent_memory_main_decision_dir)
+            if resolved_persistent_memory_main_decision_dir
+            else None,
             "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
             "provider_reachability_dir": str(resolved_provider_reachability_dir) if resolved_provider_reachability_dir else None,
@@ -3764,6 +3913,8 @@ def main() -> int:
             "query_bank_selection_panel": query_bank_selection_panel,
             "query_bank_compare_panel": query_bank_compare_panel,
             "query_bank_promotion_decision_panel": query_bank_promotion_decision_panel,
+            "persistent_memory_main_compare_panel": persistent_memory_main_compare_panel,
+            "persistent_memory_main_decision_panel": persistent_memory_main_decision_panel,
             "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
             "provider_reachability_panel": provider_reachability_panel,
@@ -3811,6 +3962,14 @@ def main() -> int:
         if resolved_query_bank_promotion_decision_dir:
             cmd.extend(
                 ["--query-bank-promotion-decision-dir", str(resolved_query_bank_promotion_decision_dir)]
+            )
+        if resolved_persistent_memory_main_compare_dir:
+            cmd.extend(
+                ["--persistent-memory-main-compare-dir", str(resolved_persistent_memory_main_compare_dir)]
+            )
+        if resolved_persistent_memory_main_decision_dir:
+            cmd.extend(
+                ["--persistent-memory-main-decision-dir", str(resolved_persistent_memory_main_decision_dir)]
             )
         if resolved_query_strength_audit_dir:
             cmd.extend(["--query-strength-audit-dir", str(resolved_query_strength_audit_dir)])

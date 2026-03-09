@@ -59,6 +59,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional query-bank promotion decision output directory",
     )
+    parser.add_argument(
+        "--persistent-memory-main-compare-dir",
+        default=None,
+        help="Optional persistent-memory main compare output directory",
+    )
+    parser.add_argument(
+        "--persistent-memory-main-decision-dir",
+        default=None,
+        help="Optional persistent-memory main decision output directory",
+    )
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
@@ -98,6 +108,8 @@ def main() -> int:
     pack_signal_uplift = out_dir / "signal_uplift"
     pack_query_bank_compare = out_dir / "query_bank_compare"
     pack_query_bank_promotion_decision = out_dir / "query_bank_promotion_decision"
+    pack_persistent_memory_main_compare = out_dir / "persistent_memory_main_compare"
+    pack_persistent_memory_main_decision = out_dir / "persistent_memory_main_decision"
     pack_query_strength_audit = out_dir / "query_strength_audit"
     pack_provider_telemetry = out_dir / "provider_telemetry"
     pack_provider_reachability = out_dir / "provider_reachability"
@@ -124,6 +136,8 @@ def main() -> int:
         pack_signal_uplift,
         pack_query_bank_compare,
         pack_query_bank_promotion_decision,
+        pack_persistent_memory_main_compare,
+        pack_persistent_memory_main_decision,
         pack_query_strength_audit,
         pack_provider_telemetry,
         pack_provider_reachability,
@@ -152,6 +166,18 @@ def main() -> int:
     _copy_dir_if_exists(
         paper_ready_dir / "query_bank_promotion_decision",
         pack_paper_ready / "query_bank_promotion_decision",
+        copied,
+        missing,
+    )
+    _copy_dir_if_exists(
+        paper_ready_dir / "persistent_memory_main_compare",
+        pack_paper_ready / "persistent_memory_main_compare",
+        copied,
+        missing,
+    )
+    _copy_dir_if_exists(
+        paper_ready_dir / "persistent_memory_main_decision",
+        pack_paper_ready / "persistent_memory_main_decision",
         copied,
         missing,
     )
@@ -254,6 +280,70 @@ def main() -> int:
         _copy_file_if_exists(
             query_bank_promotion_decision_dir / "snapshot.json",
             pack_query_bank_promotion_decision / "snapshot.json",
+            copied,
+            missing,
+        )
+
+    persistent_memory_main_compare_dir = (
+        Path(args.persistent_memory_main_compare_dir) if args.persistent_memory_main_compare_dir else None
+    )
+    if persistent_memory_main_compare_dir is not None:
+        _copy_dir_if_exists(
+            persistent_memory_main_compare_dir / "tables",
+            pack_persistent_memory_main_compare / "tables",
+            copied,
+            missing,
+        )
+        _copy_dir_if_exists(
+            persistent_memory_main_compare_dir / "figures",
+            pack_persistent_memory_main_compare / "figures",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            persistent_memory_main_compare_dir / "compare_summary.json",
+            pack_persistent_memory_main_compare / "compare_summary.json",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            persistent_memory_main_compare_dir / "snapshot.json",
+            pack_persistent_memory_main_compare / "snapshot.json",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            persistent_memory_main_compare_dir / "commands.sh",
+            pack_persistent_memory_main_compare / "commands.sh",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            persistent_memory_main_compare_dir / "README.md",
+            pack_persistent_memory_main_compare / "README.md",
+            copied,
+            missing,
+        )
+
+    persistent_memory_main_decision_dir = (
+        Path(args.persistent_memory_main_decision_dir) if args.persistent_memory_main_decision_dir else None
+    )
+    if persistent_memory_main_decision_dir is not None:
+        _copy_dir_if_exists(
+            persistent_memory_main_decision_dir / "tables",
+            pack_persistent_memory_main_decision / "tables",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            persistent_memory_main_decision_dir / "report.md",
+            pack_persistent_memory_main_decision / "report.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            persistent_memory_main_decision_dir / "snapshot.json",
+            pack_persistent_memory_main_decision / "snapshot.json",
             copied,
             missing,
         )
@@ -387,6 +477,8 @@ def main() -> int:
         f"- result_diagnosis_dir: `{result_diagnosis_dir}`",
         f"- delta_audit_dir: `{delta_audit_dir}`",
         f"- query_strength_audit_dir: `{query_strength_audit_dir}`",
+        f"- persistent_memory_main_compare_dir: `{persistent_memory_main_compare_dir}`",
+        f"- persistent_memory_main_decision_dir: `{persistent_memory_main_decision_dir}`",
         f"- provider_telemetry_dir: `{provider_telemetry_dir}`",
         f"- provider_reachability_dir: `{provider_reachability_dir}`",
         f"- provider_normalization_dir: `{provider_normalization_dir}`",
@@ -416,6 +508,8 @@ def main() -> int:
         "- `signal_uplift/`: before/after perception signal gain summary for local YOLO26n pilots",
         "- `query_bank_compare/`: aligned v1-vs-v2 main-result compare tables, figures, and provenance",
         "- `query_bank_promotion_decision/`: formal recommendation on whether v2 should replace v1",
+        "- `persistent_memory_main_compare/`: aligned large-sample baseline-vs-persistent compare tables, figures, and provenance",
+        "- `persistent_memory_main_decision/`: formal recommendation on whether persistent memory should enter mainline",
         "- `query_strength_audit/`: query-group strength audit for main-paper inclusion decisions",
         "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
         "- `provider_reachability/`: live-call reachability proof for the chosen provider/server",
@@ -449,6 +543,8 @@ def main() -> int:
             "## Reading Order",
             "",
             "- Read `provider_reachability/` first.",
+            "- Then read `persistent_memory_main_compare/`.",
+            "- Then read `persistent_memory_main_decision/`.",
             "- Then read `repeatability_audit/`.",
             "- Then read `sample_size_recommendation/`.",
             "- Then read `admission_control/`.",
@@ -611,6 +707,12 @@ def main() -> int:
         "query_bank_compare_dir": str(query_bank_compare_dir) if query_bank_compare_dir is not None else None,
         "query_bank_promotion_decision_dir": str(query_bank_promotion_decision_dir)
         if query_bank_promotion_decision_dir is not None
+        else None,
+        "persistent_memory_main_compare_dir": str(persistent_memory_main_compare_dir)
+        if persistent_memory_main_compare_dir is not None
+        else None,
+        "persistent_memory_main_decision_dir": str(persistent_memory_main_decision_dir)
+        if persistent_memory_main_decision_dir is not None
         else None,
         "query_strength_audit_dir": str(query_strength_audit_dir) if query_strength_audit_dir is not None else None,
         "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,

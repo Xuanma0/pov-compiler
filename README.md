@@ -427,6 +427,65 @@ What to read first after the real object-memory run:
 - `object_memory_uplift/report.md`
 - `paper_ready/object_memory_uplift/report.md`
 
+## v1.57 Persistent Object Memory v2
+
+`v1.57` keeps the `YOLO26n + SAM3` perception path fixed and asks a narrower follow-up than `v1.56`: can a minimal persistent object-memory v2 turn the same segmentation/persistence signal into stronger long-term memory, reappearance recall, lost-object support, and chain object grounding without widening into retrieval or decision logic?
+
+- `configs\benchmarks\v1.57_object_memory_*.yaml` compare `persistence_v1` against `persistent_v2` under the same query bank and perception stack.
+- `src\pov_compiler\perception\object_memory_v0.py` now supports the smallest persistent-memory fields (`memory_tier`, short/long-term scores, reappearance score, persistence confidence) without changing the top-level output schema.
+- `scripts\run_persistent_object_memory_pilot.py` and `scripts\report_persistent_object_memory_uplift.py` write compare/report artifacts for the `persistent_v1` vs `persistent_v2` gate.
+- `paper_ready\persistent_object_memory_uplift\` becomes the canonical export root for deciding whether persistent object memory should move into the main line.
+
+Minimal flow:
+
+```text
+python scripts\run_offline.py --video D:\Ego4D_Dataset\v2_packed\full_scale_0000\full_scale\000786a7-3f9d-4fe6-bfb3-045b368f7d44.mp4 --out data\outputs\v157_persistent_object_memory_smoke.json --config configs\perception\yolo26n_sam3_local.yaml --run-perception --perception-backend real --perception-max-frames 24
+python scripts\run_persistent_object_memory_pilot.py --manifest configs\benchmarks\v1.57_object_memory_fake.yaml --out_dir data\outputs\v157_object_memory_fake
+python scripts\run_persistent_object_memory_pilot.py --manifest configs\benchmarks\v1.57_object_memory_real.yaml --out_dir data\outputs\v157_object_memory_real
+python scripts\report_persistent_object_memory_uplift.py --suite_dir data\outputs\v157_object_memory_real --baseline_dir data\outputs\v157_object_memory_fake --out_dir data\outputs\v157_object_memory_real\persistent_object_memory_uplift
+python scripts\export_paper_ready.py --compare_dir data\outputs\v157_object_memory_real\compare --suite-dir data\outputs\v157_object_memory_real --persistent-object-memory-uplift-dir data\outputs\v157_object_memory_real\persistent_object_memory_uplift --out_dir data\outputs\v157_object_memory_real\paper_ready
+```
+
+What to read first after the real persistent-memory run:
+
+- `compare/compare_summary.json`
+- `compare/tables/table_persistent_object_memory_uplift.csv`
+- `persistent_object_memory_uplift/report.md`
+- `paper_ready/persistent_object_memory_uplift/report.md`
+
+## v1.58 Large-Sample Persistent Memory Mainline Admission
+
+`v1.58` does not change runtime logic. It moves the already-proven `persistent_object_memory_v2` route into an aligned large-sample real main experiment, compares it against the current `persistence_v1` line under the same UID set, budgets, provider route, perception signature, and query bank, and then decides whether persistent memory is ready to enter the main result line.
+
+- `configs\benchmarks\v1.58_main_*_baseline.yaml` and `v1.58_main_*_persistent.yaml` freeze the baseline and persistent contracts for fake/real runs.
+- `scripts\run_main_real_benchmark.py` now writes `object_memory_logic_variant`, `query_bank_id/hash`, `uid_set_id`, provider/model route, and `run_signature_hash` into the run metadata so paired compare can fail fast on mismatches.
+- `scripts\compare_persistent_memory_main.py` writes aligned compare/significance/health/query-strength artifacts and rejects misaligned contracts.
+- `scripts\report_persistent_memory_main_decision.py` turns the aligned compare into a mainline admission decision such as `promote_persistent_memory_to_mainline`.
+- `paper_ready\persistent_memory_main_compare\` and `paper_ready\persistent_memory_main_decision\` become the canonical export roots for this admission gate.
+
+Large-sample aligned main runs:
+
+```text
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.58_main_real_baseline.yaml --mode main_real --out_dir data\outputs\v158_main_real_baseline
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.58_main_real_persistent.yaml --mode main_real --out_dir data\outputs\v158_main_real_persistent
+```
+
+Compare baseline vs persistent and write the admission decision:
+
+```text
+python scripts\compare_persistent_memory_main.py --run_a data\outputs\v158_main_real_baseline --run_b data\outputs\v158_main_real_persistent --out_dir data\outputs\v158_persistent_memory_main_compare
+python scripts\report_persistent_memory_main_decision.py --compare_dir data\outputs\v158_persistent_memory_main_compare --out_dir data\outputs\v158_persistent_memory_main_compare\promotion_decision
+python scripts\export_paper_ready.py --compare_dir data\outputs\v158_persistent_memory_main_compare\compare --suite-dir data\outputs\v158_main_real_persistent --persistent-memory-main-decision-dir data\outputs\v158_persistent_memory_main_compare\promotion_decision --out_dir data\outputs\v158_persistent_memory_main_compare\paper_ready
+```
+
+What to read first after the large-sample run:
+
+- `compare/compare_summary.json`
+- `compare/tables/table_persistent_memory_main_compare.csv`
+- `promotion_decision/tables/table_persistent_memory_main_decision.csv`
+- `paper_ready/persistent_memory_main_compare/README.md`
+- `paper_ready/persistent_memory_main_decision/report.md`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

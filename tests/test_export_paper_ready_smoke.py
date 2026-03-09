@@ -865,6 +865,99 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    persistent_memory_main_compare_dir = tmp_path / "persistent_memory_main_compare"
+    (persistent_memory_main_compare_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (persistent_memory_main_compare_dir / "figures").mkdir(parents=True, exist_ok=True)
+    (persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_compare.csv").write_text(
+        "query_bank_a_id,query_bank_b_id,selected_uids_count,budgets_matched,mean_delta_mrr_strict,mean_delta_mrr_relaxed,win_rate_strict,win_rate_relaxed,weak_query_groups_count_a,weak_query_groups_count_b,query_strength_coverage_a,query_strength_coverage_b,lost_object_query_support_rate_a,lost_object_query_support_rate_b,chain_object_grounding_support_rate_a,chain_object_grounding_support_rate_b,reappearance_support_rate_a,reappearance_support_rate_b,object_persistence_support_rate_a,object_persistence_support_rate_b,paired_sample_count,provider_health_status,persistent_memory_main_status\npersistent_object_memory_core_v1,persistent_object_memory_core_v1,12,True,0.041,0.053,0.75,0.75,2,0,0.50,0.88,0.50,0.75,0.50,0.83,0.25,0.67,0.75,0.92,12,ok,improved\n",
+        encoding="utf-8",
+    )
+    (persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_compare.md").write_text(
+        "# persistent memory main compare\n",
+        encoding="utf-8",
+    )
+    (persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_significance.csv").write_text(
+        "budget_key,metric,paired_sample_count,mean_delta,win_rate,status,wilcoxon_p_value,ci_low,ci_high\n20/50/4,mrr_strict,12,0.041,0.75,ok,0.02,0.01,0.07\n",
+        encoding="utf-8",
+    )
+    (persistent_memory_main_compare_dir / "tables" / "table_persistent_memory_main_significance.md").write_text(
+        "# persistent memory main significance\n",
+        encoding="utf-8",
+    )
+    (persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_delta.png").write_bytes(b"PNG")
+    (persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_delta.pdf").write_bytes(b"PDF")
+    (persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_health.png").write_bytes(b"PNG")
+    (persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_health.pdf").write_bytes(b"PDF")
+    (persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_query_strength.png").write_bytes(b"PNG")
+    (persistent_memory_main_compare_dir / "figures" / "fig_persistent_memory_main_query_strength.pdf").write_bytes(b"PDF")
+    (persistent_memory_main_compare_dir / "compare_summary.json").write_text(
+        json.dumps(
+            {
+                "alignment_ok": True,
+                "mismatch_reasons": [],
+                "query_bank_a_id": "persistent_object_memory_core_v1",
+                "query_bank_b_id": "persistent_object_memory_core_v1",
+                "object_memory_logic_variant_a": "persistence_v1",
+                "object_memory_logic_variant_b": "persistent_v2",
+                "mean_delta_mrr_strict": 0.041,
+                "mean_delta_mrr_relaxed": 0.053,
+                "win_rate_strict": 0.75,
+                "win_rate_relaxed": 0.75,
+                "weak_query_groups_count_a": 2,
+                "weak_query_groups_count_b": 0,
+                "query_strength_coverage_a": 0.50,
+                "query_strength_coverage_b": 0.88,
+                "lost_object_query_support_rate_a": 0.50,
+                "lost_object_query_support_rate_b": 0.75,
+                "chain_object_grounding_support_rate_a": 0.50,
+                "chain_object_grounding_support_rate_b": 0.83,
+                "reappearance_support_rate_a": 0.25,
+                "reappearance_support_rate_b": 0.67,
+                "object_persistence_support_rate_a": 0.75,
+                "object_persistence_support_rate_b": 0.92,
+                "paired_sample_count": 12,
+                "provider_health_status": "ok",
+                "persistent_memory_main_status": "improved",
+                "main_gain_state": "strict_main_gain_improved",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (persistent_memory_main_compare_dir / "snapshot.json").write_text(
+        json.dumps({"compare_summary": {"persistent_memory_main_status": "improved"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (persistent_memory_main_compare_dir / "commands.sh").write_text(
+        "python scripts/compare_persistent_memory_main.py\n",
+        encoding="utf-8",
+    )
+    (persistent_memory_main_compare_dir / "README.md").write_text("# persistent memory main compare\n", encoding="utf-8")
+    persistent_memory_main_decision_dir = tmp_path / "persistent_memory_main_decision"
+    (persistent_memory_main_decision_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (persistent_memory_main_decision_dir / "tables" / "table_persistent_memory_main_decision.csv").write_text(
+        "promotion_decision,decision_confidence,primary_basis,secondary_basis,promotion_ready,recommended_next_step\npromote_persistent_memory_to_mainline,high,strict_and_memory_signals_improved,weak_query_groups_nonincreasing,True,promote_persistent_memory_to_mainline\n",
+        encoding="utf-8",
+    )
+    (persistent_memory_main_decision_dir / "tables" / "table_persistent_memory_main_decision.md").write_text(
+        "# persistent memory main decision\n",
+        encoding="utf-8",
+    )
+    (persistent_memory_main_decision_dir / "report.md").write_text("# persistent memory main decision report\n", encoding="utf-8")
+    (persistent_memory_main_decision_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "promotion_decision_summary": {
+                    "promotion_decision": "promote_persistent_memory_to_mainline",
+                    "decision_confidence": "high",
+                    "recommended_next_step": "promote_persistent_memory_to_mainline",
+                    "promotion_ready": True,
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (compare_dir / "tables").mkdir(parents=True, exist_ok=True)
     (compare_dir / "figures").mkdir(parents=True, exist_ok=True)
     (compare_dir / "tables" / "table_signal_uplift.csv").write_text(
@@ -1334,6 +1427,10 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
         str(query_bank_compare_dir),
         "--query-bank-promotion-decision-dir",
         str(query_bank_promotion_decision_dir),
+        "--persistent-memory-main-compare-dir",
+        str(persistent_memory_main_compare_dir),
+        "--persistent-memory-main-decision-dir",
+        str(persistent_memory_main_decision_dir),
         "--provider-telemetry-dir",
         str(provider_telemetry_dir),
         "--provider-reachability-dir",
@@ -1398,6 +1495,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Query Bank Selection" in report_text
     assert "## Query Bank Compare" in report_text
     assert "## Query Bank Promotion Decision" in report_text
+    assert "## Persistent Memory Main Compare" in report_text
+    assert "## Persistent Memory Main Decision" in report_text
     assert "## Query Strength Audit" in report_text
     assert "## Repeatability Audit" in report_text
     assert "## Sample Size Recommendation" in report_text
@@ -1460,6 +1559,11 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "query_bank_compare" / "compare_summary.json").exists()
     assert (out_dir / "query_bank_promotion_decision" / "tables" / "table_query_bank_promotion_decision.csv").exists()
     assert (out_dir / "query_bank_promotion_decision" / "report.md").exists()
+    assert (out_dir / "persistent_memory_main_compare" / "tables" / "table_persistent_memory_main_compare.csv").exists()
+    assert (out_dir / "persistent_memory_main_compare" / "tables" / "table_persistent_memory_main_significance.csv").exists()
+    assert (out_dir / "persistent_memory_main_compare" / "compare_summary.json").exists()
+    assert (out_dir / "persistent_memory_main_decision" / "tables" / "table_persistent_memory_main_decision.csv").exists()
+    assert (out_dir / "persistent_memory_main_decision" / "report.md").exists()
     assert (out_dir / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (out_dir / "query_strength_audit" / "report.md").exists()
     assert (out_dir / "provider_reachability" / "summary.json").exists()
@@ -1494,6 +1598,9 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (out_dir / "figures" / "fig_persistent_object_memory_reappearance.png").exists()
     assert (out_dir / "figures" / "fig_query_bank_delta.png").exists()
     assert (out_dir / "figures" / "fig_query_bank_tradeoff.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_memory_main_delta.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_memory_main_health.png").exists()
+    assert (out_dir / "figures" / "fig_persistent_memory_main_query_strength.png").exists()
     assert (out_dir / "figures" / "fig_query_strength_breakdown.png").exists()
     assert (out_dir / "provider_telemetry" / "summary.json").exists()
     assert (out_dir / "provider_telemetry" / "by_variant.csv").exists()
@@ -1608,6 +1715,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "signal_uplift" / "snapshot.json").exists()
     assert (submission_pack / "query_bank_compare" / "compare_summary.json").exists()
     assert (submission_pack / "query_bank_promotion_decision" / "snapshot.json").exists()
+    assert (submission_pack / "persistent_memory_main_compare" / "compare_summary.json").exists()
+    assert (submission_pack / "persistent_memory_main_decision" / "snapshot.json").exists()
     assert (submission_pack / "query_strength_audit" / "tables" / "table_query_strength_audit.csv").exists()
     assert (submission_pack / "provider_telemetry" / "summary.json").exists()
     assert (submission_pack / "provider_reachability" / "summary.json").exists()
@@ -1634,6 +1743,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert (submission_pack / "paper_ready" / "signal_uplift" / "report.md").exists()
     assert (submission_pack / "paper_ready" / "query_bank_compare" / "compare_summary.json").exists()
     assert (submission_pack / "paper_ready" / "query_bank_promotion_decision" / "report.md").exists()
+    assert (submission_pack / "paper_ready" / "persistent_memory_main_compare" / "compare_summary.json").exists()
+    assert (submission_pack / "paper_ready" / "persistent_memory_main_decision" / "report.md").exists()
     submission_readme = (submission_pack / "README.md").read_text(encoding="utf-8")
     assert "Table 1" in submission_readme
     assert "Figure 2" in submission_readme
@@ -1644,6 +1755,8 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "Signal Uplift" in submission_readme
     assert "query_bank_compare/" in submission_readme or "query bank compare" in submission_readme.lower()
     assert "query_bank_promotion_decision/" in submission_readme or "promotion decision" in submission_readme.lower()
+    assert "persistent_memory_main_compare/" in submission_readme or "persistent memory main compare" in submission_readme.lower()
+    assert "persistent_memory_main_decision/" in submission_readme or "persistent memory main decision" in submission_readme.lower()
     assert "Query Strength Audit" in submission_readme
     assert "Provider Reachability" in submission_readme
     assert "Provider Noise" in submission_readme
@@ -1659,3 +1772,5 @@ def test_export_paper_ready_smoke(tmp_path: Path) -> None:
     assert "## Query Bank Compare" in submission_report_text
     assert "## Query Bank Promotion Decision" in submission_report_text
     assert "## Persistent Object Memory Uplift" in submission_report_text
+    assert "## Persistent Memory Main Compare" in submission_report_text
+    assert "## Persistent Memory Main Decision" in submission_report_text

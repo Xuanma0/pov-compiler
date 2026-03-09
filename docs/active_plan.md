@@ -2,33 +2,34 @@
 
 ## Current milestone
 
-- `v1.57`: Persistent Object Memory v2
+- `v1.58`: Large-Sample Persistent Memory Mainline Admission
 
 ## Single goal
 
-- Decide whether a minimal persistent object-memory v2 can turn the already-proven `YOLO26n + SAM3` persistence signal into stronger lost-object support, reappearance recall, and chain object grounding without widening scope into retrieval or decision logic.
+- Decide whether `persistent_object_memory_v2` is strong enough, on a large-sample real main experiment, to replace the current mainline memory route without widening scope into retrieval or decision logic.
 
 ## Status
 
-- [x] Added fake and real persistent-object-memory manifests under `configs/benchmarks/v1.57_object_memory_*.yaml`.
-- [x] Added `configs/queries/persistent_object_memory_core_v1.yaml` to stress lost-object, reappearance, chain grounding, persistent recall, and last-tracked/last-interacted behavior.
-- [x] `src/pov_compiler/perception/object_memory_v0.py` now supports the smallest persistent memory v2 fields (`memory_tier`, short/long-term scores, reappearance, persistence confidence) without changing the top-level output schema.
-- [x] `scripts/run_persistent_object_memory_pilot.py` and `scripts/report_persistent_object_memory_uplift.py` now produce compare/report artifacts for `persistence_v1` vs `persistent_v2`.
-- [x] Fake persistent-object-memory pilot validated under `data/outputs/v157_object_memory_fake/` with `persistent_object_memory_status=improved`.
-- [x] Real persistent-object-memory pilot validated under `data/outputs/v157_object_memory_real/` with `persistent_object_memory_status=improved`.
-- [x] Persistent-object-memory uplift report validated under `data/outputs/v157_object_memory_real/persistent_object_memory_uplift/` with `next_action_recommendation=promote_persistent_object_memory`.
-- [x] `paper_ready/` can now carry `persistent_object_memory_uplift/`.
+- [x] Added aligned fake/real large-sample baseline manifests under `configs/benchmarks/v1.58_main_*_baseline.yaml`.
+- [x] Added aligned fake/real large-sample persistent manifests under `configs/benchmarks/v1.58_main_*_persistent.yaml`.
+- [x] `scripts/run_main_real_benchmark.py` now records `object_memory_logic_variant`, `query_bank_id/hash`, provider label/model route, `uid_set_id`, and `run_signature_hash` for paired mainline compare.
+- [x] `scripts/compare_persistent_memory_main.py` now fails fast on contract mismatch and writes mainline compare tables, significance, figures, summary, and snapshot.
+- [x] `scripts/report_persistent_memory_main_decision.py` now converts the aligned compare into a mainline admission decision with `promote_persistent_memory_to_mainline` support.
+- [x] Large-sample real baseline run validated under `data/outputs/v158_main_real_baseline/`.
+- [x] Large-sample real persistent run validated under `data/outputs/v158_main_real_persistent/`.
+- [x] Persistent-memory main compare validated under `data/outputs/v158_persistent_memory_main_compare/compare/` with `alignment_ok=true` and `persistent_memory_main_status=improved`.
+- [x] Mainline decision validated under `data/outputs/v158_persistent_memory_main_compare/promotion_decision/` with `promotion_decision=promote_persistent_memory_to_mainline`.
+- [x] `paper_ready/` can now carry `persistent_memory_main_compare/` and `persistent_memory_main_decision/`.
 - [x] xdist-enabled pytest path verified with `python -m pytest -q -n auto`.
 - [x] `python scripts/security_scan_secrets.py` passed with `found_count=0`.
-- [x] Provider dry-run remained optional and was skipped because `PARATERA_*` env vars were absent.
-- [x] `v1.57` milestone marked done.
+- [x] `v1.58` milestone marked done.
 
-## v1.58 Candidate Tasks
+## v1.59 Candidate Tasks
 
-- Medium-scale persistent-memory admission gate
-- Retrieval-side consumption of persistent object-memory evidence
+- Retrieval-side grounding from persistent object-memory evidence
 - Decision-side use of reappearance-backed lost-object memory
-- Lost-object query-family hardening after persistent memory promotion
+- Large-sample persistent-memory repeatability and cost audit
+- Lost-object query-family hardening after mainline promotion
 - Appendix split for YOLO-only vs YOLO+SAM3 vs persistent-memory-v2 evidence
 
 ## Frozen constraints
@@ -36,10 +37,12 @@
 - Prefer new files over editing existing runtime files.
 - Keep work on benchmark, reporting, export, and provenance; do not widen runtime scope unless absolutely necessary.
 - Prefer modifying only these existing non-doc files for the next milestone:
-  - `scripts/run_persistent_object_memory_pilot.py`
-  - `scripts/report_persistent_object_memory_uplift.py`
+  - `scripts/run_main_real_benchmark.py`
+  - `scripts/compare_persistent_memory_main.py`
+  - `scripts/report_persistent_memory_main_decision.py`
   - `scripts/export_paper_ready.py`
-  - `src/pov_compiler/bench/reporting/persistent_object_memory_uplift.py`
+  - `scripts/export_submission_pack.py`
+  - `src/pov_compiler/bench/reporting/persistent_memory_main.py`
   - `tests/test_export_paper_ready_smoke.py`
 - Do not modify, unless implementation proves it is impossible to avoid:
   - `src/pov_compiler/perception/backends.py`
