@@ -28,6 +28,31 @@ def _copy_dir_if_exists(src: Path, dst: Path, copied: list[str], missing: list[s
     if not src.exists():
         missing.append(str(src))
         return
+    src_resolved = src.resolve()
+    dst_resolved = dst.resolve()
+    if dst_resolved == src_resolved:
+        copied.append(str(dst))
+        return
+    if dst_resolved.is_relative_to(src_resolved):
+        excluded_root: Path | None = None
+        relative_parts = dst_resolved.relative_to(src_resolved).parts
+        if relative_parts:
+            excluded_root = src_resolved / relative_parts[0]
+        for path in src.rglob("*"):
+            resolved = path.resolve()
+            if excluded_root is not None and (resolved == excluded_root or resolved.is_relative_to(excluded_root)):
+                continue
+            if resolved == dst_resolved or resolved.is_relative_to(dst_resolved):
+                continue
+            rel = path.relative_to(src)
+            target = dst / rel
+            if path.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+        copied.append(str(dst))
+        return
     shutil.copytree(src, dst, dirs_exist_ok=True)
     copied.append(str(dst))
 
@@ -44,8 +69,15 @@ def _load_json(path: Path) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export a submission-ready archive from paper-ready and suite artifacts.")
-    parser.add_argument("--paper-ready-dir", required=True, help="Existing paper_ready output directory")
-    parser.add_argument("--out-dir", default=None, help="Output directory (defaults to <paper-ready-dir>/submission_pack)")
+    parser.add_argument("--paper-ready-dir", default=None, help="Existing paper_ready output directory")
+    parser.add_argument("--compare-dir", default=None, help="Optional compare root override for packed compare artifacts")
+    parser.add_argument(
+        "--out-dir",
+        "--out_dir",
+        dest="out_dir",
+        default=None,
+        help="Output directory (defaults to <paper-ready-dir>/submission_pack)",
+    )
     parser.add_argument("--suite-dir", default=None, help="Benchmark suite root containing manifest/ and ledger/")
     parser.add_argument("--significance-dir", default=None, help="Optional significance output directory")
     parser.add_argument("--result-health-dir", default=None, help="Optional result health output directory")
@@ -69,6 +101,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional persistent-memory main decision output directory",
     )
+    parser.add_argument(
+        "--mainline-admission-cleanup-dir",
+        default=None,
+        help="Optional mainline admission cleanup output directory",
+    )
+    parser.add_argument(
+        "--sample-contract-dir",
+        default=None,
+        help="Optional sample contract output directory",
+    )
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
@@ -88,7 +130,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    paper_ready_dir = Path(args.paper_ready_dir)
+    paper_ready_dir: Path | None = Path(args.paper_ready_dir) if args.paper_ready_dir else None
+    if paper_ready_dir is None and args.out_dir:
+        inferred = Path(args.out_dir).resolve().parent / "paper_ready"
+        if inferred.exists():
+            paper_ready_dir = inferred
+    if paper_ready_dir is None:
+        raise FileNotFoundError("paper_ready_dir not provided and could not be inferred from --out-dir")
     if not paper_ready_dir.exists():
         raise FileNotFoundError(f"paper_ready_dir not found: {paper_ready_dir}")
 
@@ -110,6 +158,8 @@ def main() -> int:
     pack_query_bank_promotion_decision = out_dir / "query_bank_promotion_decision"
     pack_persistent_memory_main_compare = out_dir / "persistent_memory_main_compare"
     pack_persistent_memory_main_decision = out_dir / "persistent_memory_main_decision"
+    pack_mainline_admission_cleanup = out_dir / "mainline_admission_cleanup"
+    pack_sample_contract = out_dir / "sample_contract"
     pack_query_strength_audit = out_dir / "query_strength_audit"
     pack_provider_telemetry = out_dir / "provider_telemetry"
     pack_provider_reachability = out_dir / "provider_reachability"
@@ -138,6 +188,8 @@ def main() -> int:
         pack_query_bank_promotion_decision,
         pack_persistent_memory_main_compare,
         pack_persistent_memory_main_decision,
+        pack_mainline_admission_cleanup,
+        pack_sample_contract,
         pack_query_strength_audit,
         pack_provider_telemetry,
         pack_provider_reachability,
@@ -181,6 +233,18 @@ def main() -> int:
         copied,
         missing,
     )
+    _copy_dir_if_exists(
+        paper_ready_dir / "mainline_admission_cleanup",
+        pack_paper_ready / "mainline_admission_cleanup",
+        copied,
+        missing,
+    )
+    _copy_dir_if_exists(
+        paper_ready_dir / "sample_contract",
+        pack_paper_ready / "sample_contract",
+        copied,
+        missing,
+    )
     _copy_dir_if_exists(paper_ready_dir / "query_strength_audit", pack_paper_ready / "query_strength_audit", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_telemetry", pack_paper_ready / "provider_telemetry", copied, missing)
     _copy_dir_if_exists(paper_ready_dir / "provider_reachability", pack_paper_ready / "provider_reachability", copied, missing)
@@ -194,6 +258,7 @@ def main() -> int:
     _copy_file_if_exists(paper_ready_dir / "snapshot.json", pack_paper_ready / "snapshot.json", copied, missing)
 
     suite_dir = Path(args.suite_dir) if args.suite_dir else None
+    compare_dir = Path(args.compare_dir) if args.compare_dir else None
     if suite_dir is not None:
         _copy_file_if_exists(suite_dir / "manifest" / "experiment_manifest.yaml", pack_manifest / "experiment_manifest.yaml", copied, missing)
         _copy_file_if_exists(suite_dir / "manifest" / "manifest_resolved.json", pack_manifest / "manifest_resolved.json", copied, missing)
@@ -202,10 +267,11 @@ def main() -> int:
         _copy_dir_if_exists(suite_dir / "manifest" / "query_banks", pack_manifest / "query_banks", copied, missing)
         _copy_file_if_exists(suite_dir / "ledger" / "results_long.csv", pack_provenance / "results_long.csv", copied, missing)
         _copy_file_if_exists(suite_dir / "ledger" / "runs.jsonl", pack_provenance / "runs.jsonl", copied, missing)
-        _copy_file_if_exists(suite_dir / "compare" / "commands.sh", pack_provenance / "commands.sh", copied, missing)
-        _copy_file_if_exists(suite_dir / "compare" / "compare_summary.json", pack_provenance / "compare_summary.json", copied, missing)
-        _copy_file_if_exists(suite_dir / "compare" / "snapshot.json", pack_provenance / "compare_snapshot.json", copied, missing)
-        _copy_dir_if_exists(suite_dir / "compare", pack_compare, copied, missing)
+        compare_source = compare_dir if compare_dir is not None else suite_dir / "compare"
+        _copy_file_if_exists(compare_source / "commands.sh", pack_provenance / "commands.sh", copied, missing)
+        _copy_file_if_exists(compare_source / "compare_summary.json", pack_provenance / "compare_summary.json", copied, missing)
+        _copy_file_if_exists(compare_source / "snapshot.json", pack_provenance / "compare_snapshot.json", copied, missing)
+        _copy_dir_if_exists(compare_source, pack_compare, copied, missing)
 
     significance_dir = Path(args.significance_dir) if args.significance_dir else None
     if significance_dir is not None:
@@ -348,6 +414,62 @@ def main() -> int:
             missing,
         )
 
+    mainline_admission_cleanup_dir = (
+        Path(args.mainline_admission_cleanup_dir) if args.mainline_admission_cleanup_dir else None
+    )
+    if mainline_admission_cleanup_dir is not None:
+        _copy_dir_if_exists(
+            mainline_admission_cleanup_dir / "tables",
+            pack_mainline_admission_cleanup / "tables",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            mainline_admission_cleanup_dir / "report.md",
+            pack_mainline_admission_cleanup / "report.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            mainline_admission_cleanup_dir / "snapshot.json",
+            pack_mainline_admission_cleanup / "snapshot.json",
+            copied,
+            missing,
+        )
+        _copy_dir_if_exists(
+            mainline_admission_cleanup_dir,
+            pack_paper_ready / "mainline_admission_cleanup",
+            copied,
+            missing,
+        )
+
+    sample_contract_dir = Path(args.sample_contract_dir) if args.sample_contract_dir else None
+    if sample_contract_dir is not None:
+        _copy_dir_if_exists(
+            sample_contract_dir / "tables",
+            pack_sample_contract / "tables",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            sample_contract_dir / "report.md",
+            pack_sample_contract / "report.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            sample_contract_dir / "snapshot.json",
+            pack_sample_contract / "snapshot.json",
+            copied,
+            missing,
+        )
+        _copy_dir_if_exists(
+            sample_contract_dir,
+            pack_paper_ready / "sample_contract",
+            copied,
+            missing,
+        )
+
     query_strength_audit_dir = Path(args.query_strength_audit_dir) if args.query_strength_audit_dir else None
     if query_strength_audit_dir is not None:
         _copy_dir_if_exists(query_strength_audit_dir / "tables", pack_query_strength_audit / "tables", copied, missing)
@@ -479,6 +601,8 @@ def main() -> int:
         f"- query_strength_audit_dir: `{query_strength_audit_dir}`",
         f"- persistent_memory_main_compare_dir: `{persistent_memory_main_compare_dir}`",
         f"- persistent_memory_main_decision_dir: `{persistent_memory_main_decision_dir}`",
+        f"- mainline_admission_cleanup_dir: `{mainline_admission_cleanup_dir}`",
+        f"- sample_contract_dir: `{sample_contract_dir}`",
         f"- provider_telemetry_dir: `{provider_telemetry_dir}`",
         f"- provider_reachability_dir: `{provider_reachability_dir}`",
         f"- provider_normalization_dir: `{provider_normalization_dir}`",
@@ -510,6 +634,8 @@ def main() -> int:
         "- `query_bank_promotion_decision/`: formal recommendation on whether v2 should replace v1",
         "- `persistent_memory_main_compare/`: aligned large-sample baseline-vs-persistent compare tables, figures, and provenance",
         "- `persistent_memory_main_decision/`: formal recommendation on whether persistent memory should enter mainline",
+        "- `mainline_admission_cleanup/`: explanation of why promotion can coexist with partial admission and what still needs cleanup",
+        "- `sample_contract/`: explicit sample/coverage/freeze evidence for large-sample wording and mainline claims",
         "- `query_strength_audit/`: query-group strength audit for main-paper inclusion decisions",
         "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
         "- `provider_reachability/`: live-call reachability proof for the chosen provider/server",
@@ -540,14 +666,16 @@ def main() -> int:
     readme_lines.extend(
         [
             "",
-            "## Reading Order",
-            "",
-            "- Read `provider_reachability/` first.",
-            "- Then read `persistent_memory_main_compare/`.",
-            "- Then read `persistent_memory_main_decision/`.",
-            "- Then read `repeatability_audit/`.",
-            "- Then read `sample_size_recommendation/`.",
-            "- Then read `admission_control/`.",
+        "## Reading Order",
+        "",
+        "- Read `provider_reachability/` first.",
+        "- Then read `persistent_memory_main_compare/`.",
+        "- Then read `persistent_memory_main_decision/`.",
+        "- Then read `mainline_admission_cleanup/`.",
+        "- Then read `sample_contract/`.",
+        "- Then read `repeatability_audit/`.",
+        "- Then read `sample_size_recommendation/`.",
+        "- Then read `admission_control/`.",
             "- If admission is blocked, read `admission_calibration/` next.",
             "- Then read `result_health/` and `result_diagnosis/`.",
             "- Then read `delta_audit/`.",
@@ -696,6 +824,7 @@ def main() -> int:
     snapshot = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "paper_ready_dir": str(paper_ready_dir),
+        "compare_dir": str(compare_dir) if compare_dir is not None else None,
         "suite_dir": str(suite_dir) if suite_dir is not None else None,
         "significance_dir": str(significance_dir) if significance_dir is not None else None,
         "result_health_dir": str(result_health_dir) if result_health_dir is not None else None,
@@ -714,6 +843,10 @@ def main() -> int:
         "persistent_memory_main_decision_dir": str(persistent_memory_main_decision_dir)
         if persistent_memory_main_decision_dir is not None
         else None,
+        "mainline_admission_cleanup_dir": str(mainline_admission_cleanup_dir)
+        if mainline_admission_cleanup_dir is not None
+        else None,
+        "sample_contract_dir": str(sample_contract_dir) if sample_contract_dir is not None else None,
         "query_strength_audit_dir": str(query_strength_audit_dir) if query_strength_audit_dir is not None else None,
         "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,
         "provider_reachability_dir": str(provider_reachability_dir) if provider_reachability_dir is not None else None,

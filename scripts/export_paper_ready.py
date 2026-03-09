@@ -177,6 +177,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional persistent-memory main admission decision output directory",
     )
+    parser.add_argument(
+        "--mainline-admission-cleanup-dir",
+        default=None,
+        help="Optional mainline admission cleanup output directory",
+    )
+    parser.add_argument(
+        "--sample-contract-dir",
+        default=None,
+        help="Optional sample/coverage/freeze contract output directory",
+    )
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
     parser.add_argument("--provider-reachability-dir", default=None, help="Optional provider reachability proof directory")
     parser.add_argument("--provider-normalization-dir", default=None, help="Optional normalized provider telemetry output directory")
@@ -2488,6 +2498,84 @@ def main() -> int:
                 dict(summary_payload) if isinstance(summary_payload, dict) else {}
             )
 
+    resolved_mainline_admission_cleanup_dir: Path | None = None
+    if args.mainline_admission_cleanup_dir:
+        resolved_mainline_admission_cleanup_dir = Path(args.mainline_admission_cleanup_dir)
+    mainline_admission_cleanup_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    mainline_admission_cleanup_summary: dict[str, Any] = {}
+    if resolved_mainline_admission_cleanup_dir:
+        mainline_admission_cleanup_panel["enabled"] = True
+        mainline_admission_cleanup_panel["source_dir"] = str(resolved_mainline_admission_cleanup_dir)
+        dst_root = out_dir / "mainline_admission_cleanup"
+        copied = []
+        for src in (
+            resolved_mainline_admission_cleanup_dir / "tables" / "table_mainline_admission_cleanup.csv",
+            resolved_mainline_admission_cleanup_dir / "tables" / "table_mainline_admission_cleanup.md",
+            resolved_mainline_admission_cleanup_dir / "report.md",
+            resolved_mainline_admission_cleanup_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    _copy_if_exists(src, out_dir / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        mainline_admission_cleanup_panel["copied_files"] = copied
+        snapshot_src = resolved_mainline_admission_cleanup_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                cleanup_payload = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                cleanup_payload = {}
+            summary_payload = cleanup_payload.get("mainline_admission_cleanup_summary", {})
+            mainline_admission_cleanup_summary = (
+                dict(summary_payload) if isinstance(summary_payload, dict) else {}
+            )
+
+    resolved_sample_contract_dir: Path | None = None
+    if args.sample_contract_dir:
+        resolved_sample_contract_dir = Path(args.sample_contract_dir)
+    sample_contract_panel: dict[str, Any] = {
+        "enabled": False,
+        "source_dir": None,
+        "copied_files": [],
+    }
+    sample_contract_summary: dict[str, Any] = {}
+    if resolved_sample_contract_dir:
+        sample_contract_panel["enabled"] = True
+        sample_contract_panel["source_dir"] = str(resolved_sample_contract_dir)
+        dst_root = out_dir / "sample_contract"
+        copied = []
+        for src in (
+            resolved_sample_contract_dir / "tables" / "table_sample_contract_summary.csv",
+            resolved_sample_contract_dir / "tables" / "table_sample_contract_summary.md",
+            resolved_sample_contract_dir / "report.md",
+            resolved_sample_contract_dir / "snapshot.json",
+        ):
+            if src.suffix.lower() in {".csv", ".md"} and src.parent.name == "tables":
+                cp = _copy_if_exists(src, dst_root / "tables" / src.name)
+                if cp:
+                    _copy_if_exists(src, out_dir / "tables" / src.name)
+            else:
+                cp = _copy_if_exists(src, dst_root / src.name)
+            if cp:
+                copied.append(cp)
+        sample_contract_panel["copied_files"] = copied
+        snapshot_src = resolved_sample_contract_dir / "snapshot.json"
+        if snapshot_src.exists():
+            try:
+                sample_contract_payload = json.loads(snapshot_src.read_text(encoding="utf-8"))
+            except Exception:
+                sample_contract_payload = {}
+            summary_payload = sample_contract_payload.get("sample_contract_summary", {})
+            sample_contract_summary = dict(summary_payload) if isinstance(summary_payload, dict) else {}
+
     resolved_query_strength_audit_dir: Path | None = None
     if args.query_strength_audit_dir:
         resolved_query_strength_audit_dir = Path(args.query_strength_audit_dir)
@@ -3584,6 +3672,53 @@ def main() -> int:
             )
         else:
             report_lines.append("- persistent_memory_main_decision: source provided but artifacts missing.")
+    if resolved_mainline_admission_cleanup_dir:
+        if mainline_admission_cleanup_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Mainline Admission Cleanup",
+                    "",
+                    f"- mainline_admission_cleanup_dir: `{mainline_admission_cleanup_panel.get('source_dir')}`",
+                    f"- mainline_admission_cleanup_files: `{mainline_admission_cleanup_panel.get('copied_files')}`",
+                    f"- mainline_admission_cleanup_status: `{mainline_admission_cleanup_summary.get('mainline_admission_cleanup_status', '')}`",
+                    f"- promotion_vs_admission_consistency: `{mainline_admission_cleanup_summary.get('promotion_vs_admission_consistency_status', '')}`",
+                    f"- evidence_hardness_status: `{mainline_admission_cleanup_summary.get('evidence_hardness_status', '')}`",
+                    f"- cleanup_next_action: `{mainline_admission_cleanup_summary.get('next_action_recommendation', '')}`",
+                ]
+            )
+        else:
+            report_lines.append("- mainline_admission_cleanup: source provided but artifacts missing.")
+    if resolved_sample_contract_dir:
+        if sample_contract_panel.get("copied_files"):
+            report_lines.extend(
+                [
+                    "## Sample Contract",
+                    "",
+                    f"- sample_contract_dir: `{sample_contract_panel.get('source_dir')}`",
+                    f"- sample_contract_files: `{sample_contract_panel.get('copied_files')}`",
+                    f"- sample_contract_status: `{sample_contract_summary.get('sample_contract_status', '')}`",
+                    f"- large_sample_claim_status: `{sample_contract_summary.get('large_sample_claim_status', '')}`",
+                    f"- wording_recommendation: `{sample_contract_summary.get('wording_recommendation', '')}`",
+                ]
+            )
+        else:
+            report_lines.append("- sample_contract: source provided but artifacts missing.")
+    if (
+        resolved_persistent_memory_main_compare_dir
+        or resolved_persistent_memory_main_decision_dir
+        or resolved_mainline_admission_cleanup_dir
+        or resolved_sample_contract_dir
+    ):
+        report_lines.extend(
+            [
+                "## Mainline Reading Order",
+                "",
+                "- Read `persistent_memory_main_compare/` first.",
+                "- Then read `persistent_memory_main_decision/`.",
+                "- Then read `mainline_admission_cleanup/`.",
+                "- Then read `sample_contract/`.",
+            ]
+        )
     if resolved_query_strength_audit_dir:
         if query_strength_audit_panel.get("copied_files"):
             report_lines.extend(
@@ -3849,6 +3984,10 @@ def main() -> int:
             "persistent_memory_main_decision_dir": str(resolved_persistent_memory_main_decision_dir)
             if resolved_persistent_memory_main_decision_dir
             else None,
+            "mainline_admission_cleanup_dir": str(resolved_mainline_admission_cleanup_dir)
+            if resolved_mainline_admission_cleanup_dir
+            else None,
+            "sample_contract_dir": str(resolved_sample_contract_dir) if resolved_sample_contract_dir else None,
             "query_strength_audit_dir": str(resolved_query_strength_audit_dir) if resolved_query_strength_audit_dir else None,
             "provider_telemetry_dir": str(resolved_provider_telemetry_dir) if resolved_provider_telemetry_dir else None,
             "provider_reachability_dir": str(resolved_provider_reachability_dir) if resolved_provider_reachability_dir else None,
@@ -3915,6 +4054,8 @@ def main() -> int:
             "query_bank_promotion_decision_panel": query_bank_promotion_decision_panel,
             "persistent_memory_main_compare_panel": persistent_memory_main_compare_panel,
             "persistent_memory_main_decision_panel": persistent_memory_main_decision_panel,
+            "mainline_admission_cleanup_panel": mainline_admission_cleanup_panel,
+            "sample_contract_panel": sample_contract_panel,
             "query_strength_audit_panel": query_strength_audit_panel,
             "provider_telemetry_panel": provider_telemetry_panel,
             "provider_reachability_panel": provider_reachability_panel,
@@ -3971,6 +4112,12 @@ def main() -> int:
             cmd.extend(
                 ["--persistent-memory-main-decision-dir", str(resolved_persistent_memory_main_decision_dir)]
             )
+        if resolved_mainline_admission_cleanup_dir:
+            cmd.extend(
+                ["--mainline-admission-cleanup-dir", str(resolved_mainline_admission_cleanup_dir)]
+            )
+        if resolved_sample_contract_dir:
+            cmd.extend(["--sample-contract-dir", str(resolved_sample_contract_dir)])
         if resolved_query_strength_audit_dir:
             cmd.extend(["--query-strength-audit-dir", str(resolved_query_strength_audit_dir)])
         if resolved_provider_telemetry_dir:

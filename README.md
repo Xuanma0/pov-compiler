@@ -486,6 +486,39 @@ What to read first after the large-sample run:
 - `paper_ready/persistent_memory_main_compare/README.md`
 - `paper_ready/persistent_memory_main_decision/report.md`
 
+## v1.59 Mainline Admission Cleanup And Sample Contract Hardening
+
+`v1.59` does not change runtime logic. It hardens the already-promoted persistent-memory mainline result by separating two different conclusions:
+
+- `promotion`: whether persistent memory beats the baseline under a paired aligned compare
+- `admission`: whether the current run has sufficiently hard sample, coverage, freeze, and provenance evidence to support the strongest paper wording
+
+This release adds two new result-layer artifacts:
+
+- `mainline_admission_cleanup/`, which explains why `promotion_to_mainline` can coexist with `admission_status=partial`
+- `sample_contract/`, which decides whether the current `large-sample real main experiment` wording is fully supported or only supported with caveat
+
+Generate the cleanup artifacts from the existing `v1.58` outputs:
+
+```text
+python scripts\report_mainline_admission_cleanup.py --suite-dir data\outputs\v158_main_real_persistent --compare-dir data\outputs\v158_persistent_memory_main_compare --out_dir data\outputs\v159_mainline_cleanup
+python scripts\report_sample_contract.py --suite-dir data\outputs\v158_main_real_persistent --compare-dir data\outputs\v158_persistent_memory_main_compare --out_dir data\outputs\v159_sample_contract
+```
+
+Export explicit mainline panels into `paper_ready/`:
+
+```text
+python scripts\export_paper_ready.py --compare_dir data\outputs\v158_persistent_memory_main_compare\compare --suite-dir data\outputs\v158_main_real_persistent --persistent-memory-main-decision-dir data\outputs\v158_persistent_memory_main_compare\promotion_decision --mainline-admission-cleanup-dir data\outputs\v159_mainline_cleanup --sample-contract-dir data\outputs\v159_sample_contract --out_dir data\outputs\v159_mainline_cleanup\paper_ready
+python scripts\export_submission_pack.py --suite-dir data\outputs\v158_main_real_persistent --compare-dir data\outputs\v158_persistent_memory_main_compare\compare --persistent-memory-main-decision-dir data\outputs\v158_persistent_memory_main_compare\promotion_decision --mainline-admission-cleanup-dir data\outputs\v159_mainline_cleanup --sample-contract-dir data\outputs\v159_sample_contract --out_dir data\outputs\v159_mainline_cleanup\submission_pack
+```
+
+Read the mainline package in this order:
+
+- `paper_ready/persistent_memory_main_compare/`
+- `paper_ready/persistent_memory_main_decision/`
+- `paper_ready/mainline_admission_cleanup/`
+- `paper_ready/sample_contract/`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion
