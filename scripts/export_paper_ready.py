@@ -3245,6 +3245,17 @@ def main() -> int:
                 f"- freeze_manifest_path: `{resolved_freeze_dir / 'freeze_manifest.json' if resolved_freeze_dir else None}`",
             ]
         )
+    report_lines.extend(
+        [
+            "",
+            "## Repository Docs Entry",
+            "",
+            "- English docs entry: `docs/README.en.md`",
+            "- Chinese docs entry: `docs/README.zh-CN.md`",
+            "- Current mainline status: `docs/en/current_mainline_status.md` / `docs/zh-CN/current_mainline_status.md`",
+            "- Experiment history: `docs/en/experiment_history.md` / `docs/zh-CN/experiment_history.md`",
+        ]
+    )
     if paper_map_panel.get("enabled"):
         report_lines.extend(
             [
@@ -3833,7 +3844,9 @@ def main() -> int:
             [
                 "## Mainline Reading Order",
                 "",
-                "- Read `persistent_memory_main_compare/` first.",
+                "- Read `docs/en/current_mainline_status.md` or `docs/zh-CN/current_mainline_status.md` first.",
+                "- Then read `docs/en/experiment_history.md` or `docs/zh-CN/experiment_history.md`.",
+                "- Then read `persistent_memory_main_compare/`.",
                 "- Then read `persistent_memory_main_decision/`.",
                 "- Then read `mainline_admission_cleanup/`.",
                 "- Then read `harder_sample_contract/`.",

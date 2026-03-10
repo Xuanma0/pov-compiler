@@ -309,7 +309,12 @@ def test_export_paper_ready_mainline_panels_smoke(tmp_path: Path) -> None:
     assert "## Sample Contract" in report_text
     assert "## Harder Sample Contract" in report_text
     assert "## Mainline Admission Closure" in report_text
+    assert "## Repository Docs Entry" in report_text
+    assert "docs/README.en.md" in report_text
+    assert "docs/README.zh-CN.md" in report_text
     assert "## Mainline Reading Order" in report_text
+    assert "docs/en/current_mainline_status.md" in report_text
+    assert "docs/en/experiment_history.md" in report_text
     assert "persistent_memory_main_compare/" in report_text
     assert "persistent_memory_main_decision/" in report_text
     assert "mainline_admission_cleanup/" in report_text
