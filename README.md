@@ -519,6 +519,49 @@ Read the mainline package in this order:
 - `paper_ready/mainline_admission_cleanup/`
 - `paper_ready/sample_contract/`
 
+## v1.60 Harder Mainline Admission Closure
+
+`v1.60` does not change runtime logic. It keeps `persistent_object_memory_v2` on the promoted mainline, strengthens the paired sample contract, and separates four linked but different questions:
+
+- paired baseline vs persistent compare
+- promotion-to-mainline decision
+- admission cleanup
+- harder sample / admission closure wording
+
+This release adds:
+
+- `configs\benchmarks\v1.60_mainline_harder_*_baseline.yaml` and `v1.60_mainline_harder_*_persistent.yaml` to freeze the harder paired contract
+- `scripts\report_harder_sample_contract.py` to decide whether sample/coverage/freeze evidence is now `adequate`
+- `scripts\report_mainline_admission_closure.py` to decide whether mainline admission is now `closed`, `partial_but_harder`, or still partial
+- explicit `paper_ready\harder_sample_contract\` and `paper_ready\mainline_admission_closure\` panels
+
+Run the harder paired mainline refresh:
+
+```text
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.60_mainline_harder_real_baseline.yaml --mode main_real --out_dir data\outputs\v160_main_real_baseline
+python scripts\run_main_real_benchmark.py --manifest configs\benchmarks\v1.60_mainline_harder_real_persistent.yaml --mode main_real --out_dir data\outputs\v160_main_real_persistent
+python scripts\compare_persistent_memory_main.py --run_a data\outputs\v160_main_real_baseline --run_b data\outputs\v160_main_real_persistent --out_dir data\outputs\v160_persistent_memory_main_compare
+python scripts\report_persistent_memory_main_decision.py --compare_dir data\outputs\v160_persistent_memory_main_compare --out_dir data\outputs\v160_persistent_memory_main_compare\promotion_decision
+python scripts\report_mainline_admission_cleanup.py --suite-dir data\outputs\v160_main_real_persistent --compare-dir data\outputs\v160_persistent_memory_main_compare --out_dir data\outputs\v160_mainline_cleanup
+python scripts\report_harder_sample_contract.py --suite-dir data\outputs\v160_main_real_persistent --compare-dir data\outputs\v160_persistent_memory_main_compare --out_dir data\outputs\v160_harder_sample_contract
+python scripts\report_mainline_admission_closure.py --suite-dir data\outputs\v160_main_real_persistent --compare-dir data\outputs\v160_persistent_memory_main_compare --decision-dir data\outputs\v160_persistent_memory_main_compare\promotion_decision --cleanup-dir data\outputs\v160_mainline_cleanup --sample-contract-dir data\outputs\v160_harder_sample_contract --out_dir data\outputs\v160_mainline_admission_closure
+```
+
+Export the explicit mainline panels:
+
+```text
+python scripts\export_paper_ready.py --compare_dir data\outputs\v160_persistent_memory_main_compare\compare --suite-dir data\outputs\v160_main_real_persistent --persistent-memory-main-decision-dir data\outputs\v160_persistent_memory_main_compare\promotion_decision --mainline-admission-cleanup-dir data\outputs\v160_mainline_cleanup --harder-sample-contract-dir data\outputs\v160_harder_sample_contract --mainline-admission-closure-dir data\outputs\v160_mainline_admission_closure --out_dir data\outputs\v160_mainline_cleanup\paper_ready
+python scripts\export_submission_pack.py --suite-dir data\outputs\v160_main_real_persistent --compare-dir data\outputs\v160_persistent_memory_main_compare\compare --persistent-memory-main-decision-dir data\outputs\v160_persistent_memory_main_compare\promotion_decision --mainline-admission-cleanup-dir data\outputs\v160_mainline_cleanup --harder-sample-contract-dir data\outputs\v160_harder_sample_contract --mainline-admission-closure-dir data\outputs\v160_mainline_admission_closure --out_dir data\outputs\v160_mainline_cleanup\submission_pack
+```
+
+Read the hardened mainline package in this order:
+
+- `paper_ready/persistent_memory_main_compare/`
+- `paper_ready/persistent_memory_main_decision/`
+- `paper_ready/mainline_admission_cleanup/`
+- `paper_ready/harder_sample_contract/`
+- `paper_ready/mainline_admission_closure/`
+
 ## Roadmap (Next Suggested Steps)
 
 - Improve token/decision gains on hard pseudo token queries with richer feature fusion

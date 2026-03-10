@@ -1,0 +1,3 @@
+budget_key,budget_seconds,nlq_full_hit_at_k_strict,mrr_strict,top1_in_distractor_rate,critical_fn_rate,safety_reason_budget_insufficient_rate,safety_reason_evidence_missing_rate,safety_reason_constraints_over_filtered_rate,safety_reason_retrieval_distractor_rate,safety_reason_other_rate
+20/50/4,20,0.34,0.28,0.32,0.02,0.14,0.05,0.04,0.03,0.02
+40/100/8,40,0.52,0.42,0.24,0.18,0.1,0.04,0.03,0.02,0.01

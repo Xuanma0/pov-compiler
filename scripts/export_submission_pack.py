@@ -67,6 +67,13 @@ def _load_json(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _display_optional(path_value: Path | str | None, *, missing: str = "not_provided") -> str:
+    if path_value is None:
+        return missing
+    text = str(path_value).strip()
+    return text if text else missing
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export a submission-ready archive from paper-ready and suite artifacts.")
     parser.add_argument("--paper-ready-dir", default=None, help="Existing paper_ready output directory")
@@ -110,6 +117,16 @@ def parse_args() -> argparse.Namespace:
         "--sample-contract-dir",
         default=None,
         help="Optional sample contract output directory",
+    )
+    parser.add_argument(
+        "--harder-sample-contract-dir",
+        default=None,
+        help="Optional harder sample contract output directory",
+    )
+    parser.add_argument(
+        "--mainline-admission-closure-dir",
+        default=None,
+        help="Optional mainline admission closure output directory",
     )
     parser.add_argument("--query-strength-audit-dir", default=None, help="Optional query-strength audit output directory")
     parser.add_argument("--provider-telemetry-dir", default=None, help="Optional provider telemetry output directory")
@@ -160,6 +177,8 @@ def main() -> int:
     pack_persistent_memory_main_decision = out_dir / "persistent_memory_main_decision"
     pack_mainline_admission_cleanup = out_dir / "mainline_admission_cleanup"
     pack_sample_contract = out_dir / "sample_contract"
+    pack_harder_sample_contract = out_dir / "harder_sample_contract"
+    pack_mainline_admission_closure = out_dir / "mainline_admission_closure"
     pack_query_strength_audit = out_dir / "query_strength_audit"
     pack_provider_telemetry = out_dir / "provider_telemetry"
     pack_provider_reachability = out_dir / "provider_reachability"
@@ -190,6 +209,8 @@ def main() -> int:
         pack_persistent_memory_main_decision,
         pack_mainline_admission_cleanup,
         pack_sample_contract,
+        pack_harder_sample_contract,
+        pack_mainline_admission_closure,
         pack_query_strength_audit,
         pack_provider_telemetry,
         pack_provider_reachability,
@@ -242,6 +263,18 @@ def main() -> int:
     _copy_dir_if_exists(
         paper_ready_dir / "sample_contract",
         pack_paper_ready / "sample_contract",
+        copied,
+        missing,
+    )
+    _copy_dir_if_exists(
+        paper_ready_dir / "harder_sample_contract",
+        pack_paper_ready / "harder_sample_contract",
+        copied,
+        missing,
+    )
+    _copy_dir_if_exists(
+        paper_ready_dir / "mainline_admission_closure",
+        pack_paper_ready / "mainline_admission_closure",
         copied,
         missing,
     )
@@ -470,6 +503,76 @@ def main() -> int:
             missing,
         )
 
+    harder_sample_contract_dir = (
+        Path(args.harder_sample_contract_dir) if args.harder_sample_contract_dir else None
+    )
+    if harder_sample_contract_dir is not None:
+        _copy_file_if_exists(
+            harder_sample_contract_dir / "tables" / "table_harder_sample_contract_summary.csv",
+            pack_harder_sample_contract / "tables" / "table_harder_sample_contract_summary.csv",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            harder_sample_contract_dir / "tables" / "table_harder_sample_contract_summary.md",
+            pack_harder_sample_contract / "tables" / "table_harder_sample_contract_summary.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            harder_sample_contract_dir / "report.md",
+            pack_harder_sample_contract / "report.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            harder_sample_contract_dir / "snapshot.json",
+            pack_harder_sample_contract / "snapshot.json",
+            copied,
+            missing,
+        )
+        _copy_dir_if_exists(
+            harder_sample_contract_dir,
+            pack_paper_ready / "harder_sample_contract",
+            copied,
+            missing,
+        )
+
+    mainline_admission_closure_dir = (
+        Path(args.mainline_admission_closure_dir) if args.mainline_admission_closure_dir else None
+    )
+    if mainline_admission_closure_dir is not None:
+        _copy_file_if_exists(
+            mainline_admission_closure_dir / "tables" / "table_mainline_admission_closure.csv",
+            pack_mainline_admission_closure / "tables" / "table_mainline_admission_closure.csv",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            mainline_admission_closure_dir / "tables" / "table_mainline_admission_closure.md",
+            pack_mainline_admission_closure / "tables" / "table_mainline_admission_closure.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            mainline_admission_closure_dir / "report.md",
+            pack_mainline_admission_closure / "report.md",
+            copied,
+            missing,
+        )
+        _copy_file_if_exists(
+            mainline_admission_closure_dir / "snapshot.json",
+            pack_mainline_admission_closure / "snapshot.json",
+            copied,
+            missing,
+        )
+        _copy_dir_if_exists(
+            mainline_admission_closure_dir,
+            pack_paper_ready / "mainline_admission_closure",
+            copied,
+            missing,
+        )
+
     query_strength_audit_dir = Path(args.query_strength_audit_dir) if args.query_strength_audit_dir else None
     if query_strength_audit_dir is not None:
         _copy_dir_if_exists(query_strength_audit_dir / "tables", pack_query_strength_audit / "tables", copied, missing)
@@ -591,30 +694,34 @@ def main() -> int:
         "",
         f"- generated_utc: `{datetime.now(timezone.utc).isoformat()}`",
         f"- paper_ready_dir: `{paper_ready_dir}`",
-        f"- suite_dir: `{suite_dir}`",
-        f"- significance_dir: `{significance_dir}`",
-        f"- result_health_dir: `{result_health_dir}`",
-        f"- admission_dir: `{admission_dir}`",
-        f"- admission_calibration_dir: `{admission_calibration_dir}`",
-        f"- result_diagnosis_dir: `{result_diagnosis_dir}`",
-        f"- delta_audit_dir: `{delta_audit_dir}`",
-        f"- query_strength_audit_dir: `{query_strength_audit_dir}`",
-        f"- persistent_memory_main_compare_dir: `{persistent_memory_main_compare_dir}`",
-        f"- persistent_memory_main_decision_dir: `{persistent_memory_main_decision_dir}`",
-        f"- mainline_admission_cleanup_dir: `{mainline_admission_cleanup_dir}`",
-        f"- sample_contract_dir: `{sample_contract_dir}`",
-        f"- provider_telemetry_dir: `{provider_telemetry_dir}`",
-        f"- provider_reachability_dir: `{provider_reachability_dir}`",
-        f"- provider_normalization_dir: `{provider_normalization_dir}`",
-        f"- query_promotion_pack_dir: `{query_promotion_pack_dir}`",
-        f"- repeatability_audit_dir: `{repeatability_audit_dir}`",
-        f"- sample_size_recommendation_dir: `{sample_size_recommendation_dir}`",
-        f"- query_uplift_candidates_dir: `{query_uplift_candidates_dir}`",
-        f"- golden_real_sample_dir: `{golden_real_sample_dir}`",
-        f"- benchmark_freeze_dir: `{freeze_dir}`",
-        f"- paper_freeze_dir: `{paper_freeze_dir}`",
-        f"- paper_map: `{paper_map_path}`",
-        f"- prompt_registry: `{prompt_registry_path}`",
+        f"- suite_dir: `{_display_optional(suite_dir)}`",
+        f"- compare_dir: `{_display_optional(compare_dir)}`",
+        f"- significance_dir: `{_display_optional(significance_dir)}`",
+        f"- result_health_dir: `{_display_optional(result_health_dir)}`",
+        f"- admission_dir: `{_display_optional(admission_dir)}`",
+        f"- admission_calibration_dir: `{_display_optional(admission_calibration_dir)}`",
+        f"- result_diagnosis_dir: `{_display_optional(result_diagnosis_dir)}`",
+        f"- delta_audit_dir: `{_display_optional(delta_audit_dir)}`",
+        f"- query_strength_audit_dir: `{_display_optional(query_strength_audit_dir)}`",
+        f"- persistent_memory_main_compare_dir: `{_display_optional(persistent_memory_main_compare_dir)}`",
+        f"- persistent_memory_main_decision_dir: `{_display_optional(persistent_memory_main_decision_dir)}`",
+        f"- mainline_admission_cleanup_dir: `{_display_optional(mainline_admission_cleanup_dir)}`",
+        f"- sample_contract_dir: `{_display_optional(sample_contract_dir)}`",
+        f"- harder_sample_contract_dir: `{_display_optional(harder_sample_contract_dir)}`",
+        f"- mainline_admission_closure_dir: `{_display_optional(mainline_admission_closure_dir)}`",
+        f"- provider_telemetry_dir: `{_display_optional(provider_telemetry_dir)}`",
+        f"- provider_reachability_dir: `{_display_optional(provider_reachability_dir)}`",
+        f"- provider_normalization_dir: `{_display_optional(provider_normalization_dir)}`",
+        f"- query_promotion_pack_dir: `{_display_optional(query_promotion_pack_dir)}`",
+        f"- repeatability_audit_dir: `{_display_optional(repeatability_audit_dir)}`",
+        f"- sample_size_recommendation_dir: `{_display_optional(sample_size_recommendation_dir)}`",
+        f"- query_uplift_candidates_dir: `{_display_optional(query_uplift_candidates_dir)}`",
+        f"- golden_real_sample_dir: `{_display_optional(golden_real_sample_dir)}`",
+        f"- benchmark_freeze_dir: `{_display_optional(freeze_dir)}`",
+        f"- paper_freeze_dir: `{_display_optional(paper_freeze_dir)}`",
+        f"- paper_map: `{_display_optional(paper_map_path)}`",
+        f"- prompt_registry: `{_display_optional(prompt_registry_path)}`",
+        f"- prompt_lock: `{_display_optional(prompt_lock_path)}`",
         f"- copied_items: `{len(copied)}`",
         f"- missing_inputs: `{len(missing)}`",
         "",
@@ -636,6 +743,8 @@ def main() -> int:
         "- `persistent_memory_main_decision/`: formal recommendation on whether persistent memory should enter mainline",
         "- `mainline_admission_cleanup/`: explanation of why promotion can coexist with partial admission and what still needs cleanup",
         "- `sample_contract/`: explicit sample/coverage/freeze evidence for large-sample wording and mainline claims",
+        "- `harder_sample_contract/`: stricter sample/coverage/freeze evidence used for v1.60 admission closure",
+        "- `mainline_admission_closure/`: final closure verdict on whether mainline admission is now clean enough",
         "- `query_strength_audit/`: query-group strength audit for main-paper inclusion decisions",
         "- `provider_telemetry/`: provider/cost/latency/parse-fail sidecar summary",
         "- `provider_reachability/`: live-call reachability proof for the chosen provider/server",
@@ -672,7 +781,8 @@ def main() -> int:
         "- Then read `persistent_memory_main_compare/`.",
         "- Then read `persistent_memory_main_decision/`.",
         "- Then read `mainline_admission_cleanup/`.",
-        "- Then read `sample_contract/`.",
+        "- Then read `harder_sample_contract/`.",
+        "- Then read `mainline_admission_closure/`.",
         "- Then read `repeatability_audit/`.",
         "- Then read `sample_size_recommendation/`.",
         "- Then read `admission_control/`.",
@@ -680,8 +790,8 @@ def main() -> int:
             "- Then read `result_health/` and `result_diagnosis/`.",
             "- Then read `delta_audit/`.",
             "- Then read `signal_uplift/` to decide whether weak results are really perception-signal limited.",
-            "- Then read `query_bank_compare/` before deciding whether v2 is actually better than v1.",
-            "- Then read `query_bank_promotion_decision/` before widening the next real main run on v2.",
+                "- Then read `query_bank_compare/` before deciding whether v2 is actually better than v1.",
+                "- Then read `query_bank_promotion_decision/` before widening the next real main run on v2.",
             "- Then read `provider_normalization/` before interpreting cross-provider cost or usage.",
             "- If main figures still look weak, read `query_strength_audit/` before interpreting them.",
             "- Then read `query_uplift_candidates/` before deciding whether weak queries deserve more signal or sample.",
@@ -847,6 +957,10 @@ def main() -> int:
         if mainline_admission_cleanup_dir is not None
         else None,
         "sample_contract_dir": str(sample_contract_dir) if sample_contract_dir is not None else None,
+        "harder_sample_contract_dir": str(harder_sample_contract_dir) if harder_sample_contract_dir is not None else None,
+        "mainline_admission_closure_dir": str(mainline_admission_closure_dir)
+        if mainline_admission_closure_dir is not None
+        else None,
         "query_strength_audit_dir": str(query_strength_audit_dir) if query_strength_audit_dir is not None else None,
         "provider_telemetry_dir": str(provider_telemetry_dir) if provider_telemetry_dir is not None else None,
         "provider_reachability_dir": str(provider_reachability_dir) if provider_reachability_dir is not None else None,

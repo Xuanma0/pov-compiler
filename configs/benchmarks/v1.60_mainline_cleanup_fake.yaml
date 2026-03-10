@@ -1,0 +1,21 @@
+suite_root: data/outputs/v160_main_fake_persistent
+compare_root: data/outputs/v160_persistent_memory_main_compare
+decision_root: data/outputs/v160_persistent_memory_main_compare/promotion_decision
+expected_compare_pair_id: persistent_memory_main_fake_harder
+expected_query_bank_id: persistent_object_memory_core_v1
+expected_query_bank_hash: 798cdcfe736dfbc0d0a6b14dbd97f25a49498e3044560e439df30ead6edb56aa
+expected_object_memory_logic_variant_mainline: persistent_v2
+expected_provider_signature_match: true
+expected_perception_signature_match: true
+thresholds:
+  selected_uids_count_borderline_min: 8
+  selected_uids_count_adequate_min: 8
+  paired_sample_count_borderline_min: 16
+  paired_sample_count_adequate_min: 16
+  coverage_mean_min: 2.7
+  coverage_min_min: 2.2
+  freeze_artifact_count_min: 1
+cleanup_contract:
+  provider_semantics_noise_allowed: true
+  require_compare_alignment: true
+  require_freeze_contract: true

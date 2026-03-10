@@ -10,8 +10,8 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from pov_compiler.bench.reporting.persistent_memory_main import (
-    write_persistent_memory_main_decision_outputs,
+from pov_compiler.bench.reporting.mainline_admission_closure import (
+    write_refreshed_persistent_memory_main_decision_outputs,
 )
 
 
@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    outputs = write_persistent_memory_main_decision_outputs(
+    outputs = write_refreshed_persistent_memory_main_decision_outputs(
         compare_dir=args.compare_dir,
         out_dir=args.out_dir,
     )

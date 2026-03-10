@@ -13,6 +13,9 @@ if str(SRC_DIR) not in sys.path:
 from pov_compiler.bench.reporting.persistent_memory_main import (
     write_persistent_memory_main_compare_outputs,
 )
+from pov_compiler.bench.reporting.mainline_admission_closure import (
+    refresh_persistent_memory_main_compare_outputs,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,15 +33,20 @@ def main() -> int:
         run_b=args.run_b,
         out_dir=args.out_dir,
     )
+    compare_summary = refresh_persistent_memory_main_compare_outputs(
+        run_a=args.run_a,
+        run_b=args.run_b,
+        out_dir=args.out_dir,
+    )
     print(f"saved_table={outputs['table_csv']}")
     print(f"saved_snapshot={outputs['snapshot_json']}")
     print(f"saved_summary={outputs['compare_summary_json']}")
-    print(f"alignment_ok={outputs['compare_summary'].get('alignment_ok', False)}")
+    print(f"alignment_ok={compare_summary.get('alignment_ok', False)}")
     print(
         "persistent_memory_main_compare_summary="
-        + json.dumps(outputs["compare_summary"], ensure_ascii=False, sort_keys=True)
+        + json.dumps(compare_summary, ensure_ascii=False, sort_keys=True)
     )
-    return 0
+    return 0 if compare_summary.get("alignment_ok", False) else 1
 
 
 if __name__ == "__main__":

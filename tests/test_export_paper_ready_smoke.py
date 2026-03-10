@@ -210,6 +210,54 @@ def test_export_paper_ready_mainline_panels_smoke(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    harder_sample_dir = tmp_path / "harder_sample_contract"
+    (harder_sample_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (harder_sample_dir / "tables" / "table_harder_sample_contract_summary.csv").write_text(
+        "sample_contract_status,large_sample_claim_status\nadequate,supported\n",
+        encoding="utf-8",
+    )
+    (harder_sample_dir / "tables" / "table_harder_sample_contract_summary.md").write_text(
+        "# harder sample\n",
+        encoding="utf-8",
+    )
+    (harder_sample_dir / "report.md").write_text("# harder sample contract\n", encoding="utf-8")
+    (harder_sample_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "harder_sample_contract_summary": {
+                    "sample_contract_status": "adequate",
+                    "large_sample_claim_status": "supported",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    closure_dir = tmp_path / "mainline_admission_closure"
+    (closure_dir / "tables").mkdir(parents=True, exist_ok=True)
+    (closure_dir / "tables" / "table_mainline_admission_closure.csv").write_text(
+        "mainline_admission_closure_status,mainline_admission_ready\nclosed,true\n",
+        encoding="utf-8",
+    )
+    (closure_dir / "tables" / "table_mainline_admission_closure.md").write_text(
+        "# closure\n",
+        encoding="utf-8",
+    )
+    (closure_dir / "report.md").write_text("# mainline admission closure\n", encoding="utf-8")
+    (closure_dir / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "mainline_admission_closure_summary": {
+                    "mainline_admission_closure_status": "closed",
+                    "mainline_admission_ready": True,
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
     out_dir = tmp_path / "paper_ready_min"
     proc = subprocess.run(
         [
@@ -233,6 +281,10 @@ def test_export_paper_ready_mainline_panels_smoke(tmp_path: Path) -> None:
             str(cleanup_dir),
             "--sample-contract-dir",
             str(sample_dir),
+            "--harder-sample-contract-dir",
+            str(harder_sample_dir),
+            "--mainline-admission-closure-dir",
+            str(closure_dir),
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -247,10 +299,19 @@ def test_export_paper_ready_mainline_panels_smoke(tmp_path: Path) -> None:
     assert (out_dir / "persistent_memory_main_decision" / "report.md").exists()
     assert (out_dir / "mainline_admission_cleanup" / "report.md").exists()
     assert (out_dir / "sample_contract" / "report.md").exists()
+    assert (out_dir / "harder_sample_contract" / "report.md").exists()
+    assert (out_dir / "mainline_admission_closure" / "report.md").exists()
     assert (out_dir / "figures" / "fig_persistent_memory_main_delta.png").exists()
     report_text = (out_dir / "report.md").read_text(encoding="utf-8")
     assert "## Persistent Memory Main Compare" in report_text
     assert "## Persistent Memory Main Decision" in report_text
     assert "## Mainline Admission Cleanup" in report_text
     assert "## Sample Contract" in report_text
+    assert "## Harder Sample Contract" in report_text
+    assert "## Mainline Admission Closure" in report_text
     assert "## Mainline Reading Order" in report_text
+    assert "persistent_memory_main_compare/" in report_text
+    assert "persistent_memory_main_decision/" in report_text
+    assert "mainline_admission_cleanup/" in report_text
+    assert "harder_sample_contract/" in report_text
+    assert "mainline_admission_closure/" in report_text

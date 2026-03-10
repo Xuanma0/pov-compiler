@@ -1,0 +1,155 @@
+suite_id: v1.60_mainline_harder_real_baseline
+suite_version: "1.60"
+seed: 0
+description: Harder paired real mainline baseline run using persistent object-memory core query bank with persistence_v1.
+compare_pair_id: persistent_memory_main_real_harder
+uid_set_id: persistent_memory_main_large_sample_v2
+source_query_bank_id: persistent_object_memory_core_v1
+source_query_bank_hash: 798cdcfe736dfbc0d0a6b14dbd97f25a49498e3044560e439df30ead6edb56aa
+perception_signature:
+  backend: real
+  model_name: yolo26n_plus_sam3
+  config: configs/perception/yolo26n_sam3_local.yaml
+selection:
+  compare_dir: tests/fixtures/v160_main_baseline_compare
+  tasks: [nlq, streaming, bye]
+  labels:
+    a: stub
+    b: real
+  task_sources:
+    nlq: nlq_budget/{label}/aggregate/metrics_by_budget.csv
+    streaming: streaming_budget/{label}/aggregate/metrics_by_budget.csv
+    bye: bye_budget/{label}/aggregate/metrics_by_budget.csv
+  pair_sources:
+    nlq: nlq_budget/{label}/pairs/metrics_by_pair.csv
+    streaming: streaming_budget/{label}/pairs/metrics_by_pair.csv
+    bye: bye_budget/{label}/pairs/metrics_by_pair.csv
+  mode: auto_signal_cache
+  signal_min_score: 2.5
+  top_k_uids: 8
+  signal_selection_dir: tests/fixtures/v160_main_signal_selection
+budgets:
+  points:
+    - key: 20/50/4
+    - key: 40/100/8
+queries:
+  profile: v1.60_mainline_harder_real_baseline
+  families: [persistent_recall, lost_object, chain_support, reappearance]
+  top_k: 8
+  query_bank: configs/queries/persistent_object_memory_core_v1.yaml
+  groups: [persistent_recall, lost_object, chain_support, reappearance]
+variants:
+  baseline: a
+  treatment: b
+metrics:
+  primary:
+    nlq: nlq_full_hit_at_k_strict
+    streaming: "hit@k_strict"
+    bye: qualityScore
+  failure:
+    nlq:
+      - safety_reason_budget_insufficient_rate
+      - safety_reason_evidence_missing_rate
+      - safety_reason_constraints_over_filtered_rate
+      - safety_reason_retrieval_distractor_rate
+      - safety_reason_other_rate
+prompts:
+  registry: configs/prompts/registry_v1.yaml
+  profile: v1.42_main
+  lock_required: true
+output:
+  root: data/outputs/v160_main_real_baseline
+  figure_formats: [png, pdf]
+  include_paper_ready: true
+  include_submission_pack: true
+significance_pairs:
+  - task: nlq
+    pair_source: nlq
+  - task: streaming
+    pair_source: streaming
+  - task: bye
+    pair_source: bye
+health_gate_profile: main_real
+paper_map: configs/paper/main_result_map_v1.yaml
+output_root: data/outputs/v160_main_real_baseline
+diagnosis_enabled: true
+telemetry_enabled: true
+telemetry_require_usage: false
+telemetry_require_latency: true
+provider_normalization_enabled: true
+query_promotion_enabled: true
+provider_health_enabled: true
+provider_health_config: configs/providers/live_provider_health_v1.yaml
+require_real_calls: true
+admission_calibration_enabled: true
+query_strength_audit_enabled: true
+admission_profile: main_real
+min_selected_uids: 8
+min_coverage_score_mean: 2.7
+min_significance_available_rate: 0.50
+max_no_data_rate: 0.20
+min_effect_size_nonzero_rate: 0.34
+max_provider_noise_parse_fail_rate: 0.10
+max_provider_noise_fallback_rate: 0.10
+min_usage_present_rate: 0.25
+allow_partial: true
+object_memory:
+  logic_variant: persistence_v1
+thresholds:
+  selected_uids_count_borderline_min: 8
+  selected_uids_count_adequate_min: 8
+  paired_sample_count_borderline_min: 16
+  paired_sample_count_adequate_min: 16
+  coverage_mean_min: 2.7
+  coverage_min_min: 2.2
+  freeze_artifact_count_min: 1
+telemetry:
+  variants:
+    stub:
+      provider: fake
+      model: fake-stub-v1
+      api_mode_used: fixture_json
+      usage_present: true
+      prompt_tokens: 0
+      completion_tokens: 0
+      total_tokens: 0
+      cost_known: true
+      model_cost_usd_total: 0.0000
+      model_cost_usd_mean_per_query: 0.0000
+      latency_p50_ms: 8.0
+      latency_p95_ms: 12.0
+      structured_parse_fail_rate: 0.0
+      planner_fallback_rate: 0.0
+      calls_total: 0
+      calls_with_usage: 0
+      calls_with_cost: 0
+    real:
+      provider: openai_compat
+      model: local-openai-proof
+      api_mode_used: responses
+      usage_present: true
+      prompt_tokens: 136
+      completion_tokens: 74
+      total_tokens: 210
+      cost_known: true
+      model_cost_usd_total: 0.0034
+      model_cost_usd_mean_per_query: 0.00028
+      latency_p50_ms: 16.0
+      latency_p95_ms: 28.0
+      structured_parse_fail_rate: 0.0
+      planner_fallback_rate: 0.0
+      calls_total: 1
+      calls_with_usage: 1
+      calls_with_cost: 1
+persistent_memory_main_metrics:
+  object_memory_logic_variant: persistence_v1
+  object_memory_items_total: 10
+  object_memory_persistence_items_total: 6
+  object_persistence_support_rate: 0.76
+  reappearance_support_rate: 0.29
+  lost_object_query_support_rate: 0.52
+  chain_object_grounding_support_rate: 0.56
+  query_strength:
+    coverage_rate: 0.58
+    weak_query_groups_count: 2
+  delta_audit_main_recommendation: keep_current_memory_logic
